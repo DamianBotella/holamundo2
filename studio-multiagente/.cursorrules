@@ -1,0 +1,20 @@
+## Proyecto: Studio Multiagente — Sistema de IA para Estudio de Arquitectura
+
+### Contexto
+Este proyecto genera workflows de n8n 2.12.x como archivos JSON importables. El sistema es un conjunto de 11 agentes de IA + 1 orquestador que procesan proyectos de reforma de vivienda.
+
+### Reglas de generación de código
+- Los workflows se generan como JSON en la carpeta `workflows/`.
+- Cada archivo JSON debe ser directamente importable en n8n via "Import from File".
+- Consulta `references/n8n_node_types.md` para la estructura exacta de cada tipo de nodo.
+- Consulta `docs/mapa_workflows.md` para la secuencia de nodos de cada workflow.
+- Consulta `docs/agentes.md` para los inputs/outputs de cada agente.
+- Consulta `prompts/agent_prompts.md` para los prompts del LLM.
+- Consulta `schemas/mvp_schema.sql` para la estructura de las tablas.
+- Las credenciales se referencian con `"name": "Nombre Credential"` e `"id": "PLACEHOLDER"`.
+- Los IDs de nodos deben ser UUIDs válidos.
+- El Code node no puede hacer HTTP ni acceder a env vars (Task Runners en n8n 2.x).
+- NO usar el nodo AI Agent de n8n. Usar HTTP Request para llamar al LLM.
+
+### Stack
+n8n 2.12.x, Supabase (PostgreSQL 15+), Anthropic Claude / OpenAI GPT-4, Google Drive, Gmail

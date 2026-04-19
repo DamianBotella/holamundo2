@@ -1,0 +1,387 @@
+{
+  "name": "main_orchestrator",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "orchestrator",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [250, 300],
+      "id": "f1a2b3c4-d5e6-4f7a-8b9c-000000000001",
+      "name": "Orchestrator Entry"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const body = $input.first().json.body || $input.first().json;\n\nconst projectId = body.project_id || null;\nconst action    = body.action    || 'advance';\n\nif (!projectId) {\n  throw new Error('project_id es obligatorio');\n}\n\nreturn [{ json: { project_id: projectId, action: action } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [500, 300],
+      "id": "f1a2b3c4-d5e6-4f7a-8b9c-000000000002",
+      "name": "Extract Input"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT p.id, p.name, p.current_phase, p.status, p.budget_target, p.client_id, (SELECT COUNT(*) FROM approvals WHERE project_id = p.id AND status = 'pending') as pending_approvals FROM projects p WHERE p.id = $1::uuid LIMIT 1",
+        "options": {
+          "queryReplacement": "={{ [$json.project_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "PLACEHOLDER", "name": "Supabase Postgres" }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [750, 300],
+      "id": "f1a2b3c4-d5e6-4f7a-8b9c-000000000003",
+      "name": "Load Project"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const project = $input.first().json;\nconst action  = $('Extract Input').first().json.action;\n\nif (!project || !project.id) {\n  throw new Error('Proyecto no encontrado: ' + $(\\'Extract Input\\').first().json.project_id);\n}\n\nreturn [{\n  json: {\n    ...project,\n    action:              action,\n    pending_approvals:   parseInt(project.pending_approvals) || 0\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1000, 300],
+      "id": "f1a2b3c4-d5e6-4f7a-8b9c-000000000004",
+      "name": "Prepare Project Data"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "f1a2b3c4-d5e6-4f7a-8b9c-000000000051",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "active",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1250, 300],
+      "id": "f1a2b3c4-d5e6-4f7a-8b9c-000000000005",
+      "name": "Project Active?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ status: 'skipped', reason: 'project_not_active', project_id: $json.id, current_status: $json.status }) }}",
+        "options": { "responseCode": 200 }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1500, 500],
+      "id": "f1a2b3c4-d5e6-4f7a-8b9c-000000000006",
+      "name": "Respond Inactive"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "f1a2b3c4-d5e6-4f7a-8b9c-000000000071",
+              "leftValue": "={{ $json.pending_approvals }}",
+              "rightValue": 0,
+              "operator": { "type": "number", "operation": "gt" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1500, 300],
+      "id": "f1a2b3c4-d5e6-4f7a-8b9c-000000000007",
+      "name": "Pending Approvals?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ status: 'waiting', reason: 'pending_approvals', project_id: $json.id, pending_approvals: $json.pending_approvals }) }}",
+        "options": { "responseCode": 200 }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1750, 500],
+      "id": "f1a2b3c4-d5e6-4f7a-8b9c-000000000008",
+      "name": "Respond Waiting Approval"
+    },
+    {
+      "parameters": {
+        "mode": "rules",
+        "rules": {
+          "values": [
+            {
+              "outputKey": "intake",
+              "conditions": {
+                "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict" },
+                "conditions": [
+                  {
+                    "id": "f1a2b3c4-d5e6-4f7a-8b9c-000000000091",
+                    "leftValue": "={{ $json.current_phase }}",
+                    "rightValue": "intake",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": { "fallbackOutput": "extra" }
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [1750, 300],
+      "id": "f1a2b3c4-d5e6-4f7a-8b9c-000000000009",
+      "name": "Route by Phase"
+    },
+
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "PLACEHOLDER_AGENT_BRIEFING_ID",
+          "mode": "id"
+        },
+        "options": { "waitForSubWorkflow": true }
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 2,
+      "position": [2000, 100],
+      "id": "f1a2b3c4-d5e6-4f7a-8b9c-000000000010",
+      "name": "Run agent_briefing"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const briefingResult = $input.first().json;\nconst project = $('Prepare Project Data').first().json;\n\n// Evaluar resultado del agente de briefing\nconst status = briefingResult.status || 'unknown';\n\nreturn [{\n  json: {\n    project_id:      project.id,\n    project_name:    project.name,\n    phase_executed:  'intake',\n    agent_result:    status,\n    briefing_status: status,\n    advance_phase:   status === 'complete'\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2250, 100],
+      "id": "f1a2b3c4-d5e6-4f7a-8b9c-000000000011",
+      "name": "Evaluate Briefing Result"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "f1a2b3c4-d5e6-4f7a-8b9c-000000000121",
+              "leftValue": "={{ $json.advance_phase }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [2500, 100],
+      "id": "f1a2b3c4-d5e6-4f7a-8b9c-000000000012",
+      "name": "Briefing Complete?"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE projects SET current_phase = 'briefing_done', updated_at = now() WHERE id = $1::uuid",
+        "options": {
+          "queryReplacement": "={{ [$('Prepare Project Data').first().json.id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "PLACEHOLDER", "name": "Supabase Postgres" }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [2750, 0],
+      "id": "f1a2b3c4-d5e6-4f7a-8b9c-000000000013",
+      "name": "Update Phase briefing_done"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, status, output_summary) VALUES ($1::uuid, 'main_orchestrator', 'phase_advanced', 'success', $2)",
+        "options": {
+          "queryReplacement": "={{ [$('Prepare Project Data').first().json.id, 'intake → briefing_done'] }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "PLACEHOLDER", "name": "Supabase Postgres" }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [3000, 0],
+      "id": "f1a2b3c4-d5e6-4f7a-8b9c-000000000014",
+      "name": "Log Phase Advanced"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ status: 'advanced', project_id: $('Prepare Project Data').first().json.id, previous_phase: 'intake', new_phase: 'briefing_done', agent_executed: 'agent_briefing' }) }}",
+        "options": { "responseCode": 200 }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [3250, 0],
+      "id": "f1a2b3c4-d5e6-4f7a-8b9c-000000000015",
+      "name": "Respond Phase Advanced"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, status, output_summary) VALUES ($1::uuid, 'main_orchestrator', 'briefing_pending_review', 'success', $2)",
+        "options": {
+          "queryReplacement": "={{ [$('Prepare Project Data').first().json.id, 'Briefing generado, pendiente de revisión'] }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "PLACEHOLDER", "name": "Supabase Postgres" }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [2750, 200],
+      "id": "f1a2b3c4-d5e6-4f7a-8b9c-000000000016",
+      "name": "Log Briefing Pending"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ status: 'pending_review', project_id: $('Prepare Project Data').first().json.id, current_phase: 'intake', message: 'Briefing generado, pendiente de aprobación del arquitecto' }) }}",
+        "options": { "responseCode": 200 }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [3000, 200],
+      "id": "f1a2b3c4-d5e6-4f7a-8b9c-000000000017",
+      "name": "Respond Pending Review"
+    },
+
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, status, output_summary) VALUES ($1::uuid, 'main_orchestrator', 'phase_skipped', 'success', $2)",
+        "options": {
+          "queryReplacement": "={{ [$('Prepare Project Data').first().json.id, 'Fase ' + $('Prepare Project Data').first().json.current_phase + ' no implementada en v1'] }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "PLACEHOLDER", "name": "Supabase Postgres" }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [2000, 450],
+      "id": "f1a2b3c4-d5e6-4f7a-8b9c-000000000018",
+      "name": "Log Phase Not Implemented"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ status: 'not_implemented', project_id: $('Prepare Project Data').first().json.id, current_phase: $('Prepare Project Data').first().json.current_phase, message: 'Esta fase aún no está implementada en v1 del orquestador' }) }}",
+        "options": { "responseCode": 200 }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [2250, 450],
+      "id": "f1a2b3c4-d5e6-4f7a-8b9c-000000000019",
+      "name": "Respond Not Implemented"
+    }
+  ],
+  "connections": {
+    "Orchestrator Entry": {
+      "main": [
+        [{ "node": "Extract Input", "type": "main", "index": 0 }]
+      ]
+    },
+    "Extract Input": {
+      "main": [
+        [{ "node": "Load Project", "type": "main", "index": 0 }]
+      ]
+    },
+    "Load Project": {
+      "main": [
+        [{ "node": "Prepare Project Data", "type": "main", "index": 0 }]
+      ]
+    },
+    "Prepare Project Data": {
+      "main": [
+        [{ "node": "Project Active?", "type": "main", "index": 0 }]
+      ]
+    },
+    "Project Active?": {
+      "main": [
+        [{ "node": "Pending Approvals?", "type": "main", "index": 0 }],
+        [{ "node": "Respond Inactive",   "type": "main", "index": 0 }]
+      ]
+    },
+    "Pending Approvals?": {
+      "main": [
+        [{ "node": "Respond Waiting Approval", "type": "main", "index": 0 }],
+        [{ "node": "Route by Phase",           "type": "main", "index": 0 }]
+      ]
+    },
+    "Route by Phase": {
+      "main": [
+        [{ "node": "Run agent_briefing",       "type": "main", "index": 0 }],
+        [{ "node": "Log Phase Not Implemented","type": "main", "index": 0 }]
+      ]
+    },
+    "Run agent_briefing": {
+      "main": [
+        [{ "node": "Evaluate Briefing Result", "type": "main", "index": 0 }]
+      ]
+    },
+    "Evaluate Briefing Result": {
+      "main": [
+        [{ "node": "Briefing Complete?", "type": "main", "index": 0 }]
+      ]
+    },
+    "Briefing Complete?": {
+      "main": [
+        [{ "node": "Update Phase briefing_done", "type": "main", "index": 0 }],
+        [{ "node": "Log Briefing Pending",       "type": "main", "index": 0 }]
+      ]
+    },
+    "Update Phase briefing_done": {
+      "main": [
+        [{ "node": "Log Phase Advanced", "type": "main", "index": 0 }]
+      ]
+    },
+    "Log Phase Advanced": {
+      "main": [
+        [{ "node": "Respond Phase Advanced", "type": "main", "index": 0 }]
+      ]
+    },
+    "Log Briefing Pending": {
+      "main": [
+        [{ "node": "Respond Pending Review", "type": "main", "index": 0 }]
+      ]
+    },
+    "Log Phase Not Implemented": {
+      "main": [
+        [{ "node": "Respond Not Implemented", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "PLACEHOLDER_ERROR_HANDLER_ID"
+  },
+  "pinData": {}
+}

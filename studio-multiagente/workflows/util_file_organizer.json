@@ -1,0 +1,527 @@
+{
+  "name": "util_file_organizer",
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "defineBelow",
+        "workflowInputs": {
+          "values": [
+            { "name": "project_id",   "type": "string" },
+            { "name": "action",       "type": "string" },
+            { "name": "file_id",      "type": "string" },
+            { "name": "document_id",  "type": "string" }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [250, 300],
+      "id": "d1e2f3a4-b5c6-4d7e-8f9a-000000000001",
+      "name": "Receive File Request"
+    },
+    {
+      "parameters": {
+        "mode": "rules",
+        "rules": {
+          "values": [
+            {
+              "outputKey": "create_structure",
+              "conditions": {
+                "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict" },
+                "conditions": [
+                  {
+                    "id": "d1e2f3a4-b5c6-4d7e-8f9a-000000000021",
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "create_structure",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "outputKey": "move_file",
+              "conditions": {
+                "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict" },
+                "conditions": [
+                  {
+                    "id": "d1e2f3a4-b5c6-4d7e-8f9a-000000000022",
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "move_file",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [500, 300],
+      "id": "d1e2f3a4-b5c6-4d7e-8f9a-000000000002",
+      "name": "Route Action"
+    },
+
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, name, client_id FROM projects WHERE id = $1::uuid",
+        "options": {
+          "queryReplacement": "={{ [$('Receive File Request').first().json.project_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "PLACEHOLDER", "name": "Supabase Postgres" }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [750, 100],
+      "id": "d1e2f3a4-b5c6-4d7e-8f9a-000000000003",
+      "name": "Load Project"
+    },
+    {
+      "parameters": {
+        "resource": "folder",
+        "operation": "create",
+        "name": "={{ $json.name + '_' + $('Receive File Request').first().json.project_id.substring(0, 8) }}",
+        "folderId": {
+          "__rl": true,
+          "value": "root",
+          "mode": "list",
+          "cachedResultName": "/ (Root)"
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleDriveOAuth2Api": { "id": "PLACEHOLDER", "name": "Google Drive" }
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [1000, 100],
+      "id": "d1e2f3a4-b5c6-4d7e-8f9a-000000000004",
+      "name": "Create Root Folder"
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "duplicateItem": false,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "d1e2f3a4-b5c6-4d7e-8f9a-000000000051",
+              "name": "root_folder_id",
+              "value": "={{ $json.id }}",
+              "type": "string"
+            },
+            {
+              "id": "d1e2f3a4-b5c6-4d7e-8f9a-000000000052",
+              "name": "project_id",
+              "value": "={{ $('Receive File Request').first().json.project_id }}",
+              "type": "string"
+            },
+            {
+              "id": "d1e2f3a4-b5c6-4d7e-8f9a-000000000053",
+              "name": "project_name",
+              "value": "={{ $('Load Project').first().json.name }}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": false
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [1250, 100],
+      "id": "d1e2f3a4-b5c6-4d7e-8f9a-000000000005",
+      "name": "Store Root ID"
+    },
+    {
+      "parameters": {
+        "resource": "folder",
+        "operation": "create",
+        "name": "planos",
+        "folderId": {
+          "__rl": true,
+          "value": "={{ $json.root_folder_id }}",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleDriveOAuth2Api": { "id": "PLACEHOLDER", "name": "Google Drive" }
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [1500, 100],
+      "id": "d1e2f3a4-b5c6-4d7e-8f9a-000000000006",
+      "name": "Create Folder planos"
+    },
+    {
+      "parameters": {
+        "resource": "folder",
+        "operation": "create",
+        "name": "fotos",
+        "folderId": {
+          "__rl": true,
+          "value": "={{ $('Store Root ID').first().json.root_folder_id }}",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleDriveOAuth2Api": { "id": "PLACEHOLDER", "name": "Google Drive" }
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [1750, 100],
+      "id": "d1e2f3a4-b5c6-4d7e-8f9a-000000000007",
+      "name": "Create Folder fotos"
+    },
+    {
+      "parameters": {
+        "resource": "folder",
+        "operation": "create",
+        "name": "docs",
+        "folderId": {
+          "__rl": true,
+          "value": "={{ $('Store Root ID').first().json.root_folder_id }}",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleDriveOAuth2Api": { "id": "PLACEHOLDER", "name": "Google Drive" }
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [2000, 100],
+      "id": "d1e2f3a4-b5c6-4d7e-8f9a-000000000008",
+      "name": "Create Folder docs"
+    },
+    {
+      "parameters": {
+        "resource": "folder",
+        "operation": "create",
+        "name": "presupuestos",
+        "folderId": {
+          "__rl": true,
+          "value": "={{ $('Store Root ID').first().json.root_folder_id }}",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleDriveOAuth2Api": { "id": "PLACEHOLDER", "name": "Google Drive" }
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [2250, 100],
+      "id": "d1e2f3a4-b5c6-4d7e-8f9a-000000000009",
+      "name": "Create Folder presupuestos"
+    },
+    {
+      "parameters": {
+        "resource": "folder",
+        "operation": "create",
+        "name": "propuestas",
+        "folderId": {
+          "__rl": true,
+          "value": "={{ $('Store Root ID').first().json.root_folder_id }}",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleDriveOAuth2Api": { "id": "PLACEHOLDER", "name": "Google Drive" }
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [2500, 100],
+      "id": "d1e2f3a4-b5c6-4d7e-8f9a-000000000010",
+      "name": "Create Folder propuestas"
+    },
+    {
+      "parameters": {
+        "resource": "folder",
+        "operation": "create",
+        "name": "administrativo",
+        "folderId": {
+          "__rl": true,
+          "value": "={{ $('Store Root ID').first().json.root_folder_id }}",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleDriveOAuth2Api": { "id": "PLACEHOLDER", "name": "Google Drive" }
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [2750, 100],
+      "id": "d1e2f3a4-b5c6-4d7e-8f9a-000000000011",
+      "name": "Create Folder administrativo"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const rootId          = $('Store Root ID').first().json.root_folder_id;\nconst projectId       = $('Store Root ID').first().json.project_id;\nconst planosId        = $('Create Folder planos').first().json.id;\nconst fotosId         = $('Create Folder fotos').first().json.id;\nconst docsId          = $('Create Folder docs').first().json.id;\nconst presupuestosId  = $('Create Folder presupuestos').first().json.id;\nconst propuestasId    = $('Create Folder propuestas').first().json.id;\nconst administrativoId = $('Create Folder administrativo').first().json.id;\n\nconst driveMetadata = {\n  drive_root_id: rootId,\n  drive_folders: {\n    planos:        planosId,\n    fotos:         fotosId,\n    docs:          docsId,\n    presupuestos:  presupuestosId,\n    propuestas:    propuestasId,\n    administrativo: administrativoId\n  }\n};\n\nreturn [{\n  json: {\n    project_id:     projectId,\n    root_folder_id: rootId,\n    drive_metadata: JSON.stringify(driveMetadata),\n    folders_created: 6\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3000, 100],
+      "id": "d1e2f3a4-b5c6-4d7e-8f9a-000000000012",
+      "name": "Collect Folder IDs"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE projects SET metadata = COALESCE(metadata, '{}'::jsonb) || $1::jsonb WHERE id = $2::uuid",
+        "options": {
+          "queryReplacement": "={{ [$json.drive_metadata, $json.project_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "PLACEHOLDER", "name": "Supabase Postgres" }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [3250, 100],
+      "id": "d1e2f3a4-b5c6-4d7e-8f9a-000000000013",
+      "name": "Save Folder IDs"
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "duplicateItem": false,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "d1e2f3a4-b5c6-4d7e-8f9a-000000000141",
+              "name": "status",
+              "value": "created",
+              "type": "string"
+            },
+            {
+              "id": "d1e2f3a4-b5c6-4d7e-8f9a-000000000142",
+              "name": "root_folder_id",
+              "value": "={{ $('Collect Folder IDs').first().json.root_folder_id }}",
+              "type": "string"
+            },
+            {
+              "id": "d1e2f3a4-b5c6-4d7e-8f9a-000000000143",
+              "name": "folders_created",
+              "value": "={{ $('Collect Folder IDs').first().json.folders_created }}",
+              "type": "number"
+            }
+          ]
+        },
+        "includeOtherFields": false
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [3500, 100],
+      "id": "d1e2f3a4-b5c6-4d7e-8f9a-000000000014",
+      "name": "Return Structure Created"
+    },
+
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT d.*, p.metadata as project_metadata FROM documents d JOIN projects p ON p.id = d.project_id WHERE d.id = $1::uuid",
+        "options": {
+          "queryReplacement": "={{ [$('Receive File Request').first().json.document_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "PLACEHOLDER", "name": "Supabase Postgres" }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [750, 500],
+      "id": "d1e2f3a4-b5c6-4d7e-8f9a-000000000015",
+      "name": "Load Document Record"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const doc = $input.first().json;\nconst metadata = doc.project_metadata || {};\nconst folders = metadata.drive_folders || {};\n\n// Mapear tipo de documento a carpeta de Drive\nconst folderMap = {\n  'plano':         folders.planos,\n  'foto':          folders.fotos,\n  'documento':     folders.docs,\n  'presupuesto':   folders.presupuestos,\n  'propuesta':     folders.propuestas,\n  'administrativo': folders.administrativo\n};\n\nconst docType      = doc.document_type || 'documento';\nconst targetFolder = folderMap[docType] || folders.docs;\n\nreturn [{\n  json: {\n    file_id:          $('Receive File Request').first().json.file_id || doc.drive_file_id,\n    document_id:      doc.id,\n    target_folder_id: targetFolder,\n    document_type:    docType\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1000, 500],
+      "id": "d1e2f3a4-b5c6-4d7e-8f9a-000000000016",
+      "name": "Resolve Target Folder"
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "operation": "move",
+        "fileId": {
+          "__rl": true,
+          "value": "={{ $json.file_id }}",
+          "mode": "id"
+        },
+        "folderId": {
+          "__rl": true,
+          "value": "={{ $json.target_folder_id }}",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleDriveOAuth2Api": { "id": "PLACEHOLDER", "name": "Google Drive" }
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [1250, 500],
+      "id": "d1e2f3a4-b5c6-4d7e-8f9a-000000000017",
+      "name": "Move File to Folder"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE documents SET drive_file_id = $1, drive_path = $2, status = 'uploaded' WHERE id = $3::uuid",
+        "options": {
+          "queryReplacement": "={{ [$json.id, $json.webViewLink || '', $('Resolve Target Folder').first().json.document_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "PLACEHOLDER", "name": "Supabase Postgres" }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1500, 500],
+      "id": "d1e2f3a4-b5c6-4d7e-8f9a-000000000018",
+      "name": "Update Document Record"
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "duplicateItem": false,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "d1e2f3a4-b5c6-4d7e-8f9a-000000000191",
+              "name": "status",
+              "value": "moved",
+              "type": "string"
+            },
+            {
+              "id": "d1e2f3a4-b5c6-4d7e-8f9a-000000000192",
+              "name": "file_moved",
+              "value": "={{ $('Resolve Target Folder').first().json.file_id }}",
+              "type": "string"
+            },
+            {
+              "id": "d1e2f3a4-b5c6-4d7e-8f9a-000000000193",
+              "name": "target_folder",
+              "value": "={{ $('Resolve Target Folder').first().json.document_type }}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": false
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [1750, 500],
+      "id": "d1e2f3a4-b5c6-4d7e-8f9a-000000000019",
+      "name": "Return File Moved"
+    }
+  ],
+  "connections": {
+    "Receive File Request": {
+      "main": [
+        [{ "node": "Route Action", "type": "main", "index": 0 }]
+      ]
+    },
+    "Route Action": {
+      "main": [
+        [{ "node": "Load Project",         "type": "main", "index": 0 }],
+        [{ "node": "Load Document Record", "type": "main", "index": 0 }]
+      ]
+    },
+    "Load Project": {
+      "main": [
+        [{ "node": "Create Root Folder", "type": "main", "index": 0 }]
+      ]
+    },
+    "Create Root Folder": {
+      "main": [
+        [{ "node": "Store Root ID", "type": "main", "index": 0 }]
+      ]
+    },
+    "Store Root ID": {
+      "main": [
+        [{ "node": "Create Folder planos", "type": "main", "index": 0 }]
+      ]
+    },
+    "Create Folder planos": {
+      "main": [
+        [{ "node": "Create Folder fotos", "type": "main", "index": 0 }]
+      ]
+    },
+    "Create Folder fotos": {
+      "main": [
+        [{ "node": "Create Folder docs", "type": "main", "index": 0 }]
+      ]
+    },
+    "Create Folder docs": {
+      "main": [
+        [{ "node": "Create Folder presupuestos", "type": "main", "index": 0 }]
+      ]
+    },
+    "Create Folder presupuestos": {
+      "main": [
+        [{ "node": "Create Folder propuestas", "type": "main", "index": 0 }]
+      ]
+    },
+    "Create Folder propuestas": {
+      "main": [
+        [{ "node": "Create Folder administrativo", "type": "main", "index": 0 }]
+      ]
+    },
+    "Create Folder administrativo": {
+      "main": [
+        [{ "node": "Collect Folder IDs", "type": "main", "index": 0 }]
+      ]
+    },
+    "Collect Folder IDs": {
+      "main": [
+        [{ "node": "Save Folder IDs", "type": "main", "index": 0 }]
+      ]
+    },
+    "Save Folder IDs": {
+      "main": [
+        [{ "node": "Return Structure Created", "type": "main", "index": 0 }]
+      ]
+    },
+    "Load Document Record": {
+      "main": [
+        [{ "node": "Resolve Target Folder", "type": "main", "index": 0 }]
+      ]
+    },
+    "Resolve Target Folder": {
+      "main": [
+        [{ "node": "Move File to Folder", "type": "main", "index": 0 }]
+      ]
+    },
+    "Move File to Folder": {
+      "main": [
+        [{ "node": "Update Document Record", "type": "main", "index": 0 }]
+      ]
+    },
+    "Update Document Record": {
+      "main": [
+        [{ "node": "Return File Moved", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

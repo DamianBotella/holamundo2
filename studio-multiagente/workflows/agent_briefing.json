@@ -1,0 +1,523 @@
+{
+  "name": "agent_briefing",
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "defineBelow",
+        "workflowInputs": {
+          "values": [
+            { "name": "project_id", "type": "string" },
+            { "name": "action",     "type": "string" }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [250, 300],
+      "id": "ab000000-ab00-4000-8000-000000000001",
+      "name": "Receive Project"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT p.id, p.name as project_name, p.project_type, p.budget_target, p.budget_flexible, p.location_address, p.location_city, p.location_province, p.property_type, p.property_area_m2, p.urgency, p.current_phase, p.metadata, c.name as client_name, c.email as client_email, c.phone as client_phone, c.preferred_contact, c.notes as client_notes FROM projects p JOIN clients c ON c.id = p.client_id WHERE p.id = $1::uuid",
+        "options": {
+          "queryReplacement": "={{ [$json.project_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Supabase Postgres"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [500, 300],
+      "id": "ab000000-ab00-4000-8000-000000000002",
+      "name": "Load Project + Client"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, version, summary, client_needs, objectives, constraints, status FROM briefings WHERE project_id = $1::uuid ORDER BY version DESC LIMIT 1",
+        "options": {
+          "queryReplacement": "={{ [$('Receive Project').first().json.project_id] }}",
+          "alwaysOutputData": true
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Supabase Postgres"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [750, 300],
+      "id": "ab000000-ab00-4000-8000-000000000003",
+      "name": "Load Existing Briefing"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT content, model_recommended, temperature FROM agent_prompts WHERE agent_name = 'agent_briefing' AND prompt_type = 'system' AND is_active = true LIMIT 1",
+        "options": {
+          "alwaysOutputData": true
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Supabase Postgres"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1000, 300],
+      "id": "ab000000-ab00-4000-8000-000000000004",
+      "name": "Load Agent Prompt"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const project = $('Load Project + Client').first().json;\nconst projectId = $('Receive Project').first().json.project_id;\nconst prevBriefingData = $('Load Existing Briefing').first().json;\nconst hasPrevBriefing = prevBriefingData && prevBriefingData.id;\nconst promptData = $('Load Agent Prompt').first().json;\nconst systemPrompt = (promptData && promptData.content)\n  ? promptData.content\n  : 'Eres el Agente de Briefing de un estudio de arquitectura tecnica. Convierte la informacion inicial del proyecto en un briefing estructurado. Responde EXCLUSIVAMENTE con un objeto JSON valido sin backticks ni texto adicional.';\nconst model = (promptData && promptData.model_recommended) || 'gpt-4o';\nconst temperature = (promptData && promptData.temperature !== null && promptData.temperature !== undefined) ? Number(promptData.temperature) : 0.2;\nconst nextVersion = hasPrevBriefing ? (prevBriefingData.version + 1) : 1;\nconst metadata = project.metadata || {};\nconst metaNotes = metadata.notes || metadata.description || '';\nconst budgetStr = project.budget_target ? project.budget_target + ' EUR' : 'No especificado';\nconst areaStr = project.property_area_m2 ? project.property_area_m2 + ' m2' : 'No especificada';\nconst locationParts = [project.location_address, project.location_city, project.location_province].filter(Boolean);\nconst locationStr = locationParts.length > 0 ? locationParts.join(', ') : 'No especificada';\nconst userParts = [\n  'Genera el briefing estructurado para este proyecto.',\n  '',\n  'DATOS DEL PROYECTO:',\n  '- Nombre: ' + (project.project_name || 'Sin nombre'),\n  '- Tipo: ' + (project.project_type || 'No especificado'),\n  '- Localizacion: ' + locationStr,\n  '- Tipo de inmueble: ' + (project.property_type || 'No especificado'),\n  '- Superficie aproximada: ' + areaStr,\n  '- Presupuesto objetivo: ' + budgetStr + (project.budget_flexible ? ' (flexible)' : ' (ajustado)'),\n  '- Urgencia: ' + (project.urgency || 'normal'),\n  '',\n  'DATOS DEL CLIENTE:',\n  '- Nombre: ' + (project.client_name || 'Sin nombre'),\n  '- Notas del cliente: ' + (project.client_notes || 'Sin notas'),\n  '',\n  'DESCRIPCION DEL ENCARGO:',\n  metaNotes || 'Sin descripcion adicional'\n];\nif (hasPrevBriefing && prevBriefingData.status === 'revision_requested') {\n  userParts.push('');\n  userParts.push('BRIEFING ANTERIOR RECHAZADO (esta es la revision ' + nextVersion + '):');\n  userParts.push('Resumen previo: ' + (prevBriefingData.summary || '').substring(0, 400));\n  userParts.push('Corrige y mejora el briefing anterior basandote en el contexto disponible.');\n}\nuserParts.push('');\nuserParts.push('Responde con el JSON estructurado del briefing.');\nconst userPrompt = userParts.join('\\n');\nreturn [{ json: {\n  project_id: projectId,\n  project_name: project.project_name,\n  client_name: project.client_name,\n  client_email: project.client_email || null,\n  next_version: nextVersion,\n  prompt_system: systemPrompt,\n  prompt_user: userPrompt,\n  model: model,\n  temperature: temperature\n} }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1250, 300],
+      "id": "ab000000-ab00-4000-8000-000000000005",
+      "name": "Prepare LLM Payload"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "PLACEHOLDER_UTIL_LLM_CALL",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.1,
+      "position": [1500, 300],
+      "id": "ab000000-ab00-4000-8000-000000000006",
+      "name": "Call LLM"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const llmResult = $input.first().json;\nconst preparedData = $('Prepare LLM Payload').first().json;\nlet responseText = (llmResult.response_text || '').trim();\nif (responseText.startsWith('```')) {\n  responseText = responseText.replace(/^```[a-z]*\\n?/, '').replace(/\\n?```$/, '').trim();\n}\nlet parsed;\ntry {\n  parsed = JSON.parse(responseText);\n} catch(e) {\n  parsed = null;\n}\nconst isValid = parsed && typeof parsed.summary === 'string';\nif (!isValid) {\n  parsed = {\n    summary: 'Error al procesar respuesta del LLM. Revisar manualmente. Respuesta: ' + responseText.substring(0, 200),\n    client_needs: [],\n    objectives: [],\n    constraints: [],\n    style_preferences: {},\n    rooms_affected: [],\n    missing_info: ['La respuesta del LLM no fue JSON valido'],\n    open_questions: []\n  };\n}\nreturn [{ json: {\n  project_id: preparedData.project_id,\n  project_name: preparedData.project_name,\n  client_name: preparedData.client_name,\n  client_email: preparedData.client_email,\n  next_version: preparedData.next_version,\n  summary: parsed.summary || '',\n  client_needs: parsed.client_needs || [],\n  objectives: parsed.objectives || [],\n  constraints: parsed.constraints || [],\n  style_preferences: parsed.style_preferences || {},\n  rooms_affected: parsed.rooms_affected || [],\n  missing_info: parsed.missing_info || [],\n  open_questions: parsed.open_questions || []\n} }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1750, 300],
+      "id": "ab000000-ab00-4000-8000-000000000007",
+      "name": "Parse Briefing Response"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO briefings (project_id, version, summary, client_needs, objectives, constraints, style_preferences, rooms_affected, missing_info, open_questions, status) VALUES ($1::uuid, $2::int, $3, $4::jsonb, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, $10::jsonb, 'pending_review') RETURNING id",
+        "options": {
+          "queryReplacement": "={{ [$json.project_id, $json.next_version, $json.summary, JSON.stringify($json.client_needs), JSON.stringify($json.objectives), JSON.stringify($json.constraints), JSON.stringify($json.style_preferences), JSON.stringify($json.rooms_affected), JSON.stringify($json.missing_info), JSON.stringify($json.open_questions)] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Supabase Postgres"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [2000, 300],
+      "id": "ab000000-ab00-4000-8000-000000000008",
+      "name": "Save Briefing"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO approvals (project_id, approval_type, requested_by, summary, details, related_entity, related_entity_id, expires_at) VALUES ($1::uuid, 'briefing_review', 'agent_briefing', $2, $3::jsonb, 'briefings', $4::uuid, NOW() + INTERVAL '72 hours') RETURNING id, webhook_token",
+        "options": {
+          "queryReplacement": "={{ [$('Parse Briefing Response').first().json.project_id, 'Revision de briefing v' + $('Parse Briefing Response').first().json.next_version + ' para proyecto ' + $('Parse Briefing Response').first().json.project_name, JSON.stringify({briefing_id: $json.id, briefing_version: $('Parse Briefing Response').first().json.next_version, project_name: $('Parse Briefing Response').first().json.project_name}), $json.id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Supabase Postgres"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [2250, 300],
+      "id": "ab000000-ab00-4000-8000-000000000009",
+      "name": "Create Approval"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const parsed = $('Parse Briefing Response').first().json;\nconst savedBriefing = $('Save Briefing').first().json;\nconst approvalRecord = $('Create Approval').first().json;\nconst resumeUrl = $execution.resumeUrl;\nconst approveUrl = resumeUrl + '?action=approve';\nconst rejectUrl = resumeUrl + '?action=reject';\nconst needsList = (parsed.client_needs || []).map(function(n) {\n  const text = typeof n === 'object' && n !== null ? (n.need || JSON.stringify(n)) : String(n);\n  return '<li>' + text + '</li>';\n}).join('');\nconst objList = (parsed.objectives || []).map(function(o) { return '<li>' + String(o) + '</li>'; }).join('');\nconst missingList = (parsed.missing_info || []).map(function(m) { return '<li>' + String(m) + '</li>'; }).join('');\nconst htmlBody = '<div style=\"font-family:Arial,sans-serif;max-width:700px;margin:0 auto\">'\n  + '<h2 style=\"color:#2c3e50\">Studio AI \u2014 Revisi\u00f3n de Briefing</h2>'\n  + '<h3 style=\"color:#7f8c8d\">Proyecto: ' + parsed.project_name + '</h3>'\n  + '<p><b>Cliente:</b> ' + parsed.client_name + ' &nbsp;|&nbsp; <b>Versi\u00f3n:</b> ' + parsed.next_version + '</p>'\n  + '<hr style=\"border:none;border-top:1px solid #eee\">'\n  + '<h4>Resumen:</h4><p>' + parsed.summary + '</p>'\n  + '<h4>Necesidades del cliente:</h4><ul>' + needsList + '</ul>'\n  + '<h4>Objetivos:</h4><ul>' + objList + '</ul>'\n  + '<h4>Informaci\u00f3n faltante:</h4><ul>' + missingList + '</ul>'\n  + '<div style=\"margin:32px 0;text-align:center\">'\n  + '<a href=\"' + approveUrl + '\" style=\"background:#27ae60;color:white;padding:14px 28px;text-decoration:none;border-radius:4px;margin-right:16px;display:inline-block;font-size:15px\">&#10003; Aprobar Briefing</a>'\n  + '<a href=\"' + rejectUrl + '\" style=\"background:#e74c3c;color:white;padding:14px 28px;text-decoration:none;border-radius:4px;display:inline-block;font-size:15px\">&#10007; Solicitar Revisi\u00f3n</a>'\n  + '</div>'\n  + '<p style=\"color:#95a5a6;font-size:12px;text-align:center\">Este enlace expira en 72 horas.</p>'\n  + '</div>';\nreturn [{ json: {\n  to: 'arquitecto@estudio.com',\n  subject: '[Studio AI] Briefing para revisi\\u00f3n: ' + parsed.project_name,\n  html_body: htmlBody,\n  briefing_id: savedBriefing.id,\n  approval_id: approvalRecord.id,\n  project_id: parsed.project_id,\n  project_name: parsed.project_name,\n  next_version: parsed.next_version\n} }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2500, 300],
+      "id": "ab000000-ab00-4000-8000-000000000010",
+      "name": "Build Approval Email"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.to }}",
+        "subject": "={{ $json.subject }}",
+        "emailType": "html",
+        "message": "={{ $json.html_body }}",
+        "options": {}
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "PLACEHOLDER",
+          "name": "Gmail DamianDomeya@"
+        }
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [2750, 300],
+      "id": "ab000000-ab00-4000-8000-000000000011",
+      "name": "Send Approval Email"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, phase_at_time, output_summary, status) VALUES ($1::uuid, 'agent_briefing', 'briefing_sent_for_review', 'intake', $2, 'success')",
+        "options": {
+          "queryReplacement": "={{ [$('Build Approval Email').first().json.project_id, 'Briefing v' + $('Build Approval Email').first().json.next_version + ' enviado para revision. ID: ' + $('Build Approval Email').first().json.briefing_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Supabase Postgres"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [3000, 300],
+      "id": "ab000000-ab00-4000-8000-000000000012",
+      "name": "Log - Awaiting Approval"
+    },
+    {
+      "parameters": {
+        "resume": "webhook",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [3250, 300],
+      "id": "ab000000-ab00-4000-8000-000000000013",
+      "name": "Wait for Decision"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const resumeData = $input.first().json;\nconst emailData = $('Build Approval Email').first().json;\nconst action = (resumeData.query && resumeData.query.action)\n  || (resumeData.body && resumeData.body.action)\n  || resumeData.action\n  || 'reject';\nreturn [{ json: {\n  action: action,\n  is_approved: action === 'approve',\n  project_id: emailData.project_id,\n  briefing_id: emailData.briefing_id,\n  approval_id: emailData.approval_id,\n  project_name: emailData.project_name,\n  next_version: emailData.next_version\n} }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3500, 300],
+      "id": "ab000000-ab00-4000-8000-000000000014",
+      "name": "Process Approval Response"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "ab000000-ab00-4000-8000-000000000f01",
+              "leftValue": "={{ $json.is_approved }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [3750, 300],
+      "id": "ab000000-ab00-4000-8000-000000000015",
+      "name": "Approved?"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE briefings SET status = 'approved', approved_at = NOW(), approved_by = 'architect' WHERE id = $1::uuid",
+        "options": {
+          "queryReplacement": "={{ [$json.briefing_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Supabase Postgres"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [4000, 150],
+      "id": "ab000000-ab00-4000-8000-000000000016",
+      "name": "Update Briefing - Approved"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE approvals SET status = 'approved', decided_by = 'architect', decided_at = NOW() WHERE id = $1::uuid",
+        "options": {
+          "queryReplacement": "={{ [$('Process Approval Response').first().json.approval_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Supabase Postgres"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [4250, 150],
+      "id": "ab000000-ab00-4000-8000-000000000017",
+      "name": "Update Approval - Approved"
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "duplicateItem": false,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "ab000000-ab00-4000-8000-000000001801",
+              "name": "status",
+              "value": "complete",
+              "type": "string"
+            },
+            {
+              "id": "ab000000-ab00-4000-8000-000000001802",
+              "name": "briefing_id",
+              "value": "={{ $('Process Approval Response').first().json.briefing_id }}",
+              "type": "string"
+            },
+            {
+              "id": "ab000000-ab00-4000-8000-000000001803",
+              "name": "phase",
+              "value": "briefing_done",
+              "type": "string"
+            },
+            {
+              "id": "ab000000-ab00-4000-8000-000000001804",
+              "name": "project_id",
+              "value": "={{ $('Process Approval Response').first().json.project_id }}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": false
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [4500, 150],
+      "id": "ab000000-ab00-4000-8000-000000000018",
+      "name": "Return Success"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE briefings SET status = 'revision_requested' WHERE id = $1::uuid",
+        "options": {
+          "queryReplacement": "={{ [$json.briefing_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Supabase Postgres"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [4000, 450],
+      "id": "ab000000-ab00-4000-8000-000000000019",
+      "name": "Update Briefing - Revision"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE approvals SET status = 'rejected', decided_by = 'architect', decided_at = NOW() WHERE id = $1::uuid",
+        "options": {
+          "queryReplacement": "={{ [$('Process Approval Response').first().json.approval_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Supabase Postgres"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [4250, 450],
+      "id": "ab000000-ab00-4000-8000-000000000020",
+      "name": "Update Approval - Rejected"
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "duplicateItem": false,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "ab000000-ab00-4000-8000-000000002101",
+              "name": "status",
+              "value": "revision_needed",
+              "type": "string"
+            },
+            {
+              "id": "ab000000-ab00-4000-8000-000000002102",
+              "name": "briefing_id",
+              "value": "={{ $('Process Approval Response').first().json.briefing_id }}",
+              "type": "string"
+            },
+            {
+              "id": "ab000000-ab00-4000-8000-000000002103",
+              "name": "phase",
+              "value": "intake",
+              "type": "string"
+            },
+            {
+              "id": "ab000000-ab00-4000-8000-000000002104",
+              "name": "project_id",
+              "value": "={{ $('Process Approval Response').first().json.project_id }}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": false
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [4500, 450],
+      "id": "ab000000-ab00-4000-8000-000000000021",
+      "name": "Return Revision"
+    }
+  ],
+  "connections": {
+    "Receive Project": {
+      "main": [
+        [{ "node": "Load Project + Client", "type": "main", "index": 0 }]
+      ]
+    },
+    "Load Project + Client": {
+      "main": [
+        [{ "node": "Load Existing Briefing", "type": "main", "index": 0 }]
+      ]
+    },
+    "Load Existing Briefing": {
+      "main": [
+        [{ "node": "Load Agent Prompt", "type": "main", "index": 0 }]
+      ]
+    },
+    "Load Agent Prompt": {
+      "main": [
+        [{ "node": "Prepare LLM Payload", "type": "main", "index": 0 }]
+      ]
+    },
+    "Prepare LLM Payload": {
+      "main": [
+        [{ "node": "Call LLM", "type": "main", "index": 0 }]
+      ]
+    },
+    "Call LLM": {
+      "main": [
+        [{ "node": "Parse Briefing Response", "type": "main", "index": 0 }]
+      ]
+    },
+    "Parse Briefing Response": {
+      "main": [
+        [{ "node": "Save Briefing", "type": "main", "index": 0 }]
+      ]
+    },
+    "Save Briefing": {
+      "main": [
+        [{ "node": "Create Approval", "type": "main", "index": 0 }]
+      ]
+    },
+    "Create Approval": {
+      "main": [
+        [{ "node": "Build Approval Email", "type": "main", "index": 0 }]
+      ]
+    },
+    "Build Approval Email": {
+      "main": [
+        [{ "node": "Send Approval Email", "type": "main", "index": 0 }]
+      ]
+    },
+    "Send Approval Email": {
+      "main": [
+        [{ "node": "Log - Awaiting Approval", "type": "main", "index": 0 }]
+      ]
+    },
+    "Log - Awaiting Approval": {
+      "main": [
+        [{ "node": "Wait for Decision", "type": "main", "index": 0 }]
+      ]
+    },
+    "Wait for Decision": {
+      "main": [
+        [{ "node": "Process Approval Response", "type": "main", "index": 0 }]
+      ]
+    },
+    "Process Approval Response": {
+      "main": [
+        [{ "node": "Approved?", "type": "main", "index": 0 }]
+      ]
+    },
+    "Approved?": {
+      "main": [
+        [{ "node": "Update Briefing - Approved", "type": "main", "index": 0 }],
+        [{ "node": "Update Briefing - Revision", "type": "main", "index": 0 }]
+      ]
+    },
+    "Update Briefing - Approved": {
+      "main": [
+        [{ "node": "Update Approval - Approved", "type": "main", "index": 0 }]
+      ]
+    },
+    "Update Approval - Approved": {
+      "main": [
+        [{ "node": "Return Success", "type": "main", "index": 0 }]
+      ]
+    },
+    "Update Briefing - Revision": {
+      "main": [
+        [{ "node": "Update Approval - Rejected", "type": "main", "index": 0 }]
+      ]
+    },
+    "Update Approval - Rejected": {
+      "main": [
+        [{ "node": "Return Revision", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "PLACEHOLDER_ERROR_HANDLER"
+  },
+  "pinData": {}
+}

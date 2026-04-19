@@ -1,0 +1,312 @@
+{
+  "name": "agent_regulatory",
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "defineBelow",
+        "workflowInputs": { "values": [{ "name": "project_id", "type": "string" }] }
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [250, 300],
+      "id": "e1a2-0001",
+      "name": "Receive Project"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT p.id, p.name, p.project_type, p.location_city, p.location_province, p.property_type, p.property_area_m2, p.budget_target, c.name as client_name FROM projects p LEFT JOIN clients c ON c.id = p.client_id WHERE p.id = $1::uuid",
+        "options": { "queryReplacement": "={{ [$json.project_id] }}" }
+      },
+      "credentials": { "postgres": { "id": "PLACEHOLDER", "name": "Supabase Postgres" } },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [500, 300],
+      "id": "e1a2-0002",
+      "name": "Load Project"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, option_number, title, description, content FROM design_options WHERE project_id = $1::uuid AND is_selected = true LIMIT 1",
+        "options": {
+          "queryReplacement": "={{ [$('Receive Project').first().json.project_id] }}",
+          "alwaysOutputData": true
+        }
+      },
+      "credentials": { "postgres": { "id": "PLACEHOLDER", "name": "Supabase Postgres" } },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [750, 300],
+      "id": "e1a2-0003",
+      "name": "Load Selected Design Option"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, content, summary FROM briefings WHERE project_id = $1::uuid AND status = 'approved' ORDER BY version DESC LIMIT 1",
+        "options": {
+          "queryReplacement": "={{ [$('Receive Project').first().json.project_id] }}",
+          "alwaysOutputData": true
+        }
+      },
+      "credentials": { "postgres": { "id": "PLACEHOLDER", "name": "Supabase Postgres" } },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1000, 300],
+      "id": "e1a2-0004",
+      "name": "Load Briefing"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT content, model_recommended, temperature FROM agent_prompts WHERE agent_name = 'agent_regulatory' AND prompt_type = 'system' AND is_active = true LIMIT 1",
+        "options": { "alwaysOutputData": true }
+      },
+      "credentials": { "postgres": { "id": "PLACEHOLDER", "name": "Supabase Postgres" } },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1250, 300],
+      "id": "e1a2-0005",
+      "name": "Load Agent Prompt"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const projectId = $('Receive Project').first().json.project_id;\nconst project = $('Load Project').first().json;\nconst design = $('Load Selected Design Option').first().json;\nconst briefing = $('Load Briefing').first().json;\nconst agentPrompt = $('Load Agent Prompt').first().json;\n\nlet designContent = {};\ntry { designContent = typeof design.content === 'string' ? JSON.parse(design.content) : (design.content || {}); } catch(e) {}\n\nlet briefingContent = {};\ntry { briefingContent = typeof briefing.content === 'string' ? JSON.parse(briefing.content) : (briefing.content || {}); } catch(e) {}\n\nconst designStr = JSON.stringify(designContent).toLowerCase();\nconst briefStr = JSON.stringify(briefingContent).toLowerCase();\nconst hasStructural = designStr.includes('estructur') || briefStr.includes('estructur') || designStr.includes('structural');\n\nconst roomsAffected = briefingContent.rooms_affected || [];\nconst constraints = briefingContent.constraints || [];\n\nconst designSummary = design.title\n  ? `Opción ${design.option_number}: ${design.title}\\n${design.description || ''}`\n  : JSON.stringify(designContent, null, 2);\n\nconst roomsText = roomsAffected.length > 0\n  ? roomsAffected.map(r => `- ${r.room}: ${r.intervention}`).join('\\n')\n  : '- Sin detalle disponible';\n\nconst constraintsText = constraints.length > 0\n  ? constraints.map(c => `- ${c.description}`).join('\\n')\n  : '- Sin restricciones específicas';\n\nconst outputFormat = '{\\n  \"regulatory_tasks\": [\\n    {\\n      \"task_type\": \"licencia_obra|comunicacion_previa|permiso_comunidad|certificado_habitabilidad|cedula_urbanistica|informe_tecnico|otro\",\\n      \"title\": \"string\",\\n      \"description\": \"string\",\\n      \"entity\": \"string\",\\n      \"required_docs\": [\"string\"],\\n      \"estimated_timeline\": \"string\",\\n      \"estimated_cost\": null,\\n      \"priority\": \"critico|importante|recomendable|informativo\",\\n      \"draft_message\": \"string\",\\n      \"notes\": \"string\"\\n    }\\n  ]\\n}';\n\nconst userPrompt = `Detecta trámites y permisos potencialmente necesarios para este proyecto.\\n\\nPROYECTO:\\n- Tipo de intervención: ${project.project_type || 'reforma'}\\n- Localización: ${project.location_city || ''}, ${project.location_province || ''}\\n- Tipo de inmueble: ${project.property_type || ''}\\n- Superficie: ${project.property_area_m2 || ''} m²\\n\\nPROPUESTA DE DISTRIBUCIÓN SELECCIONADA:\\n${designSummary}\\n\\nINTERVENCIONES PREVISTAS:\\n${roomsText}\\n\\nRESTRICCIONES CONOCIDAS:\\n${constraintsText}\\n\\n¿HAY AFECTACIÓN ESTRUCTURAL PREVISTA?: ${hasStructural ? 'Posiblemente sí' : 'No indicado explícitamente'}\\n\\nResponde EXCLUSIVAMENTE con un objeto JSON válido:\\n${outputFormat}`;\n\nreturn [{ json: {\n  project_id: projectId,\n  prompt_system: agentPrompt.content || 'Eres el Agente de Normativa y Tramitación.',\n  prompt_user: userPrompt,\n  model: agentPrompt.model_recommended || 'claude-sonnet-4-20250514',\n  temperature: agentPrompt.temperature || 0.2\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1500, 300],
+      "id": "e1a2-0006",
+      "name": "Prepare Regulatory Prompt"
+    },
+    {
+      "parameters": {
+        "workflowId": { "__rl": true, "value": "JoKqGZ8pDzhJohV2", "mode": "id" },
+        "workflowInputs": { "mappingMode": "autoMapInputData", "value": {}, "matchingColumns": [], "schema": [] },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.1,
+      "position": [1750, 300],
+      "id": "e1a2-0007",
+      "name": "Call LLM"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const llmResponse = $input.first().json;\nconst projectId = $('Receive Project').first().json.project_id;\n\nlet content = llmResponse.content || llmResponse.response || llmResponse.text || '';\nif (typeof content === 'object') content = JSON.stringify(content);\ncontent = content.replace(/```json\\n?/g, '').replace(/```\\n?/g, '').trim();\n\nlet parsed = {};\ntry {\n  parsed = JSON.parse(content);\n} catch(e) {\n  const match = content.match(/\\{[\\s\\S]*\\}/);\n  if (match) { try { parsed = JSON.parse(match[0]); } catch(e2) {} }\n}\n\nconst tasks = parsed.regulatory_tasks || [];\n\nif (tasks.length === 0) {\n  return [{ json: {\n    project_id: projectId,\n    task_type: 'otro',\n    title: 'Análisis normativo preliminar',\n    description: 'No se detectaron trámites específicos. Verificar manualmente con técnico.',\n    entity: 'Ayuntamiento local',\n    required_docs: '[]',\n    estimated_timeline: 'Por determinar',\n    estimated_cost: null,\n    priority: 'informativo',\n    draft_message: '',\n    notes: 'El LLM no devolvió trámites específicos.'\n  }}];\n}\n\nreturn tasks.map(task => ({ json: {\n  project_id: projectId,\n  task_type: task.task_type || 'otro',\n  title: task.title || 'Trámite sin título',\n  description: task.description || '',\n  entity: task.entity || '',\n  required_docs: JSON.stringify(task.required_docs || []),\n  estimated_timeline: task.estimated_timeline || '',\n  estimated_cost: task.estimated_cost || null,\n  priority: task.priority || 'informativo',\n  draft_message: task.draft_message || '',\n  notes: task.notes || ''\n}}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2000, 300],
+      "id": "e1a2-0008",
+      "name": "Parse Regulatory Tasks"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO regulatory_tasks (project_id, task_type, title, description, entity, required_docs, estimated_timeline, estimated_cost, priority, draft_message, notes, status) VALUES ($1::uuid, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, 'detected') RETURNING id, task_type, priority, title",
+        "options": {
+          "queryReplacement": "={{ [$json.project_id, $json.task_type, $json.title, $json.description, $json.entity, $json.required_docs, $json.estimated_timeline, $json.estimated_cost, $json.priority, $json.draft_message, $json.notes] }}"
+        }
+      },
+      "credentials": { "postgres": { "id": "PLACEHOLDER", "name": "Supabase Postgres" } },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [2250, 300],
+      "id": "e1a2-0009",
+      "name": "Insert Regulatory Task"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const all = $input.all(); const pid = $('Receive Project').first().json.project_id; const tasks = all.map(i=>i.json); const tc = tasks.length; const cc = tasks.filter(t=>t.priority==='critico').length; return [{ json: { project_id: pid, tasks_count: tc, critical_count: cc, needs_external_contact: cc > 0, tasks_summary: tasks.map(t=>`[${t.priority}] ${t.title}`).join('\\n') } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2500, 300],
+      "id": "e1a2-0010",
+      "name": "Collect All Tasks"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict", "version": 2 },
+          "conditions": [{ "id": "e1a2-0110", "leftValue": "={{ $json.needs_external_contact }}", "rightValue": "", "operator": { "type": "boolean", "operation": "true", "singleValue": true } }],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [2750, 300],
+      "id": "e1a2-0011",
+      "name": "External Contact Needed?"
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "duplicateItem": false,
+        "assignments": { "assignments": [
+          { "id": "e1a2-0121", "name": "status", "value": "complete", "type": "string" },
+          { "id": "e1a2-0122", "name": "phase", "value": "analysis_done", "type": "string" },
+          { "id": "e1a2-0123", "name": "tasks_count", "value": "={{ $('Collect All Tasks').first().json.tasks_count }}", "type": "number" },
+          { "id": "e1a2-0124", "name": "critical_count", "value": "={{ $('Collect All Tasks').first().json.critical_count }}", "type": "number" },
+          { "id": "e1a2-0125", "name": "external_contact_approved", "value": "=false", "type": "boolean" }
+        ]},
+        "includeOtherFields": false
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [3000, 160],
+      "id": "e1a2-0012",
+      "name": "Return No Contact"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO approvals (project_id, approval_type, requested_by, context_data, status) VALUES ($1::uuid, 'external_contact', 'agent_regulatory', $2::jsonb, 'pending') RETURNING id",
+        "options": { "queryReplacement": "={{ [$json.project_id, JSON.stringify({tasks_count: $json.tasks_count, critical_count: $json.critical_count})] }}" }
+      },
+      "credentials": { "postgres": { "id": "PLACEHOLDER", "name": "Supabase Postgres" } },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [3000, 440],
+      "id": "e1a2-0013",
+      "name": "Create Approval"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const approval = $('Create Approval').first().json;\nconst data = $('Collect All Tasks').first().json;\nconst resumeUrl = $execution.resumeUrl;\n\nconst approveUrl = resumeUrl + '?action=approve';\nconst rejectUrl = resumeUrl + '?action=reject';\n\nconst htmlBody = `<div style=\"font-family:Arial,sans-serif;max-width:600px;margin:0 auto;\"><h2 style=\"color:#2c3e50;\">Studio AI — Revisión normativa</h2><p>El análisis normativo ha detectado <strong>${data.critical_count} trámite(s) crítico(s)</strong> que pueden requerir consulta con organismos oficiales.</p><h3 style=\"color:#e67e22;\">Trámites detectados:</h3><pre style=\"background:#f8f9fa;padding:16px;border-radius:4px;font-size:13px;white-space:pre-wrap;\">${data.tasks_summary}</pre><p><strong>¿Autoriza preparar el contacto con los organismos correspondientes?</strong><br><em>Los borradores de comunicación están listos. El envío real requerirá su aprobación final.</em></p><div style=\"margin:30px 0;\"><a href=\"${approveUrl}\" style=\"background-color:#27ae60;color:white;padding:12px 24px;text-decoration:none;border-radius:4px;margin-right:16px;\">✅ Autorizar contacto</a>&nbsp;&nbsp;<a href=\"${rejectUrl}\" style=\"background-color:#95a5a6;color:white;padding:12px 24px;text-decoration:none;border-radius:4px;\">⏸️ No por ahora</a></div><p style=\"color:#95a5a6;font-size:12px;\">Este enlace expira en 72 horas.</p></div>`;\n\nreturn [{ json: {\n  html_body: htmlBody,\n  subject: `[Studio AI] Revisión normativa — ${data.critical_count} trámite(s) crítico(s)`,\n  to: 'arquitecto@estudio.com',\n  project_id: data.project_id,\n  tasks_count: data.tasks_count,\n  critical_count: data.critical_count,\n  approval_id: approval.id\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3250, 440],
+      "id": "e1a2-0014",
+      "name": "Build Contact Email"
+    },
+    {
+      "parameters": { "sendTo": "={{ $json.to }}", "subject": "={{ $json.subject }}", "emailType": "html", "message": "={{ $json.html_body }}", "options": {} },
+      "credentials": { "gmailOAuth2": { "id": "PLACEHOLDER", "name": "Gmail DamianDomeya@" } },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [3500, 440],
+      "id": "e1a2-0015",
+      "name": "Send Contact Notification"
+    },
+    {
+      "parameters": { "resume": "webhook", "options": {} },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [3750, 440],
+      "id": "e1a2-0016",
+      "name": "Wait for Contact Approval"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const d = $input.first().json; const action = (d.query?.action || d.body?.action || 'reject').toLowerCase(); const data = $('Collect All Tasks').first().json; return [{ json: { action, is_approved: action === 'approve', project_id: data.project_id, tasks_count: data.tasks_count, critical_count: data.critical_count } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [4000, 440],
+      "id": "e1a2-0017",
+      "name": "Process Contact Decision"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict", "version": 2 },
+          "conditions": [{ "id": "e1a2-0180", "leftValue": "={{ $json.is_approved }}", "rightValue": "", "operator": { "type": "boolean", "operation": "true", "singleValue": true } }],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [4250, 440],
+      "id": "e1a2-0018",
+      "name": "Contact Approved?"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE regulatory_tasks SET status = 'confirmed' WHERE project_id = $1::uuid AND priority = 'critico'",
+        "options": { "queryReplacement": "={{ [$json.project_id] }}" }
+      },
+      "credentials": { "postgres": { "id": "PLACEHOLDER", "name": "Supabase Postgres" } },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [4500, 300],
+      "id": "e1a2-0019",
+      "name": "Mark Tasks Confirmed"
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "duplicateItem": false,
+        "assignments": { "assignments": [
+          { "id": "e1a2-0201", "name": "status", "value": "complete", "type": "string" },
+          { "id": "e1a2-0202", "name": "phase", "value": "analysis_done", "type": "string" },
+          { "id": "e1a2-0203", "name": "tasks_count", "value": "={{ $('Process Contact Decision').first().json.tasks_count }}", "type": "number" },
+          { "id": "e1a2-0204", "name": "critical_count", "value": "={{ $('Process Contact Decision').first().json.critical_count }}", "type": "number" },
+          { "id": "e1a2-0205", "name": "external_contact_approved", "value": "=true", "type": "boolean" }
+        ]},
+        "includeOtherFields": false
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [4750, 300],
+      "id": "e1a2-0020",
+      "name": "Return Approved"
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "duplicateItem": false,
+        "assignments": { "assignments": [
+          { "id": "e1a2-0211", "name": "status", "value": "complete", "type": "string" },
+          { "id": "e1a2-0212", "name": "phase", "value": "analysis_done", "type": "string" },
+          { "id": "e1a2-0213", "name": "tasks_count", "value": "={{ $('Process Contact Decision').first().json.tasks_count }}", "type": "number" },
+          { "id": "e1a2-0214", "name": "critical_count", "value": "={{ $('Process Contact Decision').first().json.critical_count }}", "type": "number" },
+          { "id": "e1a2-0215", "name": "external_contact_approved", "value": "=false", "type": "boolean" }
+        ]},
+        "includeOtherFields": false
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [4500, 580],
+      "id": "e1a2-0021",
+      "name": "Return Not Approved"
+    }
+  ],
+  "connections": {
+    "Receive Project": { "main": [[{ "node": "Load Project", "type": "main", "index": 0 }]] },
+    "Load Project": { "main": [[{ "node": "Load Selected Design Option", "type": "main", "index": 0 }]] },
+    "Load Selected Design Option": { "main": [[{ "node": "Load Briefing", "type": "main", "index": 0 }]] },
+    "Load Briefing": { "main": [[{ "node": "Load Agent Prompt", "type": "main", "index": 0 }]] },
+    "Load Agent Prompt": { "main": [[{ "node": "Prepare Regulatory Prompt", "type": "main", "index": 0 }]] },
+    "Prepare Regulatory Prompt": { "main": [[{ "node": "Call LLM", "type": "main", "index": 0 }]] },
+    "Call LLM": { "main": [[{ "node": "Parse Regulatory Tasks", "type": "main", "index": 0 }]] },
+    "Parse Regulatory Tasks": { "main": [[{ "node": "Insert Regulatory Task", "type": "main", "index": 0 }]] },
+    "Insert Regulatory Task": { "main": [[{ "node": "Collect All Tasks", "type": "main", "index": 0 }]] },
+    "Collect All Tasks": { "main": [[{ "node": "External Contact Needed?", "type": "main", "index": 0 }]] },
+    "External Contact Needed?": { "main": [
+      [{ "node": "Create Approval", "type": "main", "index": 0 }],
+      [{ "node": "Return No Contact", "type": "main", "index": 0 }]
+    ]},
+    "Create Approval": { "main": [[{ "node": "Build Contact Email", "type": "main", "index": 0 }]] },
+    "Build Contact Email": { "main": [[{ "node": "Send Contact Notification", "type": "main", "index": 0 }]] },
+    "Send Contact Notification": { "main": [[{ "node": "Wait for Contact Approval", "type": "main", "index": 0 }]] },
+    "Wait for Contact Approval": { "main": [[{ "node": "Process Contact Decision", "type": "main", "index": 0 }]] },
+    "Process Contact Decision": { "main": [[{ "node": "Contact Approved?", "type": "main", "index": 0 }]] },
+    "Contact Approved?": { "main": [
+      [{ "node": "Mark Tasks Confirmed", "type": "main", "index": 0 }],
+      [{ "node": "Return Not Approved", "type": "main", "index": 0 }]
+    ]},
+    "Mark Tasks Confirmed": { "main": [[{ "node": "Return Approved", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {}
+}

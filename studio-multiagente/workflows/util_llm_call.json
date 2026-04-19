@@ -1,0 +1,271 @@
+{
+  "name": "util_llm_call",
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "defineBelow",
+        "workflowInputs": {
+          "values": [
+            { "name": "prompt_system", "type": "string" },
+            { "name": "prompt_user",   "type": "string" },
+            { "name": "model",         "type": "string" },
+            { "name": "temperature",   "type": "number" },
+            { "name": "project_id",    "type": "string" },
+            { "name": "agent_name",    "type": "string" }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [250, 300],
+      "id": "a1b2c3d4-e5f6-4a7b-8c9d-000000000001",
+      "name": "Receive LLM Request"
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "duplicateItem": false,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "a1b2c3d4-e5f6-4a7b-8c9d-000000000011",
+              "name": "model",
+              "value": "={{ $json.model || 'gpt-4o' }}",
+              "type": "string"
+            },
+            {
+              "id": "a1b2c3d4-e5f6-4a7b-8c9d-000000000012",
+              "name": "temperature",
+              "value": "={{ $json.temperature ?? 0.3 }}",
+              "type": "number"
+            },
+            {
+              "id": "a1b2c3d4-e5f6-4a7b-8c9d-000000000013",
+              "name": "project_id",
+              "value": "={{ $json.project_id || 'no_project' }}",
+              "type": "string"
+            },
+            {
+              "id": "a1b2c3d4-e5f6-4a7b-8c9d-000000000014",
+              "name": "agent_name",
+              "value": "={{ $json.agent_name || 'unknown_agent' }}",
+              "type": "string"
+            },
+            {
+              "id": "a1b2c3d4-e5f6-4a7b-8c9d-000000000015",
+              "name": "prompt_system",
+              "value": "={{ $json.prompt_system }}",
+              "type": "string"
+            },
+            {
+              "id": "a1b2c3d4-e5f6-4a7b-8c9d-000000000016",
+              "name": "prompt_user",
+              "value": "={{ $json.prompt_user }}",
+              "type": "string"
+            },
+            {
+              "id": "a1b2c3d4-e5f6-4a7b-8c9d-000000000017",
+              "name": "request_timestamp",
+              "value": "={{ new Date().toISOString() }}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": false
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [500, 300],
+      "id": "a1b2c3d4-e5f6-4a7b-8c9d-000000000002",
+      "name": "Set Defaults"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "content-type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: $json.model, max_tokens: 4096, temperature: $json.temperature, messages: [{ role: 'system', content: $json.prompt_system }, { role: 'user', content: $json.prompt_user }] }) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "PLACEHOLDER",
+          "name": "OpenAI API Key"
+        }
+      },
+      "onError": "continueErrorOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [750, 300],
+      "id": "a1b2c3d4-e5f6-4a7b-8c9d-000000000003",
+      "name": "Call LLM API"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const input = $input.first().json;\n\nlet text, tokensIn, tokensOut, model;\n\nif (input.content && Array.isArray(input.content)) {\n  // Respuesta de Anthropic\n  text = input.content\n    .filter(block => block.type === 'text')\n    .map(block => block.text)\n    .join('\\n');\n  tokensIn  = input.usage?.input_tokens  || 0;\n  tokensOut = input.usage?.output_tokens || 0;\n  model     = input.model || 'unknown';\n\n} else if (input.choices && Array.isArray(input.choices)) {\n  // Respuesta de OpenAI\n  text      = input.choices[0]?.message?.content || '';\n  tokensIn  = input.usage?.prompt_tokens     || 0;\n  tokensOut = input.usage?.completion_tokens || 0;\n  model     = input.model || 'unknown';\n\n} else {\n  // Estructura de respuesta no reconocida\n  return [{\n    json: {\n      status:        'error',\n      error_message: 'Respuesta del LLM no reconocida: ' + JSON.stringify(input).substring(0, 200),\n      text:          '',\n      tokens_in:     0,\n      tokens_out:    0,\n      model:         $('Set Defaults').first().json.model,\n      cost_estimated: 0,\n      duration_ms:   0,\n      project_id:    $('Set Defaults').first().json.project_id,\n      agent_name:    $('Set Defaults').first().json.agent_name\n    }\n  }];\n}\n\n// Precios aproximados por 1K tokens (marzo 2026)\nconst costRates = {\n  'claude-sonnet-4-20250514': { input: 0.003,   output: 0.015  },\n  'claude-opus-4-20250514':   { input: 0.015,   output: 0.075  },\n  'gpt-4o':                   { input: 0.0025,  output: 0.01   },\n  'gpt-4o-mini':              { input: 0.00015, output: 0.0006 }\n};\n\nconst rates        = costRates[model] || { input: 0.003, output: 0.015 };\nconst costEstimated = ((tokensIn / 1000) * rates.input) + ((tokensOut / 1000) * rates.output);\n\nconst startTime  = new Date($('Set Defaults').first().json.request_timestamp);\nconst durationMs = Date.now() - startTime.getTime();\n\nreturn [{\n  json: {\n    status:         'success',\n    text:           text,\n    tokens_in:      tokensIn,\n    tokens_out:     tokensOut,\n    model:          model,\n    cost_estimated: Math.round(costEstimated * 10000) / 10000,\n    duration_ms:    durationMs,\n    project_id:     $('Set Defaults').first().json.project_id,\n    agent_name:     $('Set Defaults').first().json.agent_name\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1000, 160],
+      "id": "a1b2c3d4-e5f6-4a7b-8c9d-000000000004",
+      "name": "Extract Response"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const input = $input.first().json;\n\nconst errorMessage =\n  input.message ||\n  input.error?.message ||\n  input.statusMessage ||\n  'Error desconocido en llamada al LLM';\n\nconst statusCode = input.statusCode || input.error?.statusCode || 0;\n\nreturn [{\n  json: {\n    status:         'error',\n    error_message:  `LLM API Error (${statusCode}): ${errorMessage}`,\n    text:           '',\n    tokens_in:      0,\n    tokens_out:     0,\n    model:          $('Set Defaults').first().json.model,\n    cost_estimated: 0,\n    duration_ms:    0,\n    project_id:     $('Set Defaults').first().json.project_id,\n    agent_name:     $('Set Defaults').first().json.agent_name\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1000, 440],
+      "id": "a1b2c3d4-e5f6-4a7b-8c9d-000000000005",
+      "name": "Handle LLM Error"
+    },
+    {
+      "parameters": {
+        "mode": "append",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [1250, 300],
+      "id": "a1b2c3d4-e5f6-4a7b-8c9d-000000000006",
+      "name": "Merge Success or Error"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (\n  project_id,\n  agent_name,\n  action,\n  llm_model,\n  llm_tokens_in,\n  llm_tokens_out,\n  llm_cost_estimated,\n  duration_ms,\n  status,\n  error_message,\n  output_summary\n) VALUES (\n  $1::uuid,\n  $2,\n  'llm_call',\n  $3,\n  $4::int,\n  $5::int,\n  $6::numeric,\n  $7::int,\n  $8,\n  $9,\n  $10\n)",
+        "options": {
+          "queryReplacement": "={{ [\n  $json.project_id === 'no_project' ? null : $json.project_id,\n  $json.agent_name,\n  $json.model,\n  $json.tokens_in,\n  $json.tokens_out,\n  $json.cost_estimated,\n  $json.duration_ms,\n  $json.status,\n  $json.status === 'error' ? $json.error_message : null,\n  $json.status === 'success' ? $json.text.substring(0, 200) : null\n] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Supabase Postgres"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1500, 300],
+      "id": "a1b2c3d4-e5f6-4a7b-8c9d-000000000007",
+      "name": "Log LLM Call"
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "duplicateItem": false,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "a1b2c3d4-e5f6-4a7b-8c9d-000000000081",
+              "name": "status",
+              "value": "={{ $('Merge Success or Error').first().json.status }}",
+              "type": "string"
+            },
+            {
+              "id": "a1b2c3d4-e5f6-4a7b-8c9d-000000000082",
+              "name": "text",
+              "value": "={{ $('Merge Success or Error').first().json.text || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "a1b2c3d4-e5f6-4a7b-8c9d-000000000083",
+              "name": "tokens_in",
+              "value": "={{ $('Merge Success or Error').first().json.tokens_in }}",
+              "type": "number"
+            },
+            {
+              "id": "a1b2c3d4-e5f6-4a7b-8c9d-000000000084",
+              "name": "tokens_out",
+              "value": "={{ $('Merge Success or Error').first().json.tokens_out }}",
+              "type": "number"
+            },
+            {
+              "id": "a1b2c3d4-e5f6-4a7b-8c9d-000000000085",
+              "name": "model",
+              "value": "={{ $('Merge Success or Error').first().json.model }}",
+              "type": "string"
+            },
+            {
+              "id": "a1b2c3d4-e5f6-4a7b-8c9d-000000000086",
+              "name": "cost_estimated",
+              "value": "={{ $('Merge Success or Error').first().json.cost_estimated }}",
+              "type": "number"
+            },
+            {
+              "id": "a1b2c3d4-e5f6-4a7b-8c9d-000000000087",
+              "name": "error_message",
+              "value": "={{ $('Merge Success or Error').first().json.error_message || '' }}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": false
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [1750, 300],
+      "id": "a1b2c3d4-e5f6-4a7b-8c9d-000000000008",
+      "name": "Return Result"
+    }
+  ],
+  "connections": {
+    "Receive LLM Request": {
+      "main": [
+        [{ "node": "Set Defaults", "type": "main", "index": 0 }]
+      ]
+    },
+    "Set Defaults": {
+      "main": [
+        [{ "node": "Call LLM API", "type": "main", "index": 0 }]
+      ]
+    },
+    "Call LLM API": {
+      "main": [
+        [{ "node": "Extract Response",  "type": "main", "index": 0 }],
+        [{ "node": "Handle LLM Error",  "type": "main", "index": 0 }]
+      ]
+    },
+    "Extract Response": {
+      "main": [
+        [{ "node": "Merge Success or Error", "type": "main", "index": 0 }]
+      ]
+    },
+    "Handle LLM Error": {
+      "main": [
+        [{ "node": "Merge Success or Error", "type": "main", "index": 1 }]
+      ]
+    },
+    "Merge Success or Error": {
+      "main": [
+        [{ "node": "Log LLM Call", "type": "main", "index": 0 }]
+      ]
+    },
+    "Log LLM Call": {
+      "main": [
+        [{ "node": "Return Result", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

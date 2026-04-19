@@ -1,0 +1,337 @@
+{
+  "name": "init_new_project",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "new-project",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [250, 300],
+      "id": "e1f2a3b4-c5d6-4e7f-8a9b-000000000001",
+      "name": "New Project Webhook"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const body = $input.first().json.body || $input.first().json;\n\n// Campos obligatorios\nconst required = ['client_name', 'project_name', 'project_type'];\nconst missing = required.filter(f => !body[f] || body[f].toString().trim() === '');\n\nif (missing.length > 0) {\n  return [{\n    json: {\n      valid: false,\n      error: `Campos obligatorios faltantes: ${missing.join(', ')}`,\n      missing_fields: missing\n    }\n  }];\n}\n\n// Validar project_type\nconst validTypes = ['reforma_integral', 'redistribucion', 'cambio_uso', 'adecuacion', 'apoyo_tecnico', 'otro'];\nif (!validTypes.includes(body.project_type)) {\n  return [{\n    json: {\n      valid: false,\n      error: `project_type inválido. Valores permitidos: ${validTypes.join(', ')}`,\n      received: body.project_type\n    }\n  }];\n}\n\n// Validar urgency si viene\nconst validUrgency = ['normal', 'alta', 'urgente'];\nconst urgency = body.urgency && validUrgency.includes(body.urgency) ? body.urgency : 'normal';\n\n// Validar property_type si viene\nconst validPropertyTypes = ['piso', 'casa', 'local', 'atico', 'bajo', 'duplex', 'otro'];\nconst propertyType = body.property_type && validPropertyTypes.includes(body.property_type) ? body.property_type : null;\n\nreturn [{\n  json: {\n    valid: true,\n    client_name:        body.client_name.trim(),\n    client_email:       body.client_email       || null,\n    client_phone:       body.client_phone       || null,\n    project_name:       body.project_name.trim(),\n    project_type:       body.project_type,\n    location_address:   body.location_address   || null,\n    location_city:      body.location_city      || null,\n    location_province:  body.location_province  || null,\n    property_type:      propertyType,\n    property_area_m2:   body.property_area_m2   ? parseFloat(body.property_area_m2) : null,\n    budget_target:      body.budget_target      ? parseFloat(body.budget_target) : null,\n    budget_flexible:    body.budget_flexible    === true || body.budget_flexible === 'true',\n    urgency:            urgency,\n    notes:              body.notes              || null\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [500, 300],
+      "id": "e1f2a3b4-c5d6-4e7f-8a9b-000000000002",
+      "name": "Validate Input"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "e1f2a3b4-c5d6-4e7f-8a9b-000000000031",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [750, 300],
+      "id": "e1f2a3b4-c5d6-4e7f-8a9b-000000000003",
+      "name": "Input Valid?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ status: 'error', error: $('Validate Input').first().json.error, missing_fields: $('Validate Input').first().json.missing_fields || [] }) }}",
+        "options": { "responseCode": 400 }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1000, 500],
+      "id": "e1f2a3b4-c5d6-4e7f-8a9b-000000000004",
+      "name": "Respond 400 Error"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id FROM clients WHERE email = $1 LIMIT 1",
+        "options": {
+          "queryReplacement": "={{ [$json.client_email || ''] }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "PLACEHOLDER", "name": "Supabase Postgres" }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1000, 200],
+      "id": "e1f2a3b4-c5d6-4e7f-8a9b-000000000005",
+      "name": "Find Existing Client"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const input = $('Validate Input').first().json;\nconst existing = $input.first().json;\n\n// Si el cliente ya existe, devolvemos su ID\nif (existing.id) {\n  return [{\n    json: {\n      client_id: existing.id,\n      client_exists: true,\n      ...input\n    }\n  }];\n}\n\n// Si no existe, marcamos para crear\nreturn [{\n  json: {\n    client_id: null,\n    client_exists: false,\n    ...input\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1250, 200],
+      "id": "e1f2a3b4-c5d6-4e7f-8a9b-000000000006",
+      "name": "Check Client Exists"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "e1f2a3b4-c5d6-4e7f-8a9b-000000000071",
+              "leftValue": "={{ $json.client_exists }}",
+              "rightValue": false,
+              "operator": { "type": "boolean", "operation": "false" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1500, 200],
+      "id": "e1f2a3b4-c5d6-4e7f-8a9b-000000000007",
+      "name": "Client Exists?"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO clients (name, email, phone) VALUES ($1, $2, $3) RETURNING id",
+        "options": {
+          "queryReplacement": "={{ [$('Check Client Exists').first().json.client_name, $('Check Client Exists').first().json.client_email, $('Check Client Exists').first().json.client_phone] }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "PLACEHOLDER", "name": "Supabase Postgres" }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1750, 100],
+      "id": "e1f2a3b4-c5d6-4e7f-8a9b-000000000008",
+      "name": "Create Client"
+    },
+    {
+      "parameters": {
+        "mode": "append",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [2000, 200],
+      "id": "e1f2a3b4-c5d6-4e7f-8a9b-000000000009",
+      "name": "Merge Client ID"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const merged = $input.first().json;\nconst validated = $('Check Client Exists').first().json;\n\n// Determinar client_id: del merge (nuevo creado) o del existente\nconst clientId = merged.id || validated.client_id;\n\nreturn [{\n  json: {\n    client_id:         clientId,\n    project_name:      validated.project_name,\n    project_type:      validated.project_type,\n    budget_target:     validated.budget_target,\n    budget_flexible:   validated.budget_flexible,\n    location_address:  validated.location_address,\n    location_city:     validated.location_city,\n    location_province: validated.location_province,\n    property_type:     validated.property_type,\n    property_area_m2:  validated.property_area_m2,\n    urgency:           validated.urgency,\n    notes:             validated.notes\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2250, 200],
+      "id": "e1f2a3b4-c5d6-4e7f-8a9b-000000000010",
+      "name": "Prepare Project Data"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO projects (client_id, name, project_type, budget_target, budget_flexible, location_address, location_city, location_province, property_type, property_area_m2, urgency, current_phase, status, metadata) VALUES ($1::uuid, $2, $3, $4::numeric, $5::boolean, $6, $7, $8, $9, $10::numeric, $11, 'intake', 'active', $12::jsonb) RETURNING id, name",
+        "options": {
+          "queryReplacement": "={{ [\n  $json.client_id,\n  $json.project_name,\n  $json.project_type,\n  $json.budget_target,\n  $json.budget_flexible,\n  $json.location_address,\n  $json.location_city,\n  $json.location_province,\n  $json.property_type,\n  $json.property_area_m2,\n  $json.urgency,\n  JSON.stringify({ notes: $json.notes })\n] }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "PLACEHOLDER", "name": "Supabase Postgres" }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [2500, 200],
+      "id": "e1f2a3b4-c5d6-4e7f-8a9b-000000000011",
+      "name": "Create Project"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "PLACEHOLDER_UTIL_FILE_ORGANIZER_ID",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "project_id": "={{ $json.id }}",
+            "action": "create_structure"
+          }
+        },
+        "options": { "waitForSubWorkflow": true }
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 2,
+      "position": [2750, 200],
+      "id": "e1f2a3b4-c5d6-4e7f-8a9b-000000000012",
+      "name": "Create Drive Structure"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, status, output_summary) VALUES ($1::uuid, 'init_new_project', 'project_created', 'success', $2)",
+        "options": {
+          "queryReplacement": "={{ [$('Create Project').first().json.id, 'Proyecto ' + $('Create Project').first().json.name + ' creado correctamente'] }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "PLACEHOLDER", "name": "Supabase Postgres" }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [3000, 200],
+      "id": "e1f2a3b4-c5d6-4e7f-8a9b-000000000013",
+      "name": "Log Project Creation"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "PLACEHOLDER_UTIL_NOTIFICATION_ID",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "project_id": "={{ $('Create Project').first().json.id }}",
+            "type": "info",
+            "subject": "Nuevo proyecto creado",
+            "message": "=Se ha creado el proyecto **{{ $('Create Project').first().json.name }}**. El sistema comenzará a procesar el briefing automáticamente. Sube la documentación inicial (fotos, planos, notas) a la carpeta de Drive del proyecto.",
+            "approval_id": "",
+            "recipient": ""
+          }
+        },
+        "options": { "waitForSubWorkflow": true }
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 2,
+      "position": [3250, 200],
+      "id": "e1f2a3b4-c5d6-4e7f-8a9b-000000000014",
+      "name": "Send Welcome Notification"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://n8n-n8n.zzeluw.easypanel.host/webhook/orchestrator",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ project_id: $('Create Project').first().json.id, action: 'advance' }) }}",
+        "options": { "timeout": 10000 }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [3500, 200],
+      "id": "e1f2a3b4-c5d6-4e7f-8a9b-000000000015",
+      "name": "Trigger Orchestrator"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({\n  status: 'created',\n  project_id: $('Create Project').first().json.id,\n  project_name: $('Create Project').first().json.name,\n  message: 'Proyecto creado correctamente. El sistema comenzará el briefing automáticamente.'\n}) }}",
+        "options": { "responseCode": 201 }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [3750, 200],
+      "id": "e1f2a3b4-c5d6-4e7f-8a9b-000000000016",
+      "name": "Respond 201 Created"
+    }
+  ],
+  "connections": {
+    "New Project Webhook": {
+      "main": [
+        [{ "node": "Validate Input", "type": "main", "index": 0 }]
+      ]
+    },
+    "Validate Input": {
+      "main": [
+        [{ "node": "Input Valid?", "type": "main", "index": 0 }]
+      ]
+    },
+    "Input Valid?": {
+      "main": [
+        [{ "node": "Find Existing Client", "type": "main", "index": 0 }],
+        [{ "node": "Respond 400 Error",    "type": "main", "index": 0 }]
+      ]
+    },
+    "Find Existing Client": {
+      "main": [
+        [{ "node": "Check Client Exists", "type": "main", "index": 0 }]
+      ]
+    },
+    "Check Client Exists": {
+      "main": [
+        [{ "node": "Client Exists?", "type": "main", "index": 0 }]
+      ]
+    },
+    "Client Exists?": {
+      "main": [
+        [{ "node": "Create Client",  "type": "main", "index": 0 }],
+        [{ "node": "Merge Client ID", "type": "main", "index": 1 }]
+      ]
+    },
+    "Create Client": {
+      "main": [
+        [{ "node": "Merge Client ID", "type": "main", "index": 0 }]
+      ]
+    },
+    "Merge Client ID": {
+      "main": [
+        [{ "node": "Prepare Project Data", "type": "main", "index": 0 }]
+      ]
+    },
+    "Prepare Project Data": {
+      "main": [
+        [{ "node": "Create Project", "type": "main", "index": 0 }]
+      ]
+    },
+    "Create Project": {
+      "main": [
+        [{ "node": "Create Drive Structure", "type": "main", "index": 0 }]
+      ]
+    },
+    "Create Drive Structure": {
+      "main": [
+        [{ "node": "Log Project Creation", "type": "main", "index": 0 }]
+      ]
+    },
+    "Log Project Creation": {
+      "main": [
+        [{ "node": "Send Welcome Notification", "type": "main", "index": 0 }]
+      ]
+    },
+    "Send Welcome Notification": {
+      "main": [
+        [{ "node": "Trigger Orchestrator", "type": "main", "index": 0 }]
+      ]
+    },
+    "Trigger Orchestrator": {
+      "main": [
+        [{ "node": "Respond 201 Created", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

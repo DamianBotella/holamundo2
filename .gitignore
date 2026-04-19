@@ -1,0 +1,53 @@
+# ─────────────────────────────────────────────
+# CREDENCIALES Y SECRETOS — nunca commitear
+# ─────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+.mcp.json
+
+# ─────────────────────────────────────────────
+# n8n-skills — se clona/instala localmente
+# ─────────────────────────────────────────────
+n8n-skills/
+
+# ─────────────────────────────────────────────
+# Dependencias
+# ─────────────────────────────────────────────
+node_modules/
+.npm/
+
+# ─────────────────────────────────────────────
+# Logs y datos temporales
+# ─────────────────────────────────────────────
+*.log
+logs/
+n8n-logs/
+.n8n/
+
+# ─────────────────────────────────────────────
+# Archivos de sistema operativo
+# ─────────────────────────────────────────────
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Linux
+*~
+
+# ─────────────────────────────────────────────
+# Editores e IDEs
+# ─────────────────────────────────────────────
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
+.claude/settings.local.json

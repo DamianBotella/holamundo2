@@ -1,0 +1,274 @@
+{
+  "name": "agent_design",
+  "nodes": [
+    {
+      "id": "ad000000-ad00-4000-8000-000000000001",
+      "name": "Receive Project",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [-3750, 0],
+      "parameters": {
+        "inputSource": "defineBelow",
+        "workflowInputs": {
+          "values": [
+            { "name": "project_id", "type": "string" },
+            { "name": "action", "type": "string" }
+          ]
+        }
+      }
+    },
+    {
+      "id": "ad000000-ad00-4000-8000-000000000002",
+      "name": "Load Project Data",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [-3500, 0],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT p.id, p.name as project_name, p.project_type, p.budget_target, p.budget_flexible, p.location_city, p.location_province, p.property_type, p.property_area_m2, p.urgency, c.name as client_name, c.email as client_email FROM projects p JOIN clients c ON c.id = p.client_id WHERE p.id = $1::uuid",
+        "options": { "queryReplacement": "={{ [$json.project_id] }}" }
+      },
+      "credentials": { "postgres": { "id": "PLACEHOLDER", "name": "Supabase Postgres" } }
+    },
+    {
+      "id": "ad000000-ad00-4000-8000-000000000003",
+      "name": "Load Approved Briefing",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [-3250, 0],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, version, summary, client_needs, objectives, constraints, style_preferences, rooms_affected FROM briefings WHERE project_id = $1::uuid AND status = 'approved' ORDER BY version DESC LIMIT 1",
+        "options": { "queryReplacement": "={{ [$('Receive Project').first().json.project_id] }}" }
+      },
+      "credentials": { "postgres": { "id": "PLACEHOLDER", "name": "Supabase Postgres" } }
+    },
+    {
+      "id": "ad000000-ad00-4000-8000-000000000004",
+      "name": "Load Agent Prompt",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [-3000, 0],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT content, model_recommended, temperature FROM agent_prompts WHERE agent_name = 'agent_design' AND prompt_type = 'system' AND is_active = true LIMIT 1",
+        "options": { "alwaysOutputData": true }
+      },
+      "credentials": { "postgres": { "id": "PLACEHOLDER", "name": "Supabase Postgres" } }
+    },
+    {
+      "id": "ad000000-ad00-4000-8000-000000000005",
+      "name": "Prepare LLM Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-2750, 0],
+      "parameters": {
+        "jsCode": "const project = $('Load Project Data').first().json;\nconst briefing = $('Load Approved Briefing').first().json;\nconst promptData = $('Load Agent Prompt').first().json;\nconst projectId = $('Receive Project').first().json.project_id;\nconst systemPrompt = (promptData && promptData.content) ? promptData.content : 'Eres el Agente de Distribucion de un estudio de arquitectura tecnica. Genera 2-3 opciones de redistribucion significativamente diferentes. Responde EXCLUSIVAMENTE con un array JSON valido sin backticks.';\nconst model = (promptData && promptData.model_recommended) || 'gpt-4o';\nconst temperature = (promptData && promptData.temperature !== null && promptData.temperature !== undefined) ? Number(promptData.temperature) : 0.5;\nconst clientNeeds = (briefing.client_needs || []).map(function(n) { return typeof n === 'object' ? (n.need || JSON.stringify(n)) : String(n); }).join('\\n- ');\nconst constraints = (briefing.constraints || []).map(function(c) { return typeof c === 'object' ? ('[' + (c.type || '') + '] ' + (c.description || '')) : String(c); }).join('\\n- ');\nconst location = [project.location_city, project.location_province].filter(Boolean).join(', ') || 'No especificada';\nconst userParts = ['Genera 2-3 opciones de redistribucion para este proyecto.', '', 'BRIEFING APROBADO:', 'Resumen: ' + (briefing.summary || 'No disponible'), '', 'Necesidades del cliente:', '- ' + (clientNeeds || 'No especificadas'), '', 'Restricciones criticas:', '- ' + (constraints || 'Ninguna'), '', 'INMUEBLE:', '- Tipo: ' + (project.property_type || 'No especificado'), '- Superficie: ' + (project.property_area_m2 ? project.property_area_m2 + ' m2' : 'No especificada'), '- Localizacion: ' + location, '', 'PRESUPUESTO: ' + (project.budget_target ? project.budget_target + ' EUR' : 'No especificado'), '', 'Responde con un array JSON de 2-3 opciones. Cada opcion: option_number (1,2,3), title, description, intervention_logic, rooms_layout (array), technical_notes (array), conflict_points (array), pros (array), cons (array), estimated_complexity (baja/media/alta).'];\nconst userPrompt = userParts.join('\\n');\nreturn [{ json: { project_id: projectId, project_name: project.project_name, client_name: project.client_name, prompt_system: systemPrompt, prompt_user: userPrompt, model: model, temperature: temperature } }];"
+      }
+    },
+    {
+      "id": "ad000000-ad00-4000-8000-000000000006",
+      "name": "Call LLM",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [-2500, 0],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "JoKqGZ8pDzhJohV2",
+          "mode": "list",
+          "cachedResultName": "util_llm_call"
+        },
+        "workflowInputs": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "mode": "each",
+        "options": { "waitForSubWorkflow": true }
+      }
+    },
+    {
+      "id": "ad000000-ad00-4000-8000-000000000007",
+      "name": "Parse Design Options",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-2250, 0],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const llmResult = $input.first().json;\nconst preparedData = $('Prepare LLM Payload').first().json;\nlet responseText = (llmResult.response_text || '').trim();\nif (responseText.startsWith('```')) {\n  responseText = responseText.replace(/^```[a-z]*\\n?/, '').replace(/\\n?```$/, '').trim();\n}\nlet options;\ntry {\n  const parsed = JSON.parse(responseText);\n  options = Array.isArray(parsed) ? parsed : (parsed.options || [parsed]);\n} catch(e) {\n  options = [{ option_number: 1, title: 'Error - Revision manual requerida', description: responseText.substring(0, 300), intervention_logic: '', rooms_layout: [], technical_notes: [], conflict_points: [], pros: [], cons: [], estimated_complexity: 'media' }];\n}\nreturn options.slice(0, 3).map(function(opt, idx) {\n  return { json: { project_id: preparedData.project_id, project_name: preparedData.project_name, client_name: preparedData.client_name, option_number: opt.option_number || (idx + 1), title: opt.title || ('Opcion ' + (idx + 1)), description: opt.description || '', intervention_logic: opt.intervention_logic || '', rooms_layout: opt.rooms_layout || [], technical_notes: opt.technical_notes || [], conflict_points: opt.conflict_points || [], pros: opt.pros || [], cons: opt.cons || [], estimated_complexity: opt.estimated_complexity || 'media' } };\n});"
+      }
+    },
+    {
+      "id": "ad000000-ad00-4000-8000-000000000008",
+      "name": "Insert Design Option",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [-2000, 0],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO design_options (project_id, option_number, title, description, intervention_logic, rooms_layout, technical_notes, conflict_points, pros, cons, estimated_complexity) VALUES ($1::uuid, $2::int, $3, $4, $5, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, $10::jsonb, $11) RETURNING id, option_number, title",
+        "options": {
+          "queryReplacement": "={{ [$json.project_id, $json.option_number, $json.title, $json.description, $json.intervention_logic, JSON.stringify($json.rooms_layout), JSON.stringify($json.technical_notes), JSON.stringify($json.conflict_points), JSON.stringify($json.pros), JSON.stringify($json.cons), $json.estimated_complexity] }}"
+        }
+      },
+      "credentials": { "postgres": { "id": "PLACEHOLDER", "name": "Supabase Postgres" } }
+    },
+    {
+      "id": "ad000000-ad00-4000-8000-000000000009",
+      "name": "Collect All Options",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-1750, 0],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const allItems = $input.all();\nconst preparedData = $('Prepare LLM Payload').first().json;\nconst options = allItems.map(function(item) { return { id: item.json.id, option_number: item.json.option_number, title: item.json.title }; });\nreturn [{ json: { project_id: preparedData.project_id, project_name: preparedData.project_name, client_name: preparedData.client_name, options: options, option_count: options.length } }];"
+      }
+    },
+    {
+      "id": "ad000000-ad00-4000-8000-000000000010",
+      "name": "Create Approval",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [-1500, 0],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO approvals (project_id, approval_type, requested_by, summary, details, related_entity, expires_at) VALUES ($1::uuid, 'design_review', 'agent_design', $2, $3::jsonb, 'design_options', NOW() + INTERVAL '72 hours') RETURNING id",
+        "options": {
+          "queryReplacement": "={{ [$json.project_id, 'Seleccion de opcion de distribucion para ' + $json.project_name, JSON.stringify({project_name: $json.project_name, option_count: $json.option_count})] }}"
+        }
+      },
+      "credentials": { "postgres": { "id": "PLACEHOLDER", "name": "Supabase Postgres" } }
+    },
+    {
+      "id": "ad000000-ad00-4000-8000-000000000011",
+      "name": "Build Selection Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-1250, 0],
+      "parameters": {
+        "jsCode": "const collected = $('Collect All Options').first().json;\nconst parsedOptions = $('Parse Design Options').all();\nconst approvalRecord = $('Create Approval').first().json;\nconst resumeUrl = $execution.resumeUrl;\nconst optionButtons = collected.options.map(function(opt) {\n  const selectUrl = resumeUrl + '?option=' + opt.option_number;\n  return '<a href=\"' + selectUrl + '\" style=\"background:#2980b9;color:white;padding:12px 20px;text-decoration:none;border-radius:4px;margin:6px;display:inline-block\">Seleccionar Opcion ' + opt.option_number + '</a>';\n}).join(' ');\nconst optionCards = parsedOptions.map(function(item) {\n  const opt = item.json;\n  const prosList = (opt.pros || []).map(function(p) { return '<li>' + String(p) + '</li>'; }).join('');\n  const consList = (opt.cons || []).map(function(c) { return '<li>' + String(c) + '</li>'; }).join('');\n  return '<div style=\"border:1px solid #ddd;border-radius:8px;padding:16px;margin-bottom:16px\">'\n    + '<h3 style=\"color:#2c3e50;margin-top:0\">Opcion ' + opt.option_number + ': ' + (opt.title || '') + '</h3>'\n    + '<p>' + (opt.description || '') + '</p>'\n    + '<p><b>Complejidad:</b> ' + (opt.estimated_complexity || '') + '</p>'\n    + '<h4>Ventajas:</h4><ul>' + prosList + '</ul>'\n    + '<h4>Inconvenientes:</h4><ul>' + consList + '</ul>'\n    + '</div>';\n}).join('');\nconst htmlBody = '<div style=\"font-family:Arial,sans-serif;max-width:750px;margin:0 auto\">'\n  + '<h2 style=\"color:#2c3e50\">Studio AI - Opciones de Distribucion</h2>'\n  + '<h3 style=\"color:#7f8c8d\">Proyecto: ' + collected.project_name + '</h3>'\n  + '<p><b>Cliente:</b> ' + collected.client_name + '</p>'\n  + '<hr style=\"border:none;border-top:1px solid #eee\">'\n  + optionCards\n  + '<div style=\"text-align:center;margin:32px 0\">'\n  + '<p><b>Selecciona la opcion a desarrollar:</b></p>'\n  + optionButtons\n  + '</div>'\n  + '<p style=\"color:#95a5a6;font-size:12px;text-align:center\">Este enlace expira en 72 horas.</p>'\n  + '</div>';\nreturn [{ json: { to: 'arquitecto@estudio.com', subject: '[Studio AI] Opciones de distribucion: ' + collected.project_name, html_body: htmlBody, project_id: collected.project_id, project_name: collected.project_name, option_count: collected.option_count } }];"
+      }
+    },
+    {
+      "id": "ad000000-ad00-4000-8000-000000000012",
+      "name": "Send Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [-1000, 0],
+      "parameters": {
+        "sendTo": "={{ $json.to }}",
+        "subject": "={{ $json.subject }}",
+        "emailType": "html",
+        "message": "={{ $json.html_body }}",
+        "options": {}
+      },
+      "credentials": { "gmailOAuth2": { "id": "PLACEHOLDER", "name": "Gmail DamianDomeya@" } }
+    },
+    {
+      "id": "ad000000-ad00-4000-8000-000000000013",
+      "name": "Log - Awaiting",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [-750, 0],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, phase_at_time, output_summary, status) VALUES ($1::uuid, 'agent_design', 'options_sent_for_selection', 'briefing_done', $2, 'success')",
+        "options": {
+          "queryReplacement": "={{ [$('Build Selection Email').first().json.project_id, $('Build Selection Email').first().json.option_count + ' opciones de distribucion enviadas al arquitecto'] }}"
+        }
+      },
+      "credentials": { "postgres": { "id": "PLACEHOLDER", "name": "Supabase Postgres" } }
+    },
+    {
+      "id": "ad000000-ad00-4000-8000-000000000014",
+      "name": "Wait for Selection",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [-500, 0],
+      "parameters": { "resume": "webhook", "options": {} }
+    },
+    {
+      "id": "ad000000-ad00-4000-8000-000000000015",
+      "name": "Process Selection",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-250, 0],
+      "parameters": {
+        "jsCode": "const resumeData = $input.first().json;\nconst emailData = $('Build Selection Email').first().json;\nconst approvalData = $('Create Approval').first().json;\nconst option = (resumeData.query && resumeData.query.option) || (resumeData.body && resumeData.body.option) || resumeData.option || '1';\nconst optionNumber = parseInt(String(option), 10) || 1;\nreturn [{ json: { option_number: optionNumber, project_id: emailData.project_id, project_name: emailData.project_name, approval_id: approvalData.id } }];"
+      }
+    },
+    {
+      "id": "ad000000-ad00-4000-8000-000000000016",
+      "name": "Mark Option Selected",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [0, 0],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE design_options SET is_selected = true, selected_at = NOW() WHERE project_id = $1::uuid AND option_number = $2::int",
+        "options": { "queryReplacement": "={{ [$json.project_id, $json.option_number] }}" }
+      },
+      "credentials": { "postgres": { "id": "PLACEHOLDER", "name": "Supabase Postgres" } }
+    },
+    {
+      "id": "ad000000-ad00-4000-8000-000000000017",
+      "name": "Update Approval - Selected",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [250, 0],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE approvals SET status = 'approved', decided_by = 'architect', decided_at = NOW() WHERE id = $1::uuid",
+        "options": { "queryReplacement": "={{ [$('Process Selection').first().json.approval_id] }}" }
+      },
+      "credentials": { "postgres": { "id": "PLACEHOLDER", "name": "Supabase Postgres" } }
+    },
+    {
+      "id": "ad000000-ad00-4000-8000-000000000018",
+      "name": "Return Success",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [500, 0],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            { "id": "ad000000-ad00-4000-8000-000000001801", "name": "status", "value": "complete", "type": "string" },
+            { "id": "ad000000-ad00-4000-8000-000000001802", "name": "phase", "value": "design_done", "type": "string" },
+            { "id": "ad000000-ad00-4000-8000-000000001803", "name": "project_id", "value": "={{ $('Process Selection').first().json.project_id }}", "type": "string" },
+            { "id": "ad000000-ad00-4000-8000-000000001804", "name": "selected_option_number", "value": "={{ $('Process Selection').first().json.option_number }}", "type": "number" }
+          ]
+        },
+        "includeOtherFields": false,
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Receive Project": { "main": [[{ "node": "Load Project Data", "type": "main", "index": 0 }]] },
+    "Load Project Data": { "main": [[{ "node": "Load Approved Briefing", "type": "main", "index": 0 }]] },
+    "Load Approved Briefing": { "main": [[{ "node": "Load Agent Prompt", "type": "main", "index": 0 }]] },
+    "Load Agent Prompt": { "main": [[{ "node": "Prepare LLM Payload", "type": "main", "index": 0 }]] },
+    "Prepare LLM Payload": { "main": [[{ "node": "Call LLM", "type": "main", "index": 0 }]] },
+    "Call LLM": { "main": [[{ "node": "Parse Design Options", "type": "main", "index": 0 }]] },
+    "Parse Design Options": { "main": [[{ "node": "Insert Design Option", "type": "main", "index": 0 }]] },
+    "Insert Design Option": { "main": [[{ "node": "Collect All Options", "type": "main", "index": 0 }]] },
+    "Collect All Options": { "main": [[{ "node": "Create Approval", "type": "main", "index": 0 }]] },
+    "Create Approval": { "main": [[{ "node": "Build Selection Email", "type": "main", "index": 0 }]] },
+    "Build Selection Email": { "main": [[{ "node": "Send Email", "type": "main", "index": 0 }]] },
+    "Send Email": { "main": [[{ "node": "Log - Awaiting", "type": "main", "index": 0 }]] },
+    "Log - Awaiting": { "main": [[{ "node": "Wait for Selection", "type": "main", "index": 0 }]] },
+    "Wait for Selection": { "main": [[{ "node": "Process Selection", "type": "main", "index": 0 }]] },
+    "Process Selection": { "main": [[{ "node": "Mark Option Selected", "type": "main", "index": 0 }]] },
+    "Mark Option Selected": { "main": [[{ "node": "Update Approval - Selected", "type": "main", "index": 0 }]] },
+    "Update Approval - Selected": { "main": [[{ "node": "Return Success", "type": "main", "index": 0 }]] }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5"
+  },
+  "pinData": {}
+}

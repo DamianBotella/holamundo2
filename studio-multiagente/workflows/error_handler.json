@@ -70,7 +70,7 @@
     },
     {
       "parameters": {
-        "sendTo": "arquitecto@estudio.com",
+        "sendTo": "botelladesdeel98@gmail.com",
         "subject": "=[CRÍTICO] Error en {{ $('Extract Error Details').first().json.workflow_name }}",
         "emailType": "html",
         "message": "=<div style=\"font-family: Arial, sans-serif; max-width: 600px;\">\n  <h2 style=\"color: #e74c3c;\">🚨 Error crítico en el sistema</h2>\n  <table style=\"width:100%; border-collapse: collapse;\">\n    <tr><td style=\"padding:8px; background:#f8f9fa; font-weight:bold;\">Workflow</td><td style=\"padding:8px;\">{{ $('Extract Error Details').first().json.workflow_name }}</td></tr>\n    <tr><td style=\"padding:8px; background:#f8f9fa; font-weight:bold;\">Nodo</td><td style=\"padding:8px;\">{{ $('Extract Error Details').first().json.error_node }}</td></tr>\n    <tr><td style=\"padding:8px; background:#f8f9fa; font-weight:bold;\">Error</td><td style=\"padding:8px; color:#e74c3c;\">{{ $('Extract Error Details').first().json.error_message }}</td></tr>\n    <tr><td style=\"padding:8px; background:#f8f9fa; font-weight:bold;\">Ejecución</td><td style=\"padding:8px;\">{{ $('Extract Error Details').first().json.execution_id }}</td></tr>\n    <tr><td style=\"padding:8px; background:#f8f9fa; font-weight:bold;\">Proyecto</td><td style=\"padding:8px;\">{{ $('Extract Error Details').first().json.project_id || 'No disponible' }}</td></tr>\n    <tr><td style=\"padding:8px; background:#f8f9fa; font-weight:bold;\">Hora</td><td style=\"padding:8px;\">{{ $('Extract Error Details').first().json.timestamp }}</td></tr>\n  </table>\n  <p style=\"margin-top:20px;\"><a href=\"https://n8n-n8n.zzeluw.easypanel.host/executions\" style=\"background:#e74c3c; color:white; padding:10px 20px; text-decoration:none; border-radius:4px;\">Ver ejecución en n8n</a></p>\n</div>",
@@ -90,7 +90,7 @@
     },
     {
       "parameters": {
-        "sendTo": "arquitecto@estudio.com",
+        "sendTo": "botelladesdeel98@gmail.com",
         "subject": "=[ERROR] {{ $('Extract Error Details').first().json.workflow_name }} falló",
         "emailType": "html",
         "message": "=<div style=\"font-family: Arial, sans-serif; max-width: 600px;\">\n  <h2 style=\"color: #e67e22;\">⚠️ Error en workflow</h2>\n  <table style=\"width:100%; border-collapse: collapse;\">\n    <tr><td style=\"padding:8px; background:#f8f9fa; font-weight:bold;\">Workflow</td><td style=\"padding:8px;\">{{ $('Extract Error Details').first().json.workflow_name }}</td></tr>\n    <tr><td style=\"padding:8px; background:#f8f9fa; font-weight:bold;\">Nodo</td><td style=\"padding:8px;\">{{ $('Extract Error Details').first().json.error_node }}</td></tr>\n    <tr><td style=\"padding:8px; background:#f8f9fa; font-weight:bold;\">Error</td><td style=\"padding:8px;\">{{ $('Extract Error Details').first().json.error_message }}</td></tr>\n    <tr><td style=\"padding:8px; background:#f8f9fa; font-weight:bold;\">Ejecución</td><td style=\"padding:8px;\">{{ $('Extract Error Details').first().json.execution_id }}</td></tr>\n    <tr><td style=\"padding:8px; background:#f8f9fa; font-weight:bold;\">Hora</td><td style=\"padding:8px;\">{{ $('Extract Error Details').first().json.timestamp }}</td></tr>\n  </table>\n  <p style=\"margin-top:20px;\"><a href=\"https://n8n-n8n.zzeluw.easypanel.host/executions\" style=\"background:#e67e22; color:white; padding:10px 20px; text-decoration:none; border-radius:4px;\">Ver ejecución en n8n</a></p>\n</div>",

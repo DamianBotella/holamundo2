@@ -1090,7 +1090,7 @@ Enviar notificaciones al arquitecto. Centraliza el envío de emails, alertas y s
     - Si type = "info": solo informativo
     ↓
 [Gmail: "Send Notification"]
-  → To: {{ $json.recipient || 'arquitecto@estudio.com' }}
+  → To: {{ $json.recipient || 'botelladesdeel98@gmail.com' }}
   → Subject: [Studio AI] {{ $json.subject }} — {{ $json.project_name }}
   → Body: HTML con contenido construido
     ↓

@@ -425,7 +425,7 @@ Con formulario:
   "typeVersion": 2.1,
   "name": "Send Notification",
   "parameters": {
-    "sendTo": "arquitecto@estudio.com",
+    "sendTo": "botelladesdeel98@gmail.com",
     "subject": "={{ '[Studio AI] ' + $json.subject }}",
     "emailType": "html",
     "message": "={{ $json.html_body }}",

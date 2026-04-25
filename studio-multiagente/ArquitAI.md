@@ -284,11 +284,9 @@ Sistema multiagente para estudios de arquitectura técnica especializados en **r
   - **Penetration test anual** sobre la instancia pública de n8n.
 - **Beneficio.** Un incidente (filtración de datos de clientes, suplantación por email a un gremio para redirigir un pago, pérdida de proyecto por ransomware) puede cerrar un estudio. Protegerlo desde el diseño vale infinitamente menos que remediarlo.
 
-### 3.15 Detección de anomalías económicas — `agent_anomaly_detector`
-- **Laguna real.** Un gremio con precios sistemáticamente por encima del mercado, una partida que crece entre certificaciones sucesivas, un material que aparece en el presupuesto pero no en el diseño — son anomalías detectables pero invisibles al ojo humano en 10 proyectos simultáneos.
-- **Técnica.** Agente que compara cada proyecto contra los estadísticos de `memory_cases` + `price_references`. Detecta outliers por desviación estándar por categoría. Alertas cuando un gremio sube más del 20 % entre proyectos sin justificación en `trade_quotes.conditions`.
-- **Función.** Vigilancia económica de fondo sin intervención.
-- **Beneficio.** Margen protegido. Fraude detectable (o al menos gremios con precios no competitivos).
+### 3.15 ~~Detección de anomalías económicas~~ — ✅ MVP CONSTRUIDO (2026-04-25)
+- **Construido (fase 1)**: tabla `anomalies_detected` con UNIQUE constraint para idempotencia (migración 015). Workflows `cron_anomaly_detect` (`RHrP8BowouYVCKjz`, diario 06:00) con 8 heurísticas SQL en CTEs encadenados (factura > 2× mediana del gremio, OCR low confidence, IVA inusual, presupuesto >40%, aftercare/permits stale, site_report regression, quote sin respuesta 14d) y `anomaly_review` (`lk6KnCGUdwWlKD7i`) para marcar reviewed/accepted/dismissed/escalated. Email diario con tabla coloreada por severity. Documentado en `knowledge/agent_anomaly_detector.md`.
+- **Pendiente (fase 2)**: más heurísticas (SLA por gremio, gaps temporales, correlación cost/site_reports); calibración automática de umbrales según false-positive rate; LLM contextual para anomalías high/critical; auto-acción en algunas (re-enviar quote tras no-reply); dashboard.
 
 ### 3.16 Domótica y smart home — `agent_home_automation`
 - **Laguna real.** Cada vez más reformas piden domótica (Home Assistant, KNX, Matter). El arquitecto no siempre domina el sistema y acaba derivándolo a un integrador sin planificación previa.

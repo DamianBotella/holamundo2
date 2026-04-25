@@ -158,7 +158,7 @@
       "credentials": {
         "postgres": {
           "id": "PLACEHOLDER",
-          "name": "Supabase Postgres"
+          "name": "Postgres account"
         }
       },
       "type": "n8n-nodes-base.postgres",

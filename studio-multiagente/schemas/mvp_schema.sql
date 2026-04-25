@@ -552,14 +552,166 @@ CREATE UNIQUE INDEX idx_active_prompt
   ON agent_prompts (agent_name, prompt_type) WHERE is_active = true;
 
 -- ============================================================
+-- 17. ARCHITECT_STATUS
+-- Estado de presencia del arquitecto (fila única).
+-- ============================================================
+CREATE TABLE architect_status (
+  id               integer PRIMARY KEY DEFAULT 1,
+  is_online        boolean NOT NULL DEFAULT false,
+  last_seen_at     timestamptz,
+  went_offline_at  timestamptz,
+  CONSTRAINT single_row CHECK (id = 1)
+);
+
+INSERT INTO architect_status (id, is_online) VALUES (1, false);
+
+-- ============================================================
+-- 18. CONSULTATION_QUEUE
+-- Cola de consultas no bloqueantes de agentes al arquitecto.
+-- ============================================================
+CREATE TABLE consultation_queue (
+  id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id        uuid REFERENCES projects(id) ON DELETE CASCADE,
+  agent_name        text NOT NULL,
+  consultation_type text NOT NULL
+    CHECK (consultation_type IN ('suggestion', 'decision', 'directive_conflict')),
+  message           text NOT NULL,
+  context           jsonb NOT NULL DEFAULT '{}',
+  status            text NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending', 'sent', 'answered')),
+  created_at        timestamptz NOT NULL DEFAULT now(),
+  sent_at           timestamptz,
+  answered_at       timestamptz,
+  answer            text
+);
+
+CREATE INDEX idx_consultation_status ON consultation_queue (status, created_at);
+CREATE INDEX idx_consultation_project ON consultation_queue (project_id, status);
+
+-- ============================================================
+-- 19. AGENT_EXECUTIONS
+-- Tracking de ejecuciones de agentes para patrón Draft/Commit.
+-- ============================================================
+CREATE TABLE agent_executions (
+  id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id    uuid REFERENCES projects(id) ON DELETE CASCADE,
+  agent_name    text NOT NULL,
+  status        text NOT NULL DEFAULT 'running'
+    CHECK (status IN ('running', 'completed', 'failed', 'reverted')),
+  started_at    timestamptz NOT NULL DEFAULT now(),
+  finished_at   timestamptz,
+  error_message text
+);
+
+CREATE INDEX idx_agent_executions_project ON agent_executions (project_id, status);
+CREATE INDEX idx_agent_executions_agent ON agent_executions (agent_name, status);
+
+-- ============================================================
+-- 20. PROJECT_INTELLIGENCE
+-- Contexto compartido entre agentes por proyecto.
+-- Cada agente escribe sus hallazgos críticos y lee los de los demás.
+-- ============================================================
+CREATE TABLE project_intelligence (
+  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id  uuid NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  agent_name  text NOT NULL,
+  key         text NOT NULL,
+  value       jsonb NOT NULL DEFAULT '{}',
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  updated_at  timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (project_id, agent_name, key)
+);
+
+CREATE INDEX idx_project_intelligence_project ON project_intelligence (project_id, key);
+
+-- ============================================================
+-- BLOQUE: ALTERACIONES POST-CREACIÓN
+-- Ejecutar en Supabase después del schema inicial.
+-- ============================================================
+
+-- Patrón Draft/Commit: execution_id + exec_status en tablas de salida de agentes
+ALTER TABLE briefings
+  ADD COLUMN execution_id uuid REFERENCES agent_executions(id) ON DELETE SET NULL,
+  ADD COLUMN exec_status text NOT NULL DEFAULT 'confirmed'
+    CHECK (exec_status IN ('draft', 'confirmed'));
+
+ALTER TABLE design_options
+  ADD COLUMN execution_id uuid REFERENCES agent_executions(id) ON DELETE SET NULL,
+  ADD COLUMN exec_status text NOT NULL DEFAULT 'confirmed'
+    CHECK (exec_status IN ('draft', 'confirmed'));
+
+ALTER TABLE regulatory_tasks
+  ADD COLUMN execution_id uuid REFERENCES agent_executions(id) ON DELETE SET NULL,
+  ADD COLUMN exec_status text NOT NULL DEFAULT 'confirmed'
+    CHECK (exec_status IN ('draft', 'confirmed')),
+  ADD COLUMN normativa_confidence text
+    CHECK (normativa_confidence IN ('high', 'medium', 'low')),
+  ADD COLUMN citation_source text,
+  ADD COLUMN normativa_fetched_at timestamptz;
+
+-- Detección de cambios en normativa: hash del contenido por fuente
+ALTER TABLE normativa_knowledge
+  ADD COLUMN IF NOT EXISTS content_hash text;
+
+-- Detección de scope creep: hash del briefing por secciones
+ALTER TABLE projects
+  ADD COLUMN briefing_hash text;
+
+-- ============================================================
+-- BLOQUE: PRECIOS REALES (migración 003)
+-- Referencias CYPE verificadas + catálogo del arquitecto
+-- Usadas por agent_costs (validación) y agent_materials (enriquecimiento)
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS price_references (
+  id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  partida       text NOT NULL,
+  unit          text NOT NULL,
+  min_price     numeric(10,2),
+  avg_price     numeric(10,2) NOT NULL,
+  max_price     numeric(10,2),
+  category      text,
+  source        text DEFAULT 'cype',
+  location_zone text DEFAULT 'nacional',
+  last_updated  date NOT NULL DEFAULT CURRENT_DATE,
+  notes         text
+);
+
+CREATE INDEX IF NOT EXISTS idx_price_references_partida ON price_references (partida);
+CREATE INDEX IF NOT EXISTS idx_price_references_category ON price_references (category);
+
+CREATE TABLE IF NOT EXISTS supplier_catalog (
+  id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  supplier_name text NOT NULL,
+  category      text NOT NULL,
+  item_name     text NOT NULL,
+  brand         text,
+  model_ref     text,
+  unit_price    numeric(10,2),
+  unit          text,
+  quality_tier  text,
+  source_type   text DEFAULT 'catalog',
+  valid_until   date,
+  notes         text,
+  created_at    timestamptz DEFAULT now(),
+  updated_at    timestamptz DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_supplier_catalog_category ON supplier_catalog (category);
+CREATE INDEX IF NOT EXISTS idx_supplier_catalog_brand ON supplier_catalog (brand);
+
+-- El seed de ~38 partidas CYPE está en schemas/migrations/003_prices.sql
+
+-- ============================================================
 -- VERIFICACIÓN
 -- ============================================================
 -- Ejecutar después de crear todo para verificar:
--- SELECT table_name FROM information_schema.tables 
+-- SELECT table_name FROM information_schema.tables
 -- WHERE table_schema = 'public' ORDER BY table_name;
 --
--- Resultado esperado: 16 tablas
--- activity_log, agent_prompts, approvals, briefings, clients,
--- cost_estimates, design_options, documents, external_quotes,
--- material_items, memory_cases, project_plans, projects,
--- proposals, regulatory_tasks, trade_requests
+-- Resultado esperado: 20 tablas
+-- activity_log, agent_executions, agent_prompts, approvals,
+-- briefings, clients, cost_estimates, design_options, documents,
+-- external_quotes, material_items, memory_cases, project_intelligence,
+-- project_plans, projects, proposals, regulatory_tasks, trade_requests,
+-- architect_status, consultation_queue

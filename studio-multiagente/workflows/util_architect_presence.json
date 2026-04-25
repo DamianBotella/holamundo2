@@ -1,0 +1,222 @@
+{
+  "name": "util_architect_presence",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "architect-presence",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [250, 300],
+      "id": "ap000001-0000-0000-0000-000000000001",
+      "name": "Webhook Presence",
+      "webhookId": "architect-presence"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const status = $input.first().json.query?.status || '';\nif (status !== 'online' && status !== 'offline') {\n  throw new Error('Parámetro status inválido. Usa ?status=online o ?status=offline');\n}\nreturn [{ json: { status, is_online: status === 'online' } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [500, 300],
+      "id": "ap000001-0000-0000-0000-000000000002",
+      "name": "Validate Status Param"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE architect_status SET is_online = $1::boolean, last_seen_at = now(), went_offline_at = CASE WHEN $1::boolean = false THEN now() ELSE went_offline_at END WHERE id = 1 RETURNING is_online, went_offline_at",
+        "options": {
+          "queryReplacement": "={{ [$json.is_online] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [750, 300],
+      "id": "ap000001-0000-0000-0000-000000000003",
+      "name": "Update Architect Status"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "ap000001-cond-0001",
+              "leftValue": "={{ $('Validate Status Param').first().json.is_online }}",
+              "rightValue": false,
+              "operator": { "type": "boolean", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1000, 300],
+      "id": "ap000001-0000-0000-0000-000000000004",
+      "name": "Going Offline?"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT cq.*, p.name as project_name FROM consultation_queue cq LEFT JOIN projects p ON cq.project_id = p.id WHERE cq.status = 'pending' ORDER BY cq.created_at ASC",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1250, 200],
+      "id": "ap000001-0000-0000-0000-000000000005",
+      "name": "Load Pending Consultations"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "ap000001-cond-0002",
+              "leftValue": "={{ $input.all().length }}",
+              "rightValue": 0,
+              "operator": { "type": "number", "operation": "gt" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1500, 200],
+      "id": "ap000001-0000-0000-0000-000000000006",
+      "name": "Has Pending?"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const items = $input.all();\nconst N8N_BASE = 'https://n8n-n8n.zzeluw.easypanel.host';\n\nconst typeLabel = { suggestion: 'Sugerencia', decision: 'Decisión requerida', directive_conflict: '⚠️ CONFLICTO DE DIRECTIVA' };\nconst agentLabel = (a) => a.replace('agent_', '').replace('util_', '').replace(/_/g, ' ');\n\nlet rows = '';\nitems.forEach((item, i) => {\n  const c = item.json;\n  const answerUrl = `${N8N_BASE}/webhook/consultation-answer?id=${c.id}&answer=yes`;\n  const rejectUrl = `${N8N_BASE}/webhook/consultation-answer?id=${c.id}&answer=no`;\n  const badge = c.consultation_type === 'directive_conflict'\n    ? 'background:#e74c3c;color:white'\n    : c.consultation_type === 'decision'\n      ? 'background:#e67e22;color:white'\n      : 'background:#3498db;color:white';\n  rows += `\n    <tr style=\"border-bottom:1px solid #eee;\">\n      <td style=\"padding:12px 8px;\">\n        <span style=\"${badge};padding:3px 8px;border-radius:12px;font-size:11px;font-weight:bold;\">${typeLabel[c.consultation_type]}</span>\n      </td>\n      <td style=\"padding:12px 8px;color:#7f8c8d;font-size:13px;\">[${agentLabel(c.agent_name)}]</td>\n      <td style=\"padding:12px 8px;\">${c.message}</td>\n      <td style=\"padding:12px 8px;white-space:nowrap;\">\n        <a href=\"${answerUrl}\" style=\"background:#27ae60;color:white;padding:6px 14px;text-decoration:none;border-radius:4px;font-size:13px;margin-right:6px;\">Sí</a>\n        <a href=\"${rejectUrl}\" style=\"background:#e74c3c;color:white;padding:6px 14px;text-decoration:none;border-radius:4px;font-size:13px;\">No</a>\n      </td>\n    </tr>`;\n});\n\nconst htmlBody = `\n  <div style=\"font-family:Arial,sans-serif;max-width:700px;margin:0 auto;\">\n    <h2 style=\"color:#2c3e50;\">Studio AI — Consultas pendientes</h2>\n    <p>Tienes <strong>${items.length} consulta${items.length !== 1 ? 's' : ''}</strong> de los agentes esperando tu respuesta:</p>\n    <table style=\"width:100%;border-collapse:collapse;\">\n      <thead><tr style=\"background:#f8f9fa;\">\n        <th style=\"padding:10px 8px;text-align:left;\">Tipo</th>\n        <th style=\"padding:10px 8px;text-align:left;\">Agente</th>\n        <th style=\"padding:10px 8px;text-align:left;\">Consulta</th>\n        <th style=\"padding:10px 8px;text-align:left;\">Respuesta</th>\n      </tr></thead>\n      <tbody>${rows}</tbody>\n    </table>\n    <p style=\"color:#95a5a6;font-size:12px;margin-top:20px;\">Sistema multiagente — ${new Date().toLocaleString('es-ES')}</p>\n  </div>`;\n\nreturn [{ json: { html_body: htmlBody, count: items.length } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1750, 120],
+      "id": "ap000001-0000-0000-0000-000000000007",
+      "name": "Build Batch Email"
+    },
+    {
+      "parameters": {
+        "sendTo": "botelladesdeel98@gmail.com",
+        "subject": "=[Studio AI] {{ $json.count }} consulta{{ $json.count !== 1 ? 's' : '' }} pendiente{{ $json.count !== 1 ? 's' : '' }} de los agentes",
+        "emailType": "html",
+        "message": "={{ $json.html_body }}",
+        "options": {}
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "PLACEHOLDER",
+          "name": "Gmail DamianDomeya@"
+        }
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [2000, 120],
+      "id": "ap000001-0000-0000-0000-000000000008",
+      "name": "Send Batch Email"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE consultation_queue SET status = 'sent', sent_at = now() WHERE status = 'pending'",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [2250, 120],
+      "id": "ap000001-0000-0000-0000-000000000009",
+      "name": "Mark Consultations Sent"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: true, status: $('Validate Status Param').first().json.status, consultations_sent: $('Has Pending?').first()?.json ? $('Build Batch Email').first().json.count : 0 }) }}",
+        "options": { "responseCode": 200 }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [2500, 300],
+      "id": "ap000001-0000-0000-0000-000000000010",
+      "name": "Respond OK"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: true, status: $('Validate Status Param').first().json.status, consultations_sent: 0 }) }}",
+        "options": { "responseCode": 200 }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1750, 400],
+      "id": "ap000001-0000-0000-0000-000000000011",
+      "name": "Respond Online"
+    }
+  ],
+  "connections": {
+    "Webhook Presence": {
+      "main": [[{ "node": "Validate Status Param", "type": "main", "index": 0 }]]
+    },
+    "Validate Status Param": {
+      "main": [[{ "node": "Update Architect Status", "type": "main", "index": 0 }]]
+    },
+    "Update Architect Status": {
+      "main": [[{ "node": "Going Offline?", "type": "main", "index": 0 }]]
+    },
+    "Going Offline?": {
+      "main": [
+        [{ "node": "Load Pending Consultations", "type": "main", "index": 0 }],
+        [{ "node": "Respond Online", "type": "main", "index": 0 }]
+      ]
+    },
+    "Load Pending Consultations": {
+      "main": [[{ "node": "Has Pending?", "type": "main", "index": 0 }]]
+    },
+    "Has Pending?": {
+      "main": [
+        [{ "node": "Build Batch Email", "type": "main", "index": 0 }],
+        [{ "node": "Respond OK", "type": "main", "index": 0 }]
+      ]
+    },
+    "Build Batch Email": {
+      "main": [[{ "node": "Send Batch Email", "type": "main", "index": 0 }]]
+    },
+    "Send Batch Email": {
+      "main": [[{ "node": "Mark Consultations Sent", "type": "main", "index": 0 }]]
+    },
+    "Mark Consultations Sent": {
+      "main": [[{ "node": "Respond OK", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {}
+}

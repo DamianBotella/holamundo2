@@ -34,7 +34,7 @@
         }
       },
       "credentials": {
-        "postgres": { "id": "PLACEHOLDER", "name": "Supabase Postgres" }
+        "postgres": { "id": "PLACEHOLDER", "name": "Postgres account" }
       },
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
@@ -206,7 +206,7 @@
         }
       },
       "credentials": {
-        "postgres": { "id": "PLACEHOLDER", "name": "Supabase Postgres" }
+        "postgres": { "id": "PLACEHOLDER", "name": "Postgres account" }
       },
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
@@ -223,7 +223,7 @@
         }
       },
       "credentials": {
-        "postgres": { "id": "PLACEHOLDER", "name": "Supabase Postgres" }
+        "postgres": { "id": "PLACEHOLDER", "name": "Postgres account" }
       },
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
@@ -252,7 +252,7 @@
         }
       },
       "credentials": {
-        "postgres": { "id": "PLACEHOLDER", "name": "Supabase Postgres" }
+        "postgres": { "id": "PLACEHOLDER", "name": "Postgres account" }
       },
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
@@ -282,7 +282,7 @@
         }
       },
       "credentials": {
-        "postgres": { "id": "PLACEHOLDER", "name": "Supabase Postgres" }
+        "postgres": { "id": "PLACEHOLDER", "name": "Postgres account" }
       },
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,

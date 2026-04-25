@@ -43,6 +43,9 @@ Sistema multiagente en **n8n 2.12.x** para un estudio de arquitectura técnica y
 | util_normativa_fetch | `4a03tQ7Q5nmtBpnI` | ✅ publicado |
 | agent_normativa_refresh | `0Cyeaa85uLS7c8EE` | ✅ publicado (cache warmer) |
 | agent_materials | `SOJW7SgCrJebLRP8` | ⚙️ creado — pendiente setup usuario |
+| util_architect_presence | `1WLpSzgcitGJoaoZ` | ✅ creado — pendiente activar + SQL en Supabase |
+| util_consultation | `bjKNchMYN2wXKO0k` | ✅ creado — pendiente activar + SQL en Supabase |
+| cron_consultation_batch | `4vyizezPgg3kr192` | ✅ creado — pendiente activar + SQL en Supabase |
 
 ---
 
@@ -242,6 +245,7 @@ intake → briefing_done → design_done → analysis_done → costs_done
 | Sub-workflows deben estar publicados | En n8n 2.x, un Execute Workflow falla si el sub-workflow está inactivo |
 | Postgres typeVersion | Usar 2.5 |
 | SplitInBatches + loop | Output[0] → proceso → vuelve a SplitInBatches. Output[1] → done path |
+| IF node boolean equals | `operator.singleValue: true` solo en operadores unarios (true/false/empty). Para `equals` con boolean, omitir `singleValue`. |
 
 ---
 

@@ -7,9 +7,14 @@
 .mcp.json
 
 # ─────────────────────────────────────────────
-# n8n-skills — se clona/instala localmente
+# n8n-skills y repos externos clonados como referencia
+# (re-clonar en cada equipo si se necesitan)
 # ─────────────────────────────────────────────
 n8n-skills/
+LightRAG-main/
+claude-mem-main/
+everything-claude-code-main/
+ui-ux-pro-max-skill-main/
 
 # ─────────────────────────────────────────────
 # Dependencias
@@ -51,3 +56,6 @@ $RECYCLE.BIN/
 *.swp
 *.swo
 .claude/settings.local.json
+.claude/scheduled_tasks.lock
+.claude/projects/
+.claude/plans/

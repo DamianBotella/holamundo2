@@ -302,11 +302,9 @@ Sistema multiagente para estudios de arquitectura técnica especializados en **r
 - **Función.** Visualización espacial inmersiva de las opciones de diseño en el propio espacio real.
 - **Beneficio.** Aprobaciones más firmes; menos cambios tardíos; percepción de estudio profesional y tecnológico.
 
-### 3.18 Patología y diagnóstico estructural con visión — `agent_pathology`
-- **Laguna real.** Cada reforma empieza con una visita de diagnóstico. Fisuras, humedades, deformaciones… quedan descritas en memoria con fotos sin estructurar.
-- **Técnica.** Subida de fotos de la visita → Claude Vision clasifica patologías (fisura estructural / no estructural, tipología de humedad, ataque biótico, corrosión). Tabla `pathologies` con `severity`, `suggested_intervention`, `normativa_afectada`, `risk_level`. Si detecta estructural → bloquea avance a diseño hasta que técnico cualificado valide.
-- **Función.** Pre-diagnóstico sistematizado que alimenta el briefing con hallazgos clasificados.
-- **Beneficio.** Ninguna patología crítica se pasa por alto. Cliente ve informe visual claro del estado de partida → justifica presupuestos y plazos.
+### 3.18 ~~Patología y diagnóstico estructural con visión~~ — ✅ MVP CONSTRUIDO (2026-04-25)
+- **Construido (fase 1)**: tabla `pathology_findings` (29 cols, 24 tipos de patología enumerados con foco España: aluminosis, humedad capilaridad/filtración/condensación, amianto/plomo/radón sospechosos, REBT pre-2002, etc.) en migración 014. Workflow `agent_pathology` (`I34LYGuiWTQ8WJCa`) con prompt experto en patología española. Inserta una fila por finding detectada, auto-email a Damián si severity high/critical o affects_safety. Documentado en `knowledge/agent_pathology.md` con queries útiles, hook con `agent_briefing` listo (no aplicado).
+- **Pendiente (fase 2)**: hook con `agent_briefing` para que las patologías alimenten constraints automáticos (SQL listo en docs); hook con `agent_costs` para sumar `estimated_intervention_cost` como partida; `pathology_confirm/repair` workflows; cron review de findings sin actualizar > 30d; RAG semántico sobre catálogos técnicos de patología.
 
 ### 3.19 Interoperabilidad con software del sector — `util_interop`
 - **Laguna real.** CYPE, Presto, TCQ, Navisworks son parte del día a día. ArquitAI los ignora hoy.

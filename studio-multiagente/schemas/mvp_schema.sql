@@ -703,6 +703,35 @@ CREATE INDEX IF NOT EXISTS idx_supplier_catalog_brand ON supplier_catalog (brand
 -- El seed de ~38 partidas CYPE está en schemas/migrations/003_prices.sql
 
 -- ============================================================
+-- BLOQUE: SEGURIDAD Y SALUD (migración 004)
+-- EBSS / PSS según RD 1627/1997 generados por agent_safety_plan
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS safety_plans (
+  id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id      uuid REFERENCES projects(id) ON DELETE CASCADE,
+  version         integer NOT NULL DEFAULT 1,
+  document_type   text NOT NULL DEFAULT 'EBSS' CHECK (document_type IN ('EBSS','PSS')),
+  content_json    jsonb,
+  google_doc_id   text,
+  google_doc_url  text,
+  status          text NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','approved','superseded')),
+  execution_id    uuid REFERENCES agent_executions(id) ON DELETE SET NULL,
+  exec_status     text NOT NULL DEFAULT 'confirmed' CHECK (exec_status IN ('draft','confirmed')),
+  notes           text,
+  created_at      timestamptz DEFAULT now(),
+  approved_at     timestamptz,
+  approved_by     text
+);
+
+CREATE INDEX IF NOT EXISTS idx_safety_plans_project ON safety_plans (project_id);
+CREATE INDEX IF NOT EXISTS idx_safety_plans_status ON safety_plans (status);
+
+-- UNIQUE constraint para que UPSERT en agent_prompts funcione idempotente
+ALTER TABLE agent_prompts
+  ADD CONSTRAINT IF NOT EXISTS agent_prompts_unique_active UNIQUE (agent_name, prompt_type);
+
+-- ============================================================
 -- VERIFICACIÓN
 -- ============================================================
 -- Ejecutar después de crear todo para verificar:

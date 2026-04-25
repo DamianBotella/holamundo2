@@ -54,6 +54,7 @@ Sistema multiagente para estudios de arquitectura técnica especializados en **r
 | 9 | agent_planner | `lSUfNw61YfbERI8n` | approved → planning_done | — |
 | 10 | agent_memory | `gLxmy7M0UmC7Yzye` | planning_done | — |
 | 11 | agent_normativa_refresh | `0Cyeaa85uLS7c8EE` | manual / scheduled | — |
+| 12 | agent_safety_plan | `yRaR3V0j61R1g1jZ` | bajo demanda (post-trades_done) | — |
 
 #### 1.2.1 `agent_briefing`
 - **Técnica.** Carga project + client, prompt del agente desde `agent_prompts`, `util_llm_call`, parse con fallback, detect scope creep (hash djb2 sobre rooms_affected + constraints + budget), Draft/Commit en tabla `briefings`, email de aprobación, Wait webhook, update según decisión, `Write Intelligence` + `Update Project Hash`.
@@ -107,7 +108,13 @@ Sistema multiagente para estudios de arquitectura técnica especializados en **r
 - **Función.** Destila un proyecto completado en conocimiento reutilizable, buscable por `project_type + location_zone + property_type + tags`.
 - **Beneficio.** Los aprendizajes de cada obra dejan de vivir solo en la cabeza del arquitecto. Futuros proyectos similares cargan `memory_cases` como contexto automáticamente → mejores estimaciones de plazo, presupuesto y riesgos.
 
-#### 1.2.11 `agent_normativa_refresh`
+#### 1.2.11 `agent_safety_plan`
+- **Técnica.** Workflow `yRaR3V0j61R1g1jZ` (14 nodos). Lee proyecto completo (briefing + design + trades + plan), llama a `util_llm_call` con prompt enriquecido (RD 1627/1997 + riesgos típicos por fase + EPIs con norma EN), parsea JSON, INSERT en tabla `safety_plans` (jsonb completo + google_doc_url), crea Google Doc con título `EBSS - {project_name}`, inserta contenido formateado.
+- **Función.** Genera EBSS o PSS según supuestos del art. 4 RD 1627/1997, con identificación automática del tipo de documento. Riesgos por fase, EPIs específicos por gremio (con norma UNE-EN), protecciones colectivas, concurrencia de actividades, protocolo emergencia. Recomendaciones específicas al arquitecto (evaluación amianto pre-2002, REBT, DB-HR, etc.).
+- **Beneficio.** Cumplimiento RD 1627/1997 sin copiar-pegar genérico. 3-5h ahorradas por proyecto. El documento es coherente con el plan de obra y los gremios reales del proyecto, no genérico.
+- **Limitación operativa.** Requiere Google Docs API habilitada en el proyecto GCP. Si no, contenido se guarda en `safety_plans.content_json` pero el Doc en Drive queda vacío.
+
+#### 1.2.12 `agent_normativa_refresh`
 - **Técnica.** Loop por cada fuente en `normativa_sources`. `util_normativa_fetch` → LLM parse → hash djb2 del contenido → compara con `content_hash` previo → detecta cambios → actualiza `normativa_knowledge` → si hay cambios, marca `regulatory_tasks.status = 'requires_review'` en proyectos activos + email de alerta.
 - **Función.** Cache warmer que detecta cuándo una fuente oficial (CTE, PGOU, ordenanza) ha cambiado desde la última lectura.
 - **Beneficio.** La normativa no es estática — este agente evita que un trámite se gestione con una versión obsoleta y se lo comunica al arquitecto con la lista exacta de proyectos afectados.
@@ -228,11 +235,8 @@ Sistema multiagente para estudios de arquitectura técnica especializados en **r
 - **Función.** Enruta incidencias post-entrega al gremio correcto con evidencia documentada.
 - **Beneficio.** Cumple LOE sin pérdidas administrativas. Reduce fricción con cliente tras entrega.
 
-### 3.7 Plan de seguridad y salud — `agent_safety_plan`
-- **Laguna real.** El Estudio Básico de Seguridad y Salud (EBSS) o el ESS/PSS es obligatorio, repetitivo, y se hace con plantillas copiadas de proyectos anteriores.
-- **Técnica.** Agente que lee briefing + design + trades + plan de obra y genera EBSS/PSS adaptado: riesgos por fase, EPIs por gremio, protecciones colectivas, coordinación de actividades simultáneas. Output directo a Google Doc con formato reglamentario.
-- **Función.** Genera documento de seguridad específico para el proyecto con correspondencia entre fases del plan y riesgos específicos.
-- **Beneficio.** Cumplimiento normativo (RD 1627/1997) sin copiar-pegar genérico que el inspector de trabajo detecta al segundo.
+### 3.7 ~~Plan de seguridad y salud~~ — ✅ CONSTRUIDO (2026-04-25)
+**Movido a sección 1.2 como `agent_safety_plan` operativo.**
 
 ### 3.8 Control de calidad in-situ — `agent_qc_checklists`
 - **Laguna real.** Las visitas de obra se basan en la memoria del técnico. Se olvidan comprobaciones (niveles, plomadas, pruebas de estanqueidad, replanteos) que se pagan caras si aparecen después.

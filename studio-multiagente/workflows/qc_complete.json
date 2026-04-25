@@ -1,0 +1,139 @@
+{
+  "name": "qc_complete",
+  "active": true,
+  "nodes": [
+    {
+      "id": "qc-01",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-700, 300],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "qc-complete",
+        "responseMode": "responseNode",
+        "authentication": "headerAuth"
+      },
+      "credentials": {
+        "httpHeaderAuth": { "id": "Ba643jvuElTgMawr", "name": "Webhook API Key (entrante)" }
+      },
+      "onError": "continueRegularOutput",
+      "webhookId": "4c6c34cd-46cc-4622-89da-200c18e00d94"
+    },
+    {
+      "id": "qc-02",
+      "name": "Validate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-460, 300],
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || {};\nif (!body.qc_id) { return [{ json: { valid: false, error: 'qc_id obligatorio' } }]; }\nif (!body.item_id) { return [{ json: { valid: false, error: 'item_id obligatorio' } }]; }\nconst valid = ['pass','fail','skip','pending'];\nif (!body.status || !valid.includes(body.status)) { return [{ json: { valid: false, error: 'status debe ser ' + valid.join('|') } }]; }\nreturn [{ json: {\n  valid: true,\n  qc_id: body.qc_id,\n  item_id: body.item_id,\n  status: body.status,\n  evidence_url: body.evidence_url || null,\n  comment: (body.comment || '').toString().slice(0, 1000)\n}}];"
+      }
+    },
+    {
+      "id": "qc-03",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [-220, 300],
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2 },
+          "combinator": "and",
+          "conditions": [
+            { "id": "v1", "leftValue": "={{ $json.valid }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true", "singleValue": true } }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "qc-04",
+      "name": "Update Item",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [20, 220],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE qc_checks\n   SET items = (\n     SELECT jsonb_agg(\n       CASE WHEN it->>'id' = $2\n         THEN jsonb_set(jsonb_set(jsonb_set(jsonb_set(it,\n                  '{status}',       to_jsonb($3::text)),\n                  '{evidence_url}', COALESCE(to_jsonb(NULLIF($4,'')), 'null'::jsonb)),\n                  '{comment}',      COALESCE(to_jsonb(NULLIF($5,'')), 'null'::jsonb)),\n                  '{checked_at}',   to_jsonb(now()::text))\n         ELSE it\n       END\n     )\n     FROM jsonb_array_elements(items) it\n   )\n WHERE id = $1::uuid\nRETURNING id, project_id, phase_key, status,\n  (SELECT count(*) FROM jsonb_array_elements(items) it WHERE it->>'status'='pass') AS passed,\n  (SELECT count(*) FROM jsonb_array_elements(items) it WHERE it->>'status'='fail') AS failed,\n  (SELECT count(*) FROM jsonb_array_elements(items) it WHERE it->>'status'='pending') AS pending;",
+        "options": {
+          "queryReplacement": "={{ [ $json.qc_id, $json.item_id, $json.status, $json.evidence_url || '', $json.comment || '' ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" }
+      }
+    },
+    {
+      "id": "qc-05",
+      "name": "Match?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [240, 220],
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2 },
+          "combinator": "and",
+          "conditions": [
+            { "id": "m1", "leftValue": "={{ $json.id }}", "rightValue": "", "operator": { "type": "string", "operation": "exists", "singleValue": true } }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "qc-06",
+      "name": "Respond 200",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [480, 140],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'updated', qc_id: $json.id, phase_key: $json.phase_key, checklist_status: $json.status, item_id: $('Validate').first().json.item_id, item_status: $('Validate').first().json.status, summary: { passed: $json.passed, failed: $json.failed, pending: $json.pending } }) }}",
+        "options": { "responseCode": 200 }
+      }
+    },
+    {
+      "id": "qc-07",
+      "name": "Respond 404",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [480, 320],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'not_found', error: 'qc_id no encontrado'}) }}",
+        "options": { "responseCode": 404 }
+      }
+    },
+    {
+      "id": "qc-08",
+      "name": "Respond 400",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [20, 420],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'error', error: $json.error}) }}",
+        "options": { "responseCode": 400 }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook":     { "main": [[{ "node": "Validate", "type": "main", "index": 0 }]] },
+    "Validate":    { "main": [[{ "node": "Valid?",   "type": "main", "index": 0 }]] },
+    "Valid?":      { "main": [
+      [{ "node": "Update Item", "type": "main", "index": 0 }],
+      [{ "node": "Respond 400", "type": "main", "index": 0 }]
+    ]},
+    "Update Item": { "main": [[{ "node": "Match?", "type": "main", "index": 0 }]] },
+    "Match?":      { "main": [
+      [{ "node": "Respond 200", "type": "main", "index": 0 }],
+      [{ "node": "Respond 404", "type": "main", "index": 0 }]
+    ]}
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner"
+  }
+}

@@ -1,0 +1,109 @@
+{
+  "name": "qc_generate",
+  "active": true,
+  "nodes": [
+    {
+      "id": "qg-01",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-700, 300],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "qc-generate",
+        "responseMode": "responseNode",
+        "authentication": "headerAuth"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "Ba643jvuElTgMawr",
+          "name": "Webhook API Key (entrante)"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "webhookId": "8de0dafc-bd7e-4da9-9813-38734266edaa"
+    },
+    {
+      "id": "qg-02",
+      "name": "Validate + Build",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-460, 300],
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || {};\nif (!body.project_id) { return [{ json: { valid: false, error: 'project_id obligatorio' } }]; }\nif (!body.phase_key) { return [{ json: { valid: false, error: 'phase_key obligatorio' } }]; }\nconst valid = ['demolicion','replanteo','albanileria','instalaciones_electricas','instalaciones_fontaneria','instalaciones_climatizacion','aislamiento_carpinteria','pavimentos_revestimientos','sanitarios_griferia','pintura','recepcion_provisional','otros'];\nif (!valid.includes(body.phase_key)) { return [{ json: { valid: false, error: 'phase_key debe ser uno de: ' + valid.join(', ') } }]; }\n\nconst templates = {\n  demolicion: [\n    { id: 'd1', label: 'Apeo de elementos a conservar', description: 'Verificar apuntalamiento adecuado de elementos NO derribados.' },\n    { id: 'd2', label: 'Acotamiento zona de obra', description: 'Cerramiento perimetral, cartel de obra, salida emergencia despejada.' },\n    { id: 'd3', label: 'Gestion residuos RCD', description: 'Contenedor autorizado + ficha de gestion de residuos.' },\n    { id: 'd4', label: 'Inspeccion post-demolicion', description: 'Verificar ausencia de patologias ocultas: humedades, instalaciones obsoletas, amianto.' },\n    { id: 'd5', label: 'Estado estructura tras demolicion', description: 'Comprobar elementos portantes restantes sin danos.' }\n  ],\n  replanteo: [\n    { id: 'r1', label: 'Replanteo coincide con plano', description: 'Medidas in situ vs medidas del plano: tolerancia +/- 1cm.' },\n    { id: 'r2', label: 'Niveles confirmados', description: 'Cota suelo terminado coincide en todos los espacios.' },\n    { id: 'r3', label: 'Pasos de instalaciones marcados', description: 'Bajantes, rozas, cuadros electricos y patinillos identificados antes de cerrar tabiques.' },\n    { id: 'r4', label: 'Aprobacion cliente del replanteo', description: 'Cliente firma acta de replanteo o confirma por email.' }\n  ],\n  albanileria: [\n    { id: 'a1', label: 'Tabiques a plomada y escuadra', description: 'Tolerancia plomada 5mm/2m. Escuadra 90 +/- 0.5 grados.' },\n    { id: 'a2', label: 'Encuentros con techo y suelo', description: 'Sin holguras visibles, sellado correcto.' },\n    { id: 'a3', label: 'Refuerzos en huecos', description: 'Cargaderos de huecos (puertas/ventanas) correctamente dispuestos.' },\n    { id: 'a4', label: 'Tabiques de yeso laminado', description: 'Estructura cada 60cm max. Cinta + masilla en juntas. Doble placa en paramentos humedos.' },\n    { id: 'a5', label: 'Acustica DB-HR', description: 'Lana mineral en cavidades. Bandas elasticas en arranque.' }\n  ],\n  instalaciones_electricas: [\n    { id: 'e1', label: 'REBT cumplido', description: 'Diferencial 30mA en cuadro. Magnetotermicos por circuito segun grado electrificacion.' },\n    { id: 'e2', label: 'Tomas en bano clasificadas', description: 'Volumen 0/1 sin tomas. Volumen 2 IP44. Volumen 3 IP21 minimo.' },\n    { id: 'e3', label: 'Secciones de cable', description: '1.5mm2 alumbrado, 2.5mm2 tomas generales, 4mm2 cocina, 6mm2 termo y AC.' },\n    { id: 'e4', label: 'Boletin de instalador autorizado', description: 'Firmado y registrado en industria CCAA.' },\n    { id: 'e5', label: 'Pruebas funcionales', description: 'Cada toma + cada interruptor probado bajo carga.' }\n  ],\n  instalaciones_fontaneria: [\n    { id: 'f1', label: 'Prueba de presion en frio', description: 'Carga 1.5x presion de servicio durante 30 minutos sin perdida.' },\n    { id: 'f2', label: 'Llaves de corte por aparato', description: 'Cada lavabo, inodoro, ducha, lavadora, lavavajillas con llave individual.' },\n    { id: 'f3', label: 'Pendientes de desague', description: '1.5%-3% en horizontal. Sifones individuales 25mm minimo.' },\n    { id: 'f4', label: 'Materiales certificados', description: 'PER multicapa o PEX. NUNCA tuberia de plomo. AENOR + sello agua potable.' },\n    { id: 'f5', label: 'Aislamiento en ACS', description: 'Coquilla aislante segun RITE en montantes.' }\n  ],\n  instalaciones_climatizacion: [\n    { id: 'c1', label: 'RITE cumplido', description: 'IT 1.2 eficiencia, IT 1.3 ventilacion. Memoria tecnica firmada.' },\n    { id: 'c2', label: 'Carga termica calculada', description: 'Calculo por habitacion. Frigorias/calorias coherentes con superficie + orientacion.' },\n    { id: 'c3', label: 'Desagues condensacion', description: 'Conducidos a bajante con sifon. Sin desagotar a fachada o terraza vecina.' },\n    { id: 'c4', label: 'Ventilacion DB-HS3', description: 'Caudales minimos por estancia. Sistema hibrido o mecanico segun proyecto.' }\n  ],\n  aislamiento_carpinteria: [\n    { id: 'i1', label: 'Aislamiento envolvente CTE HE1', description: 'Espesor minimo segun zona climatica. Continuidad sin puentes termicos.' },\n    { id: 'i2', label: 'Carpinteria exterior con marcado CE', description: 'Etiqueta visible. U <= 1.6 W/m2K. RPT en perfiles aluminio.' },\n    { id: 'i3', label: 'Sellado perimetral ventanas', description: 'Espuma + cinta multifuncion + sellado interior con masilla acrilica.' },\n    { id: 'i4', label: 'Persianas con cajones aislados', description: 'Sin perdida termica. Acceso registrable para mantenimiento.' }\n  ],\n  pavimentos_revestimientos: [\n    { id: 'p1', label: 'Soporte preparado', description: 'Limpio, plano (regla 2m, hueco max 3mm), seco (humedad <3%).' },\n    { id: 'p2', label: 'Juntas de dilatacion', description: 'En perimetro y cada 25-50m2 segun material.' },\n    { id: 'p3', label: 'Pendientes en zonas humedas', description: '1.5% minimo hacia desague.' },\n    { id: 'p4', label: 'Material conforme a proyecto', description: 'Coincide con design_option seleccionado y materials aprobados.' },\n    { id: 'p5', label: 'Repaso visual', description: 'Sin piezas rotas, encuentros limpios, juntas uniformes.' }\n  ],\n  sanitarios_griferia: [\n    { id: 's1', label: 'Sanitarios alineados y nivelados', description: 'Tolerancia 1cm respecto a paredes adyacentes.' },\n    { id: 's2', label: 'Fijaciones con silicona neutra', description: 'No silicona acetica (ataca metales). Cordon continuo.' },\n    { id: 's3', label: 'Caudales y temperaturas correctos', description: 'Caudal griferia 6-9 L/min. Termostatico estable a 38C +/- 2C.' },\n    { id: 's4', label: 'Sin fugas tras 24h', description: 'Comprobacion visual y mancha papel bajo desagues.' }\n  ],\n  pintura: [\n    { id: 'pt1', label: 'Soporte plano y limpio', description: 'Sellado de fisuras. Imprimacion. Sin polvo.' },\n    { id: 'pt2', label: 'Numero de manos correcto', description: 'Minimo 2 manos. Plastico mate exterior, satinado en bano/cocina.' },\n    { id: 'pt3', label: 'Acabado uniforme', description: 'Sin marcas de rodillo, sin gotas, sin aureolas.' },\n    { id: 'pt4', label: 'Repaso de cantos', description: 'Esquinas, marcos, zocalos limpios sin manchar.' }\n  ],\n  recepcion_provisional: [\n    { id: 'rp1', label: 'Limpieza fin de obra', description: 'Sin restos de yeso, polvo, embalajes. Pulidos y lavados.' },\n    { id: 'rp2', label: 'Pruebas funcionales completas', description: 'Cada interruptor, grifo, electrodomestico funcional.' },\n    { id: 'rp3', label: 'Documentacion entregada', description: 'Boletines, certificados, manuales, garantias.' },\n    { id: 'rp4', label: 'Acta de recepcion firmada', description: 'Fecha entrega, lista de incidencias pendientes (anexo).' },\n    { id: 'rp5', label: 'Repaso visual con cliente', description: 'Recorrido habitacion por habitacion, registrar pegas en aftercare_incidents.' }\n  ],\n  otros: []\n};\n\nconst items = (templates[body.phase_key] || []).map(t => ({\n  ...t, status: 'pending', evidence_url: null, comment: null, checked_at: null\n}));\n\nreturn [{ json: {\n  valid: true,\n  project_id: body.project_id,\n  phase_key: body.phase_key,\n  generated_by: body.generated_by || 'arquitecto',\n  items: items,\n  notes: (body.notes || '').toString().slice(0, 500)\n}}];"
+      }
+    },
+    {
+      "id": "qg-03",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [-220, 300],
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2 },
+          "combinator": "and",
+          "conditions": [
+            { "id": "v1", "leftValue": "={{ $json.valid }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true", "singleValue": true } }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "qg-04",
+      "name": "Insert Checklist",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [20, 220],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO qc_checks (project_id, phase_key, generated_by, items, notes)\nVALUES ($1::uuid, $2, $3, $4::jsonb, $5)\nON CONFLICT (project_id, phase_key, template_version) DO UPDATE\n  SET items = EXCLUDED.items, generated_at = now(), generated_by = EXCLUDED.generated_by,\n      notes = COALESCE(qc_checks.notes || E'\\n', '') || COALESCE(NULLIF(EXCLUDED.notes, ''), ''),\n      status = 'open'\nRETURNING id, project_id, phase_key, status, jsonb_array_length(items) AS items_count;",
+        "options": {
+          "queryReplacement": "={{ [ $json.project_id, $json.phase_key, $json.generated_by, JSON.stringify($json.items), $json.notes || '' ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" }
+      }
+    },
+    {
+      "id": "qg-05",
+      "name": "Respond 201",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [240, 220],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'created', qc_id: $json.id, project_id: $json.project_id, phase_key: $json.phase_key, items_count: $json.items_count, checklist_status: $json.status}) }}",
+        "options": { "responseCode": 201 }
+      }
+    },
+    {
+      "id": "qg-06",
+      "name": "Respond 400",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [20, 420],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'error', error: $json.error}) }}",
+        "options": { "responseCode": 400 }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook":          { "main": [[{ "node": "Validate + Build", "type": "main", "index": 0 }]] },
+    "Validate + Build": { "main": [[{ "node": "Valid?",           "type": "main", "index": 0 }]] },
+    "Valid?":           { "main": [
+      [{ "node": "Insert Checklist", "type": "main", "index": 0 }],
+      [{ "node": "Respond 400",      "type": "main", "index": 0 }]
+    ]},
+    "Insert Checklist": { "main": [[{ "node": "Respond 201", "type": "main", "index": 0 }]] }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner"
+  }
+}

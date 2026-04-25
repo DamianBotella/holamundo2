@@ -223,11 +223,9 @@ Sistema multiagente para estudios de arquitectura técnica especializados en **r
 - **Función.** Orquesta la conversación con los gremios hasta obtener presupuestos estructurados comparables.
 - **Beneficio.** El arquitecto recibe un comparativo listo en vez de coordinar conversaciones paralelas. Los gremios responden cuando pueden, el sistema reencuadra y espera.
 
-### 3.3 Gestión de licencias y trámites municipales — `agent_permit_tracker`
-- **Laguna real.** Presentar expediente en ayuntamiento es el inicio; seguir su estado (requerimientos, subsanaciones, plazos) es un tema paralelo que depende de sedes electrónicas cada una distinta.
-- **Técnica.** Tabla `permit_applications` con `expediente_id`, `entity`, `submitted_at`, `status_url`. Cron diario que hace scraping (o consulta vía API si existe) a la sede electrónica del ayuntamiento, detecta cambio de estado, notifica. Integración con firma electrónica (Autofirma / FNMT) para presentar subsanaciones.
-- **Función.** Monitoriza cada expediente ante administración hasta su resolución. Recoge requerimientos automáticamente.
-- **Beneficio.** Cierra una de las mayores fuentes de retraso y ansiedad del arquitecto técnico. La obra puede empezar antes porque ningún requerimiento queda sin ver durante días.
+### 3.3 ~~Gestión de licencias y trámites municipales~~ — ✅ MVP CONSTRUIDO (2026-04-25)
+- **Construido (fase 1)**: Tabla `permit_applications` + `permit_status_history`. Workflows `permit_register` (`4d4Js8Y5fuZI4W9Q`), `permit_update_status` (`QGiZjzrCeRcxWjqj`), `cron_permit_review` (`0LK6VrMq5lHOFJaL`, diario 09:00). Hook automático: `regulatory_tasks` confirmadas con task_type elegible auto-crean permit. Email HTML diario con tabla por prioridad (overdue / due_soon / stale_check / normal). Documentación en `knowledge/agent_permit_tracker.md`.
+- **Pendiente (fase 2)**: Scraping/consulta automática a sedes electrónicas municipales (cada ayuntamiento es distinto — empezar por Madrid). Integración Autofirma/FNMT para presentar subsanaciones.
 
 ### 3.4 Portal cliente + chatbot dedicado — `agent_client_concierge`
 - **Laguna real.** Durante obra, el cliente tiene dudas constantes (plazo, coste extra, cambios menores). Cada pregunta interrumpe al arquitecto.

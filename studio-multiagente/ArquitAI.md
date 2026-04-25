@@ -217,9 +217,8 @@ Sistema multiagente para estudios de arquitectura técnica especializados en **r
 
 ### 3.2 Coordinación automatizada con gremios — `agent_trade_comms`
 - **Laguna real.** `agent_trades` prepara el encargo, pero el envío, re-cotizaciones, respuestas y recordatorios son llamadas y WhatsApps manuales. Horas a la semana.
-- **Técnica.** Envío de encargos vía Evolution API (WhatsApp) o email al gremio, con botones estructurados ("Aceptar", "Contra-oferta", "Solicitar visita"). Parser de respuestas alimenta `trade_quotes` con `amount`, `schedule`, `conditions`. Re-envío automático si no hay respuesta en plazo definido.
-- **Función.** Orquesta la conversación con los gremios hasta obtener presupuestos estructurados comparables.
-- **Beneficio.** El arquitecto recibe un comparativo listo en vez de coordinar conversaciones paralelas. Los gremios responden cuando pueden, el sistema reencuadra y espera.
+- **Construido (fase 1, email MVP, 2026-04-25)**: tabla `trade_quotes` (20 cols, migración 013). Workflows `trade_quote_request` (`C8LmBilsqMTGNFut`, envía email al gremio con webhook_token único + reply_url), `trade_quote_reply` (`NmZApRC3Oj7nkRIS`, sin auth pero validado por token, el gremio responde via formulario). Email automático a Damián al recibir respuesta. Documentado en `knowledge/agent_trade_comms.md`.
+- **Pendiente (fase 2)**: cron `expired` para solicitudes sin respuesta > N días; re-envío automático; aceptación que genere `trade_request`; canal WhatsApp via Evolution API; OCR de presupuestos PDF adjuntos.
 
 ### 3.3 ~~Gestión de licencias y trámites municipales~~ — ✅ MVP CONSTRUIDO (2026-04-25)
 - **Construido (fase 1)**: Tabla `permit_applications` + `permit_status_history`. Workflows `permit_register` (`4d4Js8Y5fuZI4W9Q`), `permit_update_status` (`QGiZjzrCeRcxWjqj`), `cron_permit_review` (`0LK6VrMq5lHOFJaL`, diario 09:00). Hook automático: `regulatory_tasks` confirmadas con task_type elegible auto-crean permit. Email HTML diario con tabla por prioridad (overdue / due_soon / stale_check / normal). Documentación en `knowledge/agent_permit_tracker.md`.
@@ -235,11 +234,9 @@ Sistema multiagente para estudios de arquitectura técnica especializados en **r
 - **Construido (fase 1)**: tablas `invoices` + `certifications` (migración 012). 4 workflows: `agent_financial_tracker` (`LEspjLl6VEHPclPG`, OCR de facturas con Vision), `cron_financial_review` (`eg57HYIXCfcTbj7F`, lunes 08:00, email tabla coloreada con desviación crítica/desvío/OK), `certification_register` (`eJhIqyn6AxnNmpeS`, registra certificaciones parciales calculando importe desde cost_estimate × percentage), `certification_payment` (`UDrKZWsbKDPXVSBX`, suma pagos parciales y marca paid/partially_paid). Documentado en `knowledge/agent_financial_tracker.md`.
 - **Pendiente (fase 2)**: aprobación de facturas por email con webhook_token (mismo patrón que `agent_briefing`); hook desde `agent_costs` que pre-genere plantilla de hitos de certificación; OCR de extractos bancarios para reconciliar pagos automáticamente; alerta separada cuando margen actual < 0.
 
-### 3.6 Postventa y garantías — `agent_aftercare`
-- **Laguna real.** Una vez entregada la obra, aparecen incidencias (LOE 1 año acabados / 3 años habitabilidad / 10 años estructura). Canalizarlas a los gremios responsables y registrarlas para la defensa ante reclamaciones es trabajo invisible.
-- **Técnica.** Endpoint de entrada para incidencias (del cliente, con fotos). Clasificación por LLM en `category` (acabado/habitabilidad/estructura) + `responsible_trade`. Tabla `aftercare_incidents` con SLA por tipo. Re-uso de `agent_trade_comms` para enviar el aviso al gremio responsable bajo garantía.
-- **Función.** Enruta incidencias post-entrega al gremio correcto con evidencia documentada.
-- **Beneficio.** Cumple LOE sin pérdidas administrativas. Reduce fricción con cliente tras entrega.
+### 3.6 ~~Postventa y garantías~~ — ✅ MVP CONSTRUIDO (2026-04-25)
+- **Construido (fase 1)**: `aftercare_incidents` (30 cols) + `projects.handover_date` (migración 013). Workflows `aftercare_submit` (`GkcU8G1y3gFOeZp9`, Vision clasifica category/trade/severity/loe_period/under_warranty desde foto+texto), `aftercare_assign_resolve` (`xdkQuIdOwLZw68sK`, dos webhooks en uno), `cron_aftercare_review` (`hcXJyJB8hqevVxW2`, diario 09:30 con urgency_score). Documentado en `knowledge/agent_aftercare.md`.
+- **Pendiente (fase 2)**: endpoint público para clientes (link mágico por proyecto sin API key); auto-asignación según mapa trade→contacto preferente; SLA breach detection con escalado; comparación visual evidencia inicial vs final con Vision.
 
 ### 3.7 ~~Plan de seguridad y salud~~ — ✅ CONSTRUIDO (2026-04-25)
 **Movido a sección 1.2 como `agent_safety_plan` operativo.**

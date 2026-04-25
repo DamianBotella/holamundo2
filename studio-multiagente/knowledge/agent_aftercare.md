@@ -52,12 +52,23 @@ Coste: ~$0.005-0.012 por incidencia.
 ### `aftercare_assign_resolve` — asignar + resolver (mismo workflow, 2 webhooks)
 
 **`POST /webhook/aftercare-assign`** con `X-API-Key`.
-- Body: `{ incident_id, assigned_to, notes? }`.
+- Body: `{ incident_id, assigned_to, notify_email_to?, notes? }`.
 - Marca status `assigned`, registra `assigned_at` y `assigned_to`.
+- **Notificación automática al gremio (2026-04-25)**: si el `assigned_to` contiene un email entre `<...>` (formato `Pepe Gremio <pepe@email.com>`) o se pasa `notify_email_to` explícito, el workflow envía un email al gremio con la incidencia: severity, badge garantía LOE, descripción del cliente, análisis Vision, acción recomendada, fotos enlazadas. CC a Damián. Response incluye `gremio_notified: true|false` para confirmar.
 
 **`POST /webhook/aftercare-resolve`** con `X-API-Key`.
 - Body: `{ incident_id, resolution_notes, evidence_urls?, status?:'closed' }`.
 - Marca status `resolved` (o `closed` si se pasa explícito), registra `resolved_at` y `resolved_evidence` (array de URLs).
+
+### `cron_aftercare_followup` — incidencias asignadas sin avance (2026-04-25)
+
+- **ID**: `rO1sOgzJ3WYvuLLG`. Activo.
+- **Schedule**: diario 10:00 + manual `POST /webhook/trigger-aftercare-followup`.
+- Detecta incidencias con `status='assigned'` y `assigned_at < now() - 4 days`.
+- Email tabla a Damián con: severity badge, proyecto/categoría, gremio asignado, días sin avanzar, descripción.
+- Si no hay stuck: silent noOp.
+
+Útil cuando el gremio recibió la asignación pero nunca pasó el incidente a `in_progress` ni `resolved`. Damián decide si volver a contactar al gremio o reasignar.
 
 ### `cron_aftercare_review` — alertas diarias
 

@@ -55,6 +55,7 @@ Sistema multiagente para estudios de arquitectura técnica especializados en **r
 | 10 | agent_memory | `gLxmy7M0UmC7Yzye` | planning_done | — |
 | 11 | agent_normativa_refresh | `0Cyeaa85uLS7c8EE` | manual / scheduled | — |
 | 12 | agent_safety_plan | `yRaR3V0j61R1g1jZ` | bajo demanda (post-trades_done) | — |
+| 13 | agent_accessibility | `s7ctmUsITOWK7cRT` | bajo demanda (post-design_done) | — |
 
 #### 1.2.1 `agent_briefing`
 - **Técnica.** Carga project + client, prompt del agente desde `agent_prompts`, `util_llm_call`, parse con fallback, detect scope creep (hash djb2 sobre rooms_affected + constraints + budget), Draft/Commit en tabla `briefings`, email de aprobación, Wait webhook, update según decisión, `Write Intelligence` + `Update Project Hash`.
@@ -115,7 +116,14 @@ Sistema multiagente para estudios de arquitectura técnica especializados en **r
 - **Requisito operativo.** Google Docs API habilitada en el proyecto GCP del usuario. Si la API no está activa, contenido se guarda en `safety_plans.content_json` pero el Doc en Drive queda vacío (continueOnFail). Resuelto el 2026-04-25 activando la API.
 - **Detalle técnico.** El insertado de contenido en el Doc se hace con HTTP Request directo a `docs.googleapis.com/v1/documents/{id}:batchUpdate` (insertText con `index: 1`) en lugar del nodo Google Docs de n8n, que daba "Bad Request" por incompatibilidad de schema interno.
 
-#### 1.2.12 `agent_normativa_refresh`
+#### 1.2.12 `agent_accessibility`
+- **Técnica.** Workflow `s7ctmUsITOWK7cRT` (11 nodos). Lee briefing + design_option seleccionado + datos del proyecto. Llama a `util_llm_call` con prompt enriquecido (DB-SUA 9 + Orden VIV/561/2010 + parámetros por estancia: anchos, alturas, resbaladicidad, mecanismos). Parsea JSON, INSERT en `accessibility_audits` con compliance_issues + recommendations + commercial_argumentation. Write Intelligence en `project_intelligence` para que otros agentes consulten.
+- **Función.** Detecta automáticamente si DB-SUA 9 aplica obligatoriamente al proyecto y, en cualquier caso, audita parámetros relevantes (anchos puerta ≥80cm, pasillo ≥100cm, solado baño clase 2, espacio maniobra Ø120cm, altura mecanismos 80-120cm, vidrio templado/laminar en mampara). Genera lista de issues con severidad + opciones de corrección + argumentación comercial en lenguaje cliente.
+- **Beneficio.** (a) Detectar incumplimientos ANTES de ejecutar carpinterías evita rehacer puertas y baños. (b) Argumentación comercial lista para que el arquitecto venda mejoras de accesibilidad como buenas prácticas (revaloriza inmueble, futuro-proof). (c) En proyectos de cambio de uso (local→vivienda, turístico) detección automática de aplicabilidad obligatoria.
+- **Tabla**: `accessibility_audits` (migración 005) con `applies_to_project`, `overall_compliance`, `compliance_issues[]`, `recommendations[]`, `commercial_argumentation`.
+- **Test E2E 2026-04-25**: proyecto `1dc2b176` — devolvió `applies_to_project: false` (correcto, piso individual privado), 5 recomendaciones (3 "comercial" + 2 "recomendado") + commercial_argumentation usable directamente con el cliente.
+
+#### 1.2.13 `agent_normativa_refresh`
 - **Técnica.** Loop por cada fuente en `normativa_sources`. `util_normativa_fetch` → LLM parse → hash djb2 del contenido → compara con `content_hash` previo → detecta cambios → actualiza `normativa_knowledge` → si hay cambios, marca `regulatory_tasks.status = 'requires_review'` en proyectos activos + email de alerta.
 - **Función.** Cache warmer que detecta cuándo una fuente oficial (CTE, PGOU, ordenanza) ha cambiado desde la última lectura.
 - **Beneficio.** La normativa no es estática — este agente evita que un trámite se gestione con una versión obsoleta y se lo comunica al arquitecto con la lista exacta de proyectos afectados.
@@ -257,11 +265,8 @@ Sistema multiagente para estudios de arquitectura técnica especializados en **r
 - **Función.** Pre-evaluación energética viva durante el diseño, no certificación forense al final.
 - **Beneficio.** Decisiones de diseño (aislamiento, ventanas, orientación) se toman viendo el impacto energético al momento. Evita el rework de "casi certificado, falta subir aislamiento".
 
-### 3.11 Validación de accesibilidad — `agent_accessibility`
-- **Laguna real.** DB-SUA del CTE + normativa autonómica de accesibilidad tienen decenas de parámetros geométricos (anchos de paso, radios de giro, alturas de mobiliario, pendientes) que deberían validarse contra el diseño.
-- **Técnica.** Agente que recibe rooms_layout + dimensiones + tipo de reforma. Verifica checklist DB-SUA 1/2/9 aplicable (no todo lo es en reforma). Si el diseño no cumple → `compliance_issues[]` con referencia normativa + sugerencia de corrección.
-- **Función.** Auditor de accesibilidad automático sobre la opción de diseño antes de propuesta.
-- **Beneficio.** Evita reformas que incumplen accesibilidad y requieren rehacer carpinterías o baños.
+### 3.11 ~~`agent_accessibility`~~ — ✅ CONSTRUIDO (2026-04-25)
+**Movido a sección 1.2.12 como agente operativo.**
 
 ### 3.12 Integración BIM profesional — `agent_bim_sync`
 - **Laguna real.** Muchos estudios trabajan en Revit o ArchiCAD, no SketchUp. El modelo BIM contiene mucha información que ArquitAI podría aprovechar (y viceversa).

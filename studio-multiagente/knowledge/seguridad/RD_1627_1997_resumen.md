@@ -225,6 +225,22 @@ CREATE TABLE safety_plans (
 
 ## Limitaciones conocidas
 
-1. **Google Docs API debe estar habilitada** en el proyecto GCP del usuario. Si no lo está, el `Insert Doc Body` falla pero el contenido se guarda igualmente en `safety_plans.content_json` (la fuente canónica). Para activarla: console.developers.google.com/apis/api/docs.googleapis.com/overview.
+1. **Google Docs API debe estar habilitada** en el proyecto GCP del usuario. Si no lo está, el `Insert Doc Body HTTP` falla pero el contenido se guarda igualmente en `safety_plans.content_json` (la fuente canónica). Para activarla: console.developers.google.com/apis/api/docs.googleapis.com/overview. Activada en este entorno el 2026-04-25.
 2. **Edificios pre-2002**: el agente recomienda evaluación de amianto pero no la ejecuta. La retirada requiere **empresa RERA autorizada** y proceso administrativo independiente.
 3. **El documento se genera pero NO se firma automáticamente**. El CSS designado debe revisar, completar campos específicos del proyecto (ubicación exacta del botiquín, hospital más cercano, etc.) y firmar.
+
+## Nota técnica de implementación
+
+El nodo `Google Docs` de n8n con operación `update` daba consistentemente "Bad request" pese a pasar la validación de configuración. Solución aplicada: reemplazar el nodo por un `HTTP Request` directo a la API de Google Docs:
+
+```
+POST https://docs.googleapis.com/v1/documents/{documentId}:batchUpdate
+Auth: googleDocsOAuth2Api
+Body: {
+  "requests": [
+    { "insertText": { "location": { "index": 1 }, "text": "<contenido>" } }
+  ]
+}
+```
+
+La credencial OAuth2 se reutiliza desde `googleDocsOAuth2Api` (ID `6NK9u2hvm1UUdoVu`).

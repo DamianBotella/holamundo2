@@ -4,12 +4,16 @@
 
 - **Migracion 018** aplicada: tabla `qc_checks` (13 cols) + trigger `qc_checks_touch` que recalcula status segun items.
 - **Migracion 018b** aplicada: hook `pathology_findings -> regulatory_tasks` (auto-crea tarea normativa al detectar patologia con severity >= medium).
-- **2 workflows construidos y activos**:
+- **Migracion 020** aplicada (2026-04-26): hook `qc_recepcion_provisional COMPLETE -> projects.handover_date`. Trigger `qc_set_handover_date_trg` rellena automaticamente la fecha de entrega cuando el checklist de recepcion provisional pasa a complete (sin pisar valor previo).
+- **3 workflows construidos y activos**:
   - `qc_generate` (`ge3Do1cEeSDuCtzk`): genera checklist desde template embebido por fase.
   - `qc_complete` (`JTPN78VZtz8i0ZwB`): actualiza un item individual y deja que el trigger recalcule el estado del checklist.
-- **Verificacion E2E (2026-04-25)**:
+  - `cron_qc_review` (`beICCi9A5WYU5w45`): diario 09:15 + manual `POST /webhook/trigger-qc-review`. Detecta checklists stuck (`blocked > 3 dias` o `open/in_progress > 7 dias`) y envia email con tabla coloreada. Si nada stuck: silent noOp.
+- **Verificacion E2E (2026-04-25 + 2026-04-26)**:
   - Hook patologia: insertar `aluminosis severity=high` -> auto-crea `regulatory_tasks` con priority='critico', entity='Laboratorio de ensayos acreditado', task_type='informe_tecnico'.
   - QC: generar checklist `demolicion` (5 items) -> pass d1 -> `in_progress` -> fail d3 -> `blocked` -> pass d2/d4/d5 + skip d3 -> `complete`.
+  - Hook handover: checklist `recepcion_provisional` con 5 items pass -> trigger touch pasa a complete + completed_at -> trigger handover pone `projects.handover_date='2026-04-25'`.
+  - cron_qc_review: backdated INSERT (10d antiguo, 1pass/1fail/1pending) -> cron detecta, email enviado con detalles, fail_items listados.
 
 ## Por que importa
 
@@ -145,9 +149,9 @@ Con esta entrega:
 
 1. **Templates configurables en BD**: hoy los items por fase viven en el JSCode del workflow. Mover a tabla `qc_templates` permitiria que Damian edite items sin tocar el workflow (y versionar mejor).
 2. **Subida de foto integrada**: hoy el arquitecto pega una URL en `evidence_url`. Idealmente: subida directa a Drive desde un form web (similar a aftercare_public_form).
-3. **Vinculacion con orquestador**: cuando `phase_key='recepcion_provisional'` queda `complete`, marcar `projects.handover_date = now()` y avanzar `current_phase`.
+3. ~~**Vinculacion handover_date**~~ ✅ Hecho 2026-04-26 con trigger `qc_set_handover_date_trg` (migration 020). Pendiente: avanzar `projects.current_phase` automaticamente al cerrar recepcion_provisional (requiere decidir target phase: 'completed'? 'archived'?).
 4. **Checklist como informe PDF**: al cerrar `complete`, generar un PDF con todos los items + evidencias adjuntas (Google Doc -> PDF, similar al patron de `proposal_pdf`).
-5. **Cron de checklists abiertas**: alerta diaria de checklists `in_progress` con > 14 dias sin avanzar.
+5. ~~**Cron de checklists abiertas**~~ ✅ Hecho 2026-04-26 con `cron_qc_review` (umbral blocked>3d, open/in_progress>7d).
 6. **Auto-generacion al avanzar fase**: cuando el orquestador entra en una fase, generar automaticamente la checklist correspondiente (sin que Damian tenga que llamar al endpoint).
 
 ## Espacio para Damian

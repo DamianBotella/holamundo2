@@ -231,11 +231,9 @@ Sistema multiagente para estudios de arquitectura técnica especializados en **r
 - **Función.** Filtro inteligente entre cliente y arquitecto. Responde al 70 % de las preguntas con datos del proyecto; el 30 % se escala con contexto ya resumido.
 - **Beneficio.** El arquitecto atiende solo lo que merece atención profesional; el cliente siente seguimiento 24/7.
 
-### 3.5 Control financiero de obra — `agent_financial_tracker`
-- **Laguna real.** `agent_costs` estima. Durante la obra se emiten certificaciones parciales, llegan facturas, se aprueban extras. Llevar el control en Excel es donde se pierde margen y aparecen sorpresas.
-- **Técnica.** Tabla `certifications` con `partida_id`, `expected_amount`, `certified_amount`, `invoice_url`, `paid_at`. Agente que concilia facturas (OCR vía Claude Vision) con partidas del presupuesto, detecta desviaciones y genera informe de liquidez por proyecto.
-- **Función.** Reconcilia presupuesto ↔ certificación ↔ facturación ↔ pagos.
-- **Beneficio.** El arquitecto sabe en cualquier momento la desviación económica real (no la estimada) y puede anticipar certificaciones al cliente.
+### 3.5 ~~Control financiero de obra~~ — ✅ MVP CONSTRUIDO (2026-04-25)
+- **Construido (fase 1)**: tablas `invoices` + `certifications` (migración 012). 4 workflows: `agent_financial_tracker` (`LEspjLl6VEHPclPG`, OCR de facturas con Vision), `cron_financial_review` (`eg57HYIXCfcTbj7F`, lunes 08:00, email tabla coloreada con desviación crítica/desvío/OK), `certification_register` (`eJhIqyn6AxnNmpeS`, registra certificaciones parciales calculando importe desde cost_estimate × percentage), `certification_payment` (`UDrKZWsbKDPXVSBX`, suma pagos parciales y marca paid/partially_paid). Documentado en `knowledge/agent_financial_tracker.md`.
+- **Pendiente (fase 2)**: aprobación de facturas por email con webhook_token (mismo patrón que `agent_briefing`); hook desde `agent_costs` que pre-genere plantilla de hitos de certificación; OCR de extractos bancarios para reconciliar pagos automáticamente; alerta separada cuando margen actual < 0.
 
 ### 3.6 Postventa y garantías — `agent_aftercare`
 - **Laguna real.** Una vez entregada la obra, aparecen incidencias (LOE 1 año acabados / 3 años habitabilidad / 10 años estructura). Canalizarlas a los gremios responsables y registrarlas para la defensa ante reclamaciones es trabajo invisible.

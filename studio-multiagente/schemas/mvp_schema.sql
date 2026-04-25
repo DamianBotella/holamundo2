@@ -760,6 +760,22 @@ CREATE TABLE IF NOT EXISTS accessibility_audits (
 CREATE INDEX IF NOT EXISTS idx_accessibility_audits_project ON accessibility_audits (project_id);
 
 -- ============================================================
+-- BLOQUE: pgvector + embeddings (migración 006)
+-- Búsqueda semántica de casos similares en memory_cases
+-- ============================================================
+
+CREATE EXTENSION IF NOT EXISTS vector;
+
+ALTER TABLE memory_cases
+  ADD COLUMN IF NOT EXISTS embedding      vector(1536),
+  ADD COLUMN IF NOT EXISTS embedding_text text;
+
+CREATE INDEX IF NOT EXISTS idx_memory_cases_embedding
+  ON memory_cases
+  USING ivfflat (embedding vector_cosine_ops)
+  WITH (lists = 50);
+
+-- ============================================================
 -- VERIFICACIÓN
 -- ============================================================
 -- Ejecutar después de crear todo para verificar:

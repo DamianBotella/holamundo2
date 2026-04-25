@@ -141,6 +141,8 @@ Sistema multiagente para estudios de arquitectura técnica especializados en **r
 | `util_architect_presence` | `1WLpSzgcitGJoaoZ` | Toggle online/offline del arquitecto | Las consultas acumuladas se envían en un email al desconectar |
 | `util_normativa_fetch` | `4a03tQ7Q5nmtBpnI` | Fetch live de fuentes oficiales vía Jina AI Reader | Citas verificables en cada trámite regulatorio |
 | `util_price_search` | `PsKCThwfby9t9Zfz` | Búsqueda de precios en web (Leroy Merlin) | Precios reales en material_items (post-MVP) |
+| `util_generate_embedding` | `xZaguYuuTG0mXSf2` | Wrapper a OpenAI text-embedding-3-small (1536 dim) | Memoria semántica entre proyectos |
+| `util_search_similar_cases` | `U9U5GPfuWi7DI4TW` | Similarity search (pgvector cosine) sobre memory_cases | agent_briefing inyecta casos similares automáticamente |
 | `error_handler` | `qfQWaGSpyjgdeFt5` | Captura de errores globales | Visibilidad de fallos en producción |
 
 ---
@@ -253,11 +255,8 @@ Sistema multiagente para estudios de arquitectura técnica especializados en **r
 - **Función.** Convierte cada visita a obra en una inspección estructurada con trazabilidad.
 - **Beneficio.** Menos vicios ocultos, defensa documentada ante reclamaciones, trazabilidad para el seguro de RC profesional.
 
-### 3.9 Análisis predictivo entre proyectos — `agent_memory_v2`
-- **Laguna real.** `agent_memory` almacena lessons, pero no las usa estadísticamente. Un nuevo proyecto en el mismo barrio, de área parecida, podría ver "tus últimos 8 proyectos similares tardaron X±Y semanas y costaron Z±W €/m²".
-- **Técnica.** Embeddings sobre `memory_cases.summary + tags`. Al iniciar un proyecto, similarity search contra histórico; `project_intelligence` entry con predicciones de duración, coste, riesgos top-5 y gremios problemáticos históricos.
-- **Función.** Transforma memoria pasiva (almacén de lecciones) en memoria predictiva (estimaciones con rango e intervalo de confianza).
-- **Beneficio.** El arquitecto propone plazos y presupuestos con respaldo estadístico propio, no intuición.
+### 3.9 ~~`agent_memory_v2`~~ — ✅ CONSTRUIDO (2026-04-25)
+**Movido a sección 1.3 — pgvector + similarity search integrado en `agent_memory` (genera embedding al guardar case) y `agent_briefing` (busca casos similares al iniciar). Ver `knowledge/memoria/sistema_memoria_v2.md`.**
 
 ### 3.10 Simulación energética y huella de carbono — `agent_energy_assessor`
 - **Laguna real.** El CEE (Certificado de Eficiencia Energética) y la huella de carbono son cada vez más exigidos pero se hacen con software desconectado (CE3X, CYPETherm) al final del proyecto.

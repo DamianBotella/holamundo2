@@ -130,7 +130,7 @@ ORDER BY request_sent_at;
 
 ## Próximas iteraciones
 
-1. **Cron expiry**: si una solicitud lleva > N días sin respuesta, marcar `expired` y notificar.
+1. ~~**Cron expiry**: si una solicitud lleva > N días sin respuesta, marcar `expired` y notificar.~~ ✅ **CONSTRUIDO 2026-04-25** — `cron_quote_expiry` (`naRs3Zge1i3VFxCS`, diario 07:00 + manual `/webhook/trigger-quote-expiry`). Marca como `expired` los quotes con `status='requested'` y `request_sent_at < now() - 21d`. Email a Damián con tabla de los expirados. Si no hay expirados: silent noOp.
 2. **Re-envío automático**: si `expired`, ofrecer re-enviar al mismo gremio o disparar a otro.
 3. **Aceptación de presupuesto**: workflow `trade_quote_accept` que pase status a `accepted` y, opcionalmente, cree el correspondiente `trade_request`.
 4. **WhatsApp via Evolution API**: misma tabla, mismo token, canal diferente para envío + reply.

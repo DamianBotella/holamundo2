@@ -78,6 +78,21 @@ WHERE current_phase NOT IN ('completed','archived')
 ORDER BY dias_fase DESC;
 ```
 
+## Ampliación 2026-04-25 — pathology + aftercare + anomalies
+
+Tras construir agentes nuevos, el resumen integra ahora estas señales adicionales por proyecto activo:
+
+- `pathologies_open` / `pathologies_critical` (severity high/critical, status no terminal)
+- `aftercare_open` / `aftercare_urgent` (status no terminal)
+- `anomalies_new` / `anomalies_critical` (status='new', severity high/critical)
+
+Y el `flag_score` se incrementa por:
+- patologías críticas (×4)
+- aftercare urgentes (×5)
+- anomalías críticas (×3)
+
+Las flags aparecen en la columna "Alertas" coloreadas en rojo cuando hay críticas, o en gris si solo son normales.
+
 ## Próximas iteraciones
 
 1. **Detalle por proyecto en clic**: link en cada fila a una vista UI cuando exista portal web.

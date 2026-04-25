@@ -117,7 +117,15 @@ ORDER BY
                 WHEN 'medium' THEN 2 ELSE 3 END;
 ```
 
-## Hook con `agent_briefing` (no aplicado, listo para activar)
+## Hooks con otros agentes
+
+### ✅ `agent_costs` (APLICADO 2026-04-25)
+
+`agent_costs` ahora carga las patologías abiertas del proyecto en un nodo `Load Pathology Findings` y las pasa al prompt del LLM. El prompt incluye un bloque `PATOLOGIAS DETECTADAS EN INSPECCION PREVIA` con tipo, severity, ubicación, descripción, acción recomendada y rango de coste estimado, e instruye al LLM a sumar `cost_min` de las patologías high/critical como una partida explícita en el breakdown y a mencionarlas en `risk_notes`.
+
+Resultado: las patologías detectadas en visita previa entran automáticamente al presupuesto comercial del cliente, sin que el arquitecto tenga que copiarlas manualmente.
+
+### Hook con `agent_briefing` (no aplicado, listo para activar)
 
 `agent_briefing.Load Project + Client` puede sumar las patologías detectadas para que el LLM las tenga en cuenta al construir el briefing. Modificación SQL pendiente:
 

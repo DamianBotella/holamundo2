@@ -211,11 +211,9 @@ Sistema multiagente para estudios de arquitectura técnica especializados en **r
 
 ## 3. Nuevas oportunidades — lagunas del oficio
 
-### 3.1 Seguimiento de obra en tiempo real — `agent_site_monitor`
-- **Laguna real.** El plan de obra se genera en `agent_planner` pero nadie compara plan vs. ejecución. Los retrasos se descubren en la siguiente visita a obra, a veces con semanas de diferencia.
-- **Técnica.** Webhook de entrada para fotos/mensajes del jefe de obra (vía Telegram o WhatsApp con Evolution API). Vision LLM analiza las fotos contra el plan: fase declarada, avance visible, discrepancias. Escribe en tabla `site_reports` con `progress_pct`, `deviations[]`, `issues_detected[]`. Si detecta desviación > umbral → `util_consultation` con nivel `decision`.
-- **Función.** Comparar lo que declara el jefe de obra + lo que muestran las fotos contra la fase del `project_plan` y los hitos programados.
-- **Beneficio.** El arquitecto detecta retrasos en 24 h, no en la próxima visita. Evidencia fotográfica automática queda trazada para reclamaciones/actas.
+### 3.1 ~~Seguimiento de obra en tiempo real~~ — ✅ MVP CONSTRUIDO (2026-04-25)
+- **Construido (fase 1)**: tabla `site_reports` (migración 011) + workflow `agent_site_monitor` (`DPy3FBugAbWP10BD`). Endpoint `POST /webhook/site-report` recibe `{project_id, photo_url|photo_urls[], observations?, expected_phase?}` con auth. Llama a OpenAI vision (`gpt-4o`) con la imagen + plan + design seleccionado. Devuelve detected_phase, progress_pct, deviations[], issues_detected[]. Si flagged (severity high o ≥3 issues) → email HTML automático a Damián. ~$0.005-0.012 por reporte.
+- **Pendiente (fase 2)**: Gmail trigger para auto-procesar emails con asunto `[obra <project>]`; WhatsApp via Evolution API; cron semanal de resumen agregado por proyecto; comparación temporal entre reportes de la misma fase.
 
 ### 3.2 Coordinación automatizada con gremios — `agent_trade_comms`
 - **Laguna real.** `agent_trades` prepara el encargo, pero el envío, re-cotizaciones, respuestas y recordatorios son llamadas y WhatsApps manuales. Horas a la semana.

@@ -125,9 +125,13 @@ ORDER BY
 
 Resultado: las patologías detectadas en visita previa entran automáticamente al presupuesto comercial del cliente, sin que el arquitecto tenga que copiarlas manualmente.
 
-### Hook con `agent_briefing` (no aplicado, listo para activar)
+### ✅ Hook con `agent_briefing` (APLICADO 2026-04-25)
 
-`agent_briefing.Load Project + Client` puede sumar las patologías detectadas para que el LLM las tenga en cuenta al construir el briefing. Modificación SQL pendiente:
+`agent_briefing.Load Project + Client` ahora añade `pathology_findings` al SELECT (jsonb agg con type/severity/description/affects_safety/recommended_action/cost_min/cost_max). El nodo `Prepare LLM Payload` incluye un bloque `PATOLOGIAS DETECTADAS POR agent_pathology` en el userPrompt justo después de las observaciones técnicas del arquitecto. El LLM razona sobre las patologías al generar `constraints`, `objectives`, `missing_info` y `open_questions` del briefing.
+
+Resultado: si el arquitecto sube fotos de la visita previa antes del briefing, las patologías detectadas pasan automáticamente al briefing como contexto técnico.
+
+### Hook con `agent_briefing` — SQL aplicado
 
 ```sql
 -- En agent_briefing.Load Project + Client, añadir al SELECT principal:

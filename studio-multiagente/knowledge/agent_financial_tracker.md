@@ -161,9 +161,27 @@ WHERE llm_cost IS NOT NULL
 GROUP BY 1 ORDER BY 1 DESC;
 ```
 
+## ✅ Aprobación por email (CONSTRUIDA 2026-04-25)
+
+**Migración 016** añadió `invoices.webhook_token` (auto-generado por defecto). El flujo `agent_financial_tracker` ahora envía un email HTML tras el OCR con:
+- Tabla con todos los campos detectados (proveedor, NIF, número, fecha, base, IVA, total, categoría, gremio).
+- Badge coloreado de confianza OCR (high/medium/low).
+- Enlace a la foto/PDF original.
+- 3 botones: ✓ **Aprobar** (verde), ⚠ **Disputar** (ámbar), ✗ **Rechazar** (rojo).
+
+Cada botón apunta a `GET /webhook/invoice-decision?id=<uuid>&token=<token>&decision=approved|disputed|rejected` (workflow `invoice_decision` ID `NwvzKfuYrfImMUi4`).
+
+El workflow `invoice_decision`:
+- Valida que `decision ∈ {approved, disputed, rejected}` → 400 si no.
+- UPDATE `invoices` matching `id + webhook_token` (404 si no coincide).
+- Si `decision='approved'` → marca `approved_by='damian'` + `approved_at=now()`.
+- Devuelve **HTML** legible al navegador del clic (no JSON), con el resultado coloreado.
+
+E2E verificado 2026-04-25: approve OK con HTML verde, decision inválida → 400, token bad → 404.
+
 ## Próximas iteraciones
 
-1. **Aprobación por email**: tras OCR, mandar email con preview + botones aprobar/disputar/rechazar (mismo patrón que `agent_briefing` con webhook_token).
+1. ~~Aprobación por email~~ ✅ construida.
 2. **Hook desde `agent_costs`**: al confirmar el cost_estimate, generar plantilla de certificaciones esperadas (3-4 hitos típicos).
 3. **OCR de extractos bancarios**: cargar movimientos bancarios y reconciliar pagos automáticamente con `certifications.payment_reference`.
 4. **Predicción de fin de obra**: cruzar progress_pct de `site_reports` con % facturado para detectar parones financieros antes de que se queden sin liquidez.

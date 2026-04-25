@@ -776,6 +776,42 @@ CREATE INDEX IF NOT EXISTS idx_memory_cases_embedding
   WITH (lists = 50);
 
 -- ============================================================
+-- BLOQUE: SEGURIDAD (migración 007)
+-- API key webhooks + RGPD compliance básico
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS system_config (
+  key         text PRIMARY KEY,
+  value       text NOT NULL,
+  description text,
+  updated_at  timestamptz DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS consent_records (
+  id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_id     uuid REFERENCES clients(id) ON DELETE CASCADE,
+  project_id    uuid REFERENCES projects(id) ON DELETE SET NULL,
+  consent_type  text NOT NULL
+                  CHECK (consent_type IN ('data_processing','marketing',
+                                          'project_sharing','third_party_communication')),
+  granted       boolean NOT NULL,
+  granted_at    timestamptz NOT NULL DEFAULT now(),
+  revoked_at    timestamptz,
+  source        text NOT NULL DEFAULT 'architect_intake'
+                  CHECK (source IN ('architect_intake','client_signed_form',
+                                    'phone_recorded','email_confirmation','other')),
+  evidence_text text,
+  evidence_url  text,
+  notes         text
+);
+
+CREATE INDEX IF NOT EXISTS idx_consent_records_client ON consent_records (client_id);
+
+ALTER TABLE proposals ADD COLUMN IF NOT EXISTS webhook_token text;
+
+-- Función anonymize_client(uuid) para "derecho al olvido" — ver migración 007.
+
+-- ============================================================
 -- VERIFICACIÓN
 -- ============================================================
 -- Ejecutar después de crear todo para verificar:

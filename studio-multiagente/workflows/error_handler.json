@@ -12,7 +12,7 @@
     {
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const error = $input.first().json;\n\n// n8n Error Trigger pasa los datos del error en esta estructura\nconst workflowName  = error.workflow?.name     || 'unknown_workflow';\nconst executionId   = error.execution?.id      || 'unknown_execution';\nconst errorMessage  = error.execution?.error?.message || error.error?.message || 'Error desconocido';\nconst errorNode     = error.execution?.lastNodeExecuted || 'unknown_node';\nconst timestamp     = new Date().toISOString();\n\n// Intentar extraer project_id del contexto de ejecución\nlet projectId = null;\ntry {\n  const execData = error.execution?.data?.resultData?.runData;\n  if (execData) {\n    // Buscar project_id en cualquier nodo que haya corrido\n    for (const nodeName of Object.keys(execData)) {\n      const nodeRuns = execData[nodeName];\n      if (nodeRuns && nodeRuns[0] && nodeRuns[0].data && nodeRuns[0].data.main) {\n        const items = nodeRuns[0].data.main[0];\n        if (items && items[0] && items[0].json && items[0].json.project_id) {\n          const pid = items[0].json.project_id;\n          // Validar formato UUID\n          if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(pid)) {\n            projectId = pid;\n            break;\n          }\n        }\n      }\n    }\n  }\n} catch(e) {\n  // Si no se puede extraer, project_id queda null\n}\n\n// Clasificar si es crítico\nconst criticalWorkflows = ['main_orchestrator', 'agent_proposal', 'agent_trades', 'init_new_project'];\nconst isCritical = criticalWorkflows.includes(workflowName);\n\nreturn [{\n  json: {\n    workflow_name:  workflowName,\n    execution_id:   executionId,\n    error_message:  errorMessage,\n    error_node:     errorNode,\n    project_id:     projectId,\n    is_critical:    isCritical,\n    timestamp:      timestamp,\n    error_summary:  `[${workflowName}] Nodo: ${errorNode} — ${errorMessage.substring(0, 300)}`\n  }\n}];"
+        "jsCode": "const error = $input.first().json;\n\nconst workflowName  = error.workflow?.name     || 'unknown_workflow';\nconst executionId   = error.execution?.id      || 'unknown_execution';\nconst errorMessage  = error.execution?.error?.message || error.error?.message || 'Error desconocido';\nconst errorNode     = error.execution?.lastNodeExecuted || 'unknown_node';\nconst timestamp     = new Date().toISOString();\n\nlet projectId = null;\ntry {\n  const execData = error.execution?.data?.resultData?.runData;\n  if (execData) {\n    for (const nodeName of Object.keys(execData)) {\n      const nodeRuns = execData[nodeName];\n      if (nodeRuns && nodeRuns[0] && nodeRuns[0].data && nodeRuns[0].data.main) {\n        const items = nodeRuns[0].data.main[0];\n        if (items && items[0] && items[0].json && items[0].json.project_id) {\n          const pid = items[0].json.project_id;\n          if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(pid)) {\n            projectId = pid;\n            break;\n          }\n        }\n      }\n    }\n  }\n} catch(e) {}\n\nconst criticalWorkflows = ['main_orchestrator', 'agent_proposal', 'agent_trades', 'init_new_project'];\nconst isCritical = criticalWorkflows.includes(workflowName);\n\n// Excluir workflows temporales/test/debug del envio de emails (siguen logueando)\nconst silentPattern = /(_TEMP$|^debug|^test_|TEMP|migration_)/i;\nconst isSilentWorkflow = silentPattern.test(workflowName);\n\nreturn [{\n  json: {\n    workflow_name:    workflowName,\n    execution_id:     executionId,\n    error_message:    errorMessage,\n    error_node:       errorNode,\n    project_id:       projectId,\n    is_critical:      isCritical,\n    is_silent:        isSilentWorkflow,\n    timestamp:        timestamp,\n    error_summary:    `[${workflowName}] Nodo: ${errorNode} — ${errorMessage.substring(0, 300)}`\n  }\n}];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -107,6 +107,49 @@
       "position": [1250, 440],
       "id": "c1d2e3f4-a5b6-4c7d-8e9f-000000000006",
       "name": "Send Error Notice"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT count(*) AS recent_count FROM activity_log WHERE agent_name = $1 AND action = 'workflow_error' AND created_at > now() - INTERVAL '60 minutes'",
+        "options": {
+          "queryReplacement": "={{ [ $('Extract Error Details').first().json.workflow_name ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "PLACEHOLDER", "name": "Postgres account" }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [870, 300],
+      "id": "eh-09",
+      "name": "Count Recent Same Error"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "version": 2, "leftValue": "", "caseSensitive": false, "typeValidation": "loose" },
+          "combinator": "and",
+          "conditions": [
+            { "id": "se1", "leftValue": "={{ $('Extract Error Details').first().json.is_silent }}", "rightValue": false, "operator": { "type": "boolean", "operation": "false", "singleValue": true } },
+            { "id": "se2", "leftValue": "={{ Number($json.recent_count) || 0 }}", "rightValue": 1, "operator": { "type": "number", "operation": "lte" } }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1110, 300],
+      "id": "eh-10",
+      "name": "Should Email?"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [1370, 600],
+      "id": "eh-11",
+      "name": "Suppressed"
     }
   ],
   "connections": {
@@ -122,7 +165,18 @@
     },
     "Log Error": {
       "main": [
-        [{ "node": "Critical Workflow?", "type": "main", "index": 0 }]
+        [{ "node": "Count Recent Same Error", "type": "main", "index": 0 }]
+      ]
+    },
+    "Count Recent Same Error": {
+      "main": [
+        [{ "node": "Should Email?", "type": "main", "index": 0 }]
+      ]
+    },
+    "Should Email?": {
+      "main": [
+        [{ "node": "Critical Workflow?", "type": "main", "index": 0 }],
+        [{ "node": "Suppressed",         "type": "main", "index": 0 }]
       ]
     },
     "Critical Workflow?": {

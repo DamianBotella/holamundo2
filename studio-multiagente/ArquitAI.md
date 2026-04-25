@@ -153,6 +153,7 @@ Sistema multiagente para estudios de arquitectura técnica especializados en **r
 |---|---|---|---|---|
 | `cron_project_review` | `AX05W4baMEfJokWN` | 6 h | Detecta proyectos huérfanos (sin avanzar > umbral por fase: intake=3d, costs/trades/proposal_done=5d, resto=7d, planning_done=14d) | Ningún proyecto se queda olvidado en una fase intermedia |
 | `cron_consultation_batch` | `4vyizezPgg3kr192` | 4 h | Re-notifica consultas pendientes si el arquitecto lleva >2 h offline | Seguridad contra olvidos del propio arquitecto |
+| `cron_post_phase_audits` | `UyfJNFuf17w2BmFU` | 30 min | Auto-trigger `agent_accessibility` para proyectos en fase ≥ design_done sin auditoría < 30 días, y `agent_safety_plan` para proyectos en fase ≥ approved sin EBSS < 60 días | Cumplimiento normativo automático sin intervención del arquitecto |
 
 ---
 

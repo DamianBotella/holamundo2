@@ -177,11 +177,19 @@ ON CONFLICT (id) DO NOTHING;
 
 Para un proyecto completo, repetir tabla por tabla en orden de FK: `clients` → `projects` → `briefings` → ... → `activity_log`.
 
-### Pendiente
+### Estado actualizado (2026-04-25)
 
-- **Limpieza de backups antiguos**: hoy se acumulan en Drive sin TTL. Añadir un nodo que liste backups > 90 días y los elimine.
+- ~~**Limpieza de backups antiguos**~~ ✅ construido como `cron_drive_cleanup` (Bloque 4 seguridad).
+- ~~**Cifrado del backup**~~ ✅ construido 2026-04-25:
+  - `cron_external_backup` cifra el JSON con `pii_encrypt(snapshot::text)` antes de subirlo. Archivo `arquitai_backup_<stamp>.json.enc` con mime `application/octet-stream`.
+  - El email semanal a Damián incluye tamaños cifrado vs plano + recordatorio del endpoint de descifrado.
+  - `backup_decrypt` (`gLWmekA1t6ljFptw`): `POST /webhook/backup-decrypt` con `X-API-Key` y `{drive_file_id}`. Descarga el archivo cifrado, ejecuta `pii_decrypt(decode(b64,'base64'))::jsonb` y devuelve el JSON plano.
+  - Verificación E2E: backup 177KB cifrado → upload Drive → decrypt recupera JSON con todas las tablas.
+
+### Pendiente residual
+
 - **Tabla activity_log completa**: actualmente solo se exportan los últimos 30 días para mantener tamaño manejable. Considerar segmentación si crece mucho.
-- **Cifrado del backup**: el JSON contiene PII en plano. Cifrar el archivo en Drive con `pgp_sym_encrypt` antes de subir, o subirlo a una carpeta restringida con permisos solo para Damián.
+- **Rotación de la encryption_key**: si se rota, los backups antiguos quedan inservibles a menos que se descifren con la clave vieja primero. Documentar el procedimiento.
 
 ---
 

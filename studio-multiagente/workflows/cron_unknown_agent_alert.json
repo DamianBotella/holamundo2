@@ -1,0 +1,31 @@
+{
+  "name": "cron_unknown_agent_alert",
+  "_n8n_id": "3fNPnWuFjjcA7pBG",
+  "_purpose": "Cron diario 09:30 que vigila la regresion del bug A2 (agent omite agent_name -> util_llm_call cae al default 'unknown_agent'). Si en las ultimas 24h hay >=1 llamada a llm_calls con agent_name IN ('unknown_agent','unknown',''), envia alerta critica al architect_email con detalle (modelos, proyectos, primera/ultima ocurrencia, accion correctiva). Si count = 0, NoOp silencioso.",
+  "_triggers": "Schedule cron 30 9 * * * (diario 09:30)",
+  "_alert_destination": "system_config.architect_email",
+  "_audit_reference": "studio-multiagente/docs/fase_a_audit.md (seccion A2 confirma todos los agentes vivos hardcoded; este cron blinda contra regresion futura)",
+  "nodes": [
+    { "id": "cua-01", "name": "Schedule 09:30 Daily",  "type": "n8n-nodes-base.scheduleTrigger", "position": [-700, 300], "_cron": "30 9 * * *" },
+    { "id": "cua-02", "name": "Load Architect Email",  "type": "n8n-nodes-base.postgres",        "position": [-460, 300], "_query": "SELECT value AS architect_email FROM system_config WHERE key = 'architect_email' LIMIT 1" },
+    { "id": "cua-03", "name": "Count Unknown Calls",   "type": "n8n-nodes-base.postgres",        "position": [-220, 300], "_query": "SELECT count(*)::int AS total_unknown, array_agg(DISTINCT model) FILTER (...) AS models, array_agg(DISTINCT project_id::text) FILTER (...) AS project_ids, count(*) FILTER (status='error')::int AS errors, min/max(occurred_at) FROM llm_calls WHERE occurred_at > now() - INTERVAL '24 hours' AND agent_name IN ('unknown_agent','unknown','')" },
+    { "id": "cua-04", "name": "Has Findings?",         "type": "n8n-nodes-base.if",              "position": [20, 300],   "_check": "total_unknown > 0 (typeValidation: loose)" },
+    { "id": "cua-05", "name": "Build Alert Email",     "type": "n8n-nodes-base.code",            "position": [260, 160] },
+    { "id": "cua-06", "name": "Send Critical Email",   "type": "n8n-nodes-base.gmail",           "position": [500, 160], "_op": "message/send" },
+    { "id": "cua-07", "name": "Log Alert Sent",        "type": "n8n-nodes-base.postgres",        "position": [740, 160], "_query": "INSERT INTO activity_log (agent_name='cron_unknown_agent_alert', action='unknown_agent_calls_detected', status='warning')" },
+    { "id": "cua-08", "name": "NoOp - All Clean",      "type": "n8n-nodes-base.set",             "position": [260, 440] }
+  ],
+  "connections": {
+    "Schedule 09:30 Daily":  { "main": [[{ "node": "Load Architect Email", "type": "main", "index": 0 }]] },
+    "Load Architect Email":  { "main": [[{ "node": "Count Unknown Calls",  "type": "main", "index": 0 }]] },
+    "Count Unknown Calls":   { "main": [[{ "node": "Has Findings?",        "type": "main", "index": 0 }]] },
+    "Has Findings?":         {
+      "main": [
+        [{ "node": "Build Alert Email", "type": "main", "index": 0 }],
+        [{ "node": "NoOp - All Clean",  "type": "main", "index": 0 }]
+      ]
+    },
+    "Build Alert Email":     { "main": [[{ "node": "Send Critical Email",  "type": "main", "index": 0 }]] },
+    "Send Critical Email":   { "main": [[{ "node": "Log Alert Sent",       "type": "main", "index": 0 }]] }
+  }
+}

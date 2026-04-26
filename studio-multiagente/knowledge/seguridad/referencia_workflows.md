@@ -80,6 +80,7 @@
 | `30 7 * * *` (diario 07:30) | `cron_workflow_audit` (`YzFIE4H1RLrLDbt9`) | Verifica que 10 crons criticos hayan corrido en su ventana |
 | `0 8 * * 1` (semanal Lun 08:00) | `cron_business_weekly_email` (`J09y2O7LWrWoTn4B`) | Digest semanal del estudio (KPIs business + score) |
 | `0 11 * * *` (diario 11:00) | `cron_proposal_response_followup` (`YHTfBfLeaSFD7Vma`) | Email a Damián si propuestas sin respuesta cliente >7d |
+| `30 9 * * *` (diario 09:30) | `cron_unknown_agent_alert` (`3fNPnWuFjjcA7pBG`) | Vigila regresión del bug A2: alerta crítica si hay llm_calls con `agent_name IN ('unknown_agent','unknown','')` en últimas 24h |
 
 ## Funciones SQL (PostgreSQL)
 

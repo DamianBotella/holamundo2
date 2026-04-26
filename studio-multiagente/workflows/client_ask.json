@@ -188,7 +188,7 @@
       "position": [1700, 140],
       "parameters": {
         "operation": "executeQuery",
-        "query": "INSERT INTO client_conversations (project_id, token_id, question, answer, escalated, escalation_reason, llm_model, llm_tokens_in, llm_tokens_out, llm_cost_usd, client_ip, answered_at)\nVALUES ($1::uuid, $2::uuid, $3, $4, $5::boolean, $6, $7, $8::int, $9::int, $10::numeric, $11, now())\nRETURNING id, escalated;",
+        "query": "INSERT INTO client_conversations (project_id, token_id, question_enc, answer_enc, escalated, escalation_reason, llm_model, llm_tokens_in, llm_tokens_out, llm_cost_usd, client_ip, answered_at)\nVALUES ($1::uuid, $2::uuid, pii_encrypt($3), pii_encrypt($4), $5::boolean, $6, $7, $8::int, $9::int, $10::numeric, $11, now())\nRETURNING id, escalated;",
         "options": {
           "queryReplacement": "={{ [ $('Build LLM Payload').first().json.project_id, $('Build LLM Payload').first().json.token_id, $('Build LLM Payload').first().json.question, $json.answer, $json.escalate, $json.escalation_reason, $json.llm_model, $json.llm_tokens_in, $json.llm_tokens_out, $json.llm_cost_usd, ($('Webhook').first().json.headers?.['x-real-ip'] || $('Webhook').first().json.headers?.['x-forwarded-for'] || 'unknown') ] }}"
         }

@@ -6,22 +6,14 @@
       "name": "Webhook GET",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
-      "position": [
-        -700,
-        300
-      ],
+      "position": [-700, 300],
       "parameters": {
         "httpMethod": "GET",
         "path": "security-dashboard",
         "responseMode": "lastNode",
         "authentication": "headerAuth"
       },
-      "credentials": {
-        "httpHeaderAuth": {
-          "id": "Ba643jvuElTgMawr",
-          "name": "Webhook API Key (entrante)"
-        }
-      },
+      "credentials": { "httpHeaderAuth": { "id": "Ba643jvuElTgMawr", "name": "Webhook API Key (entrante)" } },
       "webhookId": "ds-trigger"
     },
     {
@@ -29,35 +21,17 @@
       "name": "Load Dashboard",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
-      "position": [
-        -460,
-        300
-      ],
+      "position": [-460, 300],
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT json_build_object(\n  'snapshot', row_to_json(s),\n  'recent_critical', (SELECT json_agg(t.*) FROM (SELECT event_type, severity, occurred_at, source_ip, description FROM security_events WHERE severity IN ('critical','high') AND resolved = false ORDER BY occurred_at DESC LIMIT 20) t),\n  'top_ips_24h', (SELECT json_agg(t.* ORDER BY t.hits DESC) FROM (SELECT source_ip, count(*) AS hits, count(*) FILTER (WHERE result IN ('denied','error')) AS denied FROM access_log WHERE occurred_at > now() - INTERVAL '24 hours' AND source_ip IS NOT NULL GROUP BY source_ip ORDER BY hits DESC LIMIT 10) t),\n  'rate_limit_active_blocks', (SELECT count(*) FROM rate_limits WHERE blocked = true AND blocked_until > now())\n) AS report\nFROM security_dashboard s;",
+        "query": "SELECT json_build_object(\n  'snapshot', row_to_json(s),\n  'recent_critical', (SELECT json_agg(t.*) FROM (SELECT event_type, severity, occurred_at, source_ip, description FROM security_events WHERE severity IN ('critical','high') AND resolved = false ORDER BY occurred_at DESC LIMIT 20) t),\n  'top_ips_24h', (SELECT json_agg(t.* ORDER BY t.hits DESC) FROM (SELECT source_ip, count(*) AS hits, count(*) FILTER (WHERE result IN ('denied','error')) AS denied FROM access_log WHERE occurred_at > now() - INTERVAL '24 hours' AND source_ip IS NOT NULL GROUP BY source_ip ORDER BY hits DESC LIMIT 10) t),\n  'rate_limit_active_blocks', (SELECT count(*) FROM rate_limits WHERE blocked = true AND blocked_until > now()),\n  'blocklist', json_build_object(\n    'active_ips',         (SELECT count(*) FROM ip_blocklist WHERE blocked_until > now()),\n    'total_recorded',     (SELECT count(*) FROM ip_blocklist),\n    'banned_24h',         (SELECT count(*) FROM ip_blocklist WHERE created_at > now() - INTERVAL '24 hours'),\n    'top_offenders',      (SELECT json_agg(t.* ORDER BY t.hit_count DESC) FROM (\n                              SELECT source_ip, hit_count, reason, blocked_until\n                                FROM ip_blocklist\n                               WHERE blocked_until > now()\n                               ORDER BY hit_count DESC\n                               LIMIT 5\n                            ) t)\n  )\n) AS report\nFROM security_dashboard s;",
         "options": {}
       },
-      "credentials": {
-        "postgres": {
-          "id": "cfxNZdzy0NB3xkYC",
-          "name": "Postgres account"
-        }
-      }
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } }
     }
   ],
   "connections": {
-    "Webhook GET": {
-      "main": [
-        [
-          {
-            "node": "Load Dashboard",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    }
+    "Webhook GET": { "main": [[{ "node": "Load Dashboard", "type": "main", "index": 0 }]] }
   },
   "settings": {
     "executionOrder": "v1",

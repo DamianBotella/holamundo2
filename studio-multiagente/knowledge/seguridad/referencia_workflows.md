@@ -26,6 +26,9 @@
 | `GET /webhook/admin-activity` | `util_admin_recent_activity_html` (`6Rk662AIopY93BGw`) | Header X-API-Key | Timeline 48h security events + activity_log |
 | `GET /webhook/admin-health-history` | `util_admin_health_history_html` (`PbSh6qd4wD2pHfO4`) | Header X-API-Key | Tendencia 30d del health score (SVG bar chart) |
 | `GET /webhook/admin-workflows` | `util_admin_audit_workflows_html` (`zP7NQ6wfhQFyw2ZB`) | Header X-API-Key | Status de 14 crons críticos (OK/STALE/NEVER/NO_TRACK) |
+| `GET /webhook/admin-pipeline` | `util_admin_pipeline_html` (`KdkEHQuMDQMpgckP`) | Header X-API-Key | Kanban visual de proyectos por fase (10 columnas) |
+| `GET /webhook/admin-help` | `util_admin_help_html` (`x45X3jL6MWhTjjaA`) | Header X-API-Key | Página de ayuda con FAQ + endpoints + comandos |
+| `POST /webhook/admin-note` | `util_admin_note_create` (`8okwSwHgLtU4fUac`) | Header X-API-Key | Crear nota rápida en proyecto (body 3-2000 chars) |
 
 ### Endpoints públicos (con security_check integrado)
 
@@ -74,6 +77,7 @@
 | `30 6 * * *` (diario 06:30) | `cron_health_score_snapshot` (`FQaWcUybqapIEoAg`) | Snapshot diario en health_score_history |
 | `30 7 * * *` (diario 07:30) | `cron_workflow_audit` (`YzFIE4H1RLrLDbt9`) | Verifica que 10 crons criticos hayan corrido en su ventana |
 | `0 8 * * 1` (semanal Lun 08:00) | `cron_business_weekly_email` (`J09y2O7LWrWoTn4B`) | Digest semanal del estudio (KPIs business + score) |
+| `0 11 * * *` (diario 11:00) | `cron_proposal_response_followup` (`YHTfBfLeaSFD7Vma`) | Email a Damián si propuestas sin respuesta cliente >7d |
 
 ## Funciones SQL (PostgreSQL)
 
@@ -151,3 +155,4 @@
 | 037 | `037_agent_prompts_history.sql` | Tabla agent_prompts_history + trigger snapshot + vista churn |
 | 038 | `038_system_health_score.sql` | Vista system_health_score (0-100 con color green/yellow/red) |
 | 039 | `039_health_score_history.sql` | Tabla health_score_history para trends del score |
+| 040 | `040_project_notes.sql` | Tabla project_notes para anotaciones rápidas del arquitecto |

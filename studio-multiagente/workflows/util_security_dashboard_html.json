@@ -1,0 +1,77 @@
+{
+  "name": "util_security_dashboard_html",
+  "nodes": [
+    {
+      "id": "dh-01",
+      "name": "Webhook GET",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-700, 300],
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "security-dashboard-html",
+        "responseMode": "responseNode",
+        "authentication": "headerAuth"
+      },
+      "credentials": { "httpHeaderAuth": { "id": "Ba643jvuElTgMawr", "name": "Webhook API Key (entrante)" } },
+      "webhookId": "dh-trigger"
+    },
+    {
+      "id": "dh-02",
+      "name": "Load Dashboard",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [-460, 300],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT json_build_object(\n  'snapshot', row_to_json(s),\n  'recent_critical', (SELECT json_agg(t.*) FROM (SELECT event_type, severity, occurred_at, source_ip, description FROM security_events WHERE severity IN ('critical','high') AND resolved = false ORDER BY occurred_at DESC LIMIT 20) t),\n  'top_ips_24h', (SELECT json_agg(t.* ORDER BY t.hits DESC) FROM (SELECT source_ip, count(*) AS hits, count(*) FILTER (WHERE result IN ('denied','error')) AS denied FROM access_log WHERE occurred_at > now() - INTERVAL '24 hours' AND source_ip IS NOT NULL GROUP BY source_ip ORDER BY hits DESC LIMIT 10) t),\n  'blocklist_active', (SELECT json_agg(t.*) FROM (SELECT source_ip, hit_count, reason, blocked_until FROM ip_blocklist WHERE blocked_until > now() ORDER BY hit_count DESC LIMIT 10) t),\n  'blocklist_count', (SELECT count(*) FROM ip_blocklist WHERE blocked_until > now()),\n  'banned_24h', (SELECT count(*) FROM ip_blocklist WHERE created_at > now() - INTERVAL '24 hours')\n) AS report\nFROM security_dashboard s;",
+        "options": {}
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } }
+    },
+    {
+      "id": "dh-03",
+      "name": "Build HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-220, 300],
+      "parameters": {
+        "jsCode": "const r = $input.first().json.report || {};\nconst s = r.snapshot || {};\nconst rc = r.recent_critical || [];\nconst tops = r.top_ips_24h || [];\nconst bls = r.blocklist_active || [];\nconst sevColor = { critical: '#7f1d1d', high: '#dc2626', medium: '#ea580c', low: '#f59e0b', info: '#6b7280' };\nconst card = (label, value, color) => '<div style=\"background:'+(color||'#f9fafb')+';padding:12px 16px;border-radius:8px;flex:1;min-width:140px\"><div style=\"font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:.5px\">'+label+'</div><div style=\"font-size:24px;font-weight:bold;color:#1f2937;margin-top:4px\">'+(value!=null?value:'-')+'</div></div>';\nconst row = (cells) => '<tr>'+cells.map(c=>'<td style=\"padding:8px;border-bottom:1px solid #e5e7eb;font-size:13px\">'+c+'</td>').join('')+'</tr>';\nconst recentRows = rc.length>0 ? rc.map(e=>row([\n  '<span style=\"background:'+(sevColor[e.severity]||'#6b7280')+';color:white;padding:2px 8px;border-radius:3px;font-size:10px;text-transform:uppercase\">'+e.severity+'</span>',\n  e.event_type,\n  e.source_ip||'-',\n  (e.description||'').slice(0,80),\n  new Date(e.occurred_at).toISOString().slice(0,16).replace('T',' ')\n])).join('') : row(['<i style=\"color:#10b981\">Sin eventos high/critical sin resolver</i>','','','','']);\nconst blsRows = bls.length>0 ? bls.map(b=>row([\n  '<code>'+b.source_ip+'</code>',\n  String(b.hit_count),\n  (b.reason||'').slice(0,40),\n  new Date(b.blocked_until).toISOString().slice(0,10)\n])).join('') : row(['<i style=\"color:#10b981\">Sin IPs bloqueadas activas</i>','','','']);\nconst topRows = tops.length>0 ? tops.slice(0,8).map(t=>row([\n  '<code>'+t.source_ip+'</code>', String(t.hits), String(t.denied||0)\n])).join('') : row(['<i style=\"color:#6b7280\">Sin acceso registrado en 24h</i>','','']);\nconst html = '<!DOCTYPE html><html lang=\"es\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>ArquitAI Security Dashboard</title>' +\n'<style>body{font-family:-apple-system,Arial,sans-serif;max-width:1100px;margin:24px auto;padding:16px;color:#1f2937;background:#f3f4f6}h1{color:#0f172a;margin:0 0 8px}h2{color:#374151;font-size:16px;margin:24px 0 8px}.cards{display:flex;gap:12px;flex-wrap:wrap;margin:16px 0}table{width:100%;border-collapse:collapse;background:white;border-radius:8px;overflow:hidden}thead{background:#1f2937;color:white}thead th{padding:10px 8px;text-align:left;font-size:12px}.meta{color:#64748b;font-size:13px}.refresh{display:inline-block;background:#2563eb;color:white;padding:6px 12px;border-radius:4px;text-decoration:none;font-size:13px;margin-left:8px}</style>' +\n'</head><body>' +\n'<h1>ArquitAI Security Dashboard <a class=\"refresh\" href=\"javascript:location.reload()\">Refrescar</a></h1>' +\n'<div class=\"meta\">Snapshot generado ' + new Date().toLocaleString('es-ES') + '</div>' +\n'<div class=\"cards\">' +\n  card('Critical sin resolver', s.critical_unresolved||0, (s.critical_unresolved||0)>0?'#fee2e2':null) +\n  card('IPs blocked activas', r.blocklist_count||0, (r.blocklist_count||0)>0?'#fef3c7':null) +\n  card('Bans en 24h', r.banned_24h||0) +\n  card('Eventos 24h', s.events_last_24h||0) +\n  card('Inj. attempts 24h', s.injection_attempts_24h||0, (s.injection_attempts_24h||0)>0?'#fee2e2':null) +\n  card('GDPR pending', s.gdpr_pending||0) +\n  card('Tokens activos', s.active_tokens||0) +\n  card('Clientes sin consent', s.clients_without_consent||0, (s.clients_without_consent||0)>0?'#fee2e2':null) +\n'</div>' +\n'<h2>Eventos high/critical sin resolver</h2>' +\n'<table><thead><tr><th>Sev</th><th>Tipo</th><th>IP</th><th>Descripcion</th><th>Cuando</th></tr></thead><tbody>'+recentRows+'</tbody></table>' +\n'<h2>IPs en blocklist (top 10 por hits)</h2>' +\n'<table><thead><tr><th>IP</th><th>Hits</th><th>Razon</th><th>Hasta</th></tr></thead><tbody>'+blsRows+'</tbody></table>' +\n'<h2>Top IPs por accesos en 24h</h2>' +\n'<table><thead><tr><th>IP</th><th>Hits</th><th>Denied</th></tr></thead><tbody>'+topRows+'</tbody></table>' +\n'<p style=\"color:#94a3b8;font-size:11px;margin-top:32px;text-align:center\">JSON crudo: <code>/webhook/security-dashboard</code> con header X-API-Key. Ultimo pen-test: '+(s.last_pen_test?new Date(s.last_pen_test).toISOString().slice(0,16):'(nunca)')+'</p>' +\n'</body></html>';\nreturn [{ json: { html: html } }];"
+      }
+    },
+    {
+      "id": "dh-04",
+      "name": "Respond HTML",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [20, 300],
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.html }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              { "name": "Content-Type", "value": "text/html; charset=utf-8" },
+              { "name": "Strict-Transport-Security", "value": "max-age=31536000; includeSubDomains" },
+              { "name": "X-Content-Type-Options", "value": "nosniff" },
+              { "name": "X-Frame-Options", "value": "DENY" },
+              { "name": "Referrer-Policy", "value": "strict-origin-when-cross-origin" },
+              { "name": "Permissions-Policy", "value": "geolocation=(), microphone=(), camera=()" },
+              { "name": "Cache-Control", "value": "no-store" }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook GET":    { "main": [[{ "node": "Load Dashboard", "type": "main", "index": 0 }]] },
+    "Load Dashboard": { "main": [[{ "node": "Build HTML",     "type": "main", "index": 0 }]] },
+    "Build HTML":     { "main": [[{ "node": "Respond HTML",   "type": "main", "index": 0 }]] }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5"
+  }
+}

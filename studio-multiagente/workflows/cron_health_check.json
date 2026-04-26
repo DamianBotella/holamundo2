@@ -1,0 +1,118 @@
+{
+  "name": "cron_health_check",
+  "nodes": [
+    {
+      "id": "hc-01",
+      "name": "Daily 06:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-700, 300],
+      "parameters": {
+        "rule": { "interval": [{ "field": "cronExpression", "expression": "0 6 * * *" }] }
+      }
+    },
+    {
+      "id": "hc-02",
+      "name": "Run Checks",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [-460, 300],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH expected_functions AS (\n  SELECT unnest(ARRAY[\n    'pii_encrypt','pii_decrypt','check_rate_limit','log_access','raise_security_event',\n    'is_ip_blocked','ban_ip','validate_client_token','current_tenant_id'\n  ]) AS fname\n),\nfn_check AS (\n  SELECT fname,\n    EXISTS(SELECT 1 FROM pg_proc WHERE proname = fname) AS present\n    FROM expected_functions\n),\nexpected_tables AS (\n  SELECT unnest(ARRAY[\n    'projects','clients','briefings','client_conversations','gdpr_requests',\n    'security_events','access_log','rate_limits','ip_blocklist','tenants',\n    'system_config','consent_records','client_access_tokens'\n  ]) AS tname\n),\ntable_check AS (\n  SELECT tname,\n    EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name = tname AND table_schema='public') AS present\n    FROM expected_tables\n),\nencryption_check AS (\n  SELECT EXISTS(SELECT 1 FROM system_config WHERE key='encryption_key' AND length(value) > 30) AS encryption_key_present,\n         EXISTS(SELECT 1 FROM system_config WHERE key='webhook_api_key' AND length(value) > 20) AS webhook_api_key_present,\n         EXISTS(SELECT 1 FROM system_config WHERE key='architect_email' AND value LIKE '%@%') AS architect_email_set\n)\nSELECT json_build_object(\n  'all_functions_ok', NOT EXISTS(SELECT 1 FROM fn_check WHERE present = false),\n  'missing_functions', (SELECT array_agg(fname) FROM fn_check WHERE present = false),\n  'all_tables_ok', NOT EXISTS(SELECT 1 FROM table_check WHERE present = false),\n  'missing_tables', (SELECT array_agg(tname) FROM table_check WHERE present = false),\n  'encryption_ok', (SELECT encryption_key_present FROM encryption_check),\n  'webhook_key_ok', (SELECT webhook_api_key_present FROM encryption_check),\n  'architect_email_ok', (SELECT architect_email_set FROM encryption_check),\n  'pii_encrypt_roundtrip', pii_decrypt(pii_encrypt('healthcheck_xyz')) = 'healthcheck_xyz',\n  'security_dashboard_view_works', EXISTS(SELECT 1 FROM security_dashboard LIMIT 1),\n  'gdpr_view_works', EXISTS(SELECT 1 FROM gdpr_client_data_view LIMIT 1)\n) AS report;",
+        "options": {}
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } }
+    },
+    {
+      "id": "hc-03",
+      "name": "All OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [-220, 300],
+      "parameters": {
+        "conditions": {
+          "options": { "version": 2, "leftValue": "", "caseSensitive": true, "typeValidation": "loose" },
+          "combinator": "and",
+          "conditions": [
+            { "id": "h1", "leftValue": "={{ $json.report.all_functions_ok && $json.report.all_tables_ok && $json.report.encryption_ok && $json.report.webhook_key_ok && $json.report.pii_encrypt_roundtrip }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true", "singleValue": true } }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "hc-04",
+      "name": "Log OK",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [20, 220],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (action, agent_name, details) VALUES ('health_check_ok', 'cron_health_check', $1::jsonb);",
+        "options": { "queryReplacement": "={{ [ JSON.stringify($json.report) ] }}" }
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } }
+    },
+    {
+      "id": "hc-05",
+      "name": "Raise Critical",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [20, 380],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT raise_security_event(\n  'data_breach_suspected'::text,\n  'critical'::text,\n  'cron'::text, '/cron_health_check'::text, 'health_check'::text, NULL::uuid,\n  'Health check FAILED: una o mas pieza criticas del sistema de seguridad no estan disponibles. Revisar inmediatamente.',\n  $1::jsonb\n) AS event_id;",
+        "options": { "queryReplacement": "={{ [ JSON.stringify($json.report) ] }}" }
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } }
+    },
+    {
+      "id": "hc-06",
+      "name": "Load Architect Email",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [260, 380],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT value FROM system_config WHERE key='architect_email'",
+        "options": {}
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } }
+    },
+    {
+      "id": "hc-07",
+      "name": "Send Critical Alert",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [500, 380],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $json.value }}",
+        "subject": "[ARQUITAI CRITICAL] Health check fallido",
+        "emailType": "html",
+        "message": "=<div style=\"font-family:Arial;max-width:600px\"><h2 style=\"color:#dc2626\">Sistema en estado degradado</h2><p>El health check matutino ha encontrado anomalias en la infraestructura de seguridad de ArquitAI.</p><pre style=\"background:#f3f4f6;padding:12px;border-radius:6px;font-size:12px;overflow-x:auto\">{{ JSON.stringify($('Run Checks').first().json.report, null, 2) }}</pre><p>Esto indica que una migracion fallo, una funcion fue dropeada por error, o una tabla critica desaparecio. Revisar inmediatamente.</p></div>",
+        "options": { "appendAttribution": false }
+      },
+      "credentials": { "gmailOAuth2": { "id": "cIma8ntTjZvIfU3H", "name": "damian2botella" } },
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "Daily 06:00":          { "main": [[{ "node": "Run Checks",          "type": "main", "index": 0 }]] },
+    "Run Checks":           { "main": [[{ "node": "All OK?",             "type": "main", "index": 0 }]] },
+    "All OK?":              {
+      "main": [
+        [{ "node": "Log OK",         "type": "main", "index": 0 }],
+        [{ "node": "Raise Critical", "type": "main", "index": 0 }]
+      ]
+    },
+    "Raise Critical":       { "main": [[{ "node": "Load Architect Email", "type": "main", "index": 0 }]] },
+    "Load Architect Email": { "main": [[{ "node": "Send Critical Alert",  "type": "main", "index": 0 }]] }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5"
+  }
+}

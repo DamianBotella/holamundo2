@@ -1,0 +1,216 @@
+{
+  "name": "client_token_create",
+  "nodes": [
+    {
+      "id": "tc-01",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -700,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "client-token-create",
+        "responseMode": "responseNode",
+        "authentication": "headerAuth"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "Ba643jvuElTgMawr",
+          "name": "Webhook API Key (entrante)"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "webhookId": "2a7765cc-cf6b-40ca-8743-c1c5a8221fe6"
+    },
+    {
+      "id": "tc-02",
+      "name": "Validate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -460,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || {};\nif (!body.project_id) { const e = { valid:false, error:'project_id obligatorio' }; return [{ json: e }]; }\nconst valid = ['aftercare_submit','project_view','full_access','client_ask'];\nconst purpose = body.purpose || 'aftercare_submit';\nif (!valid.includes(purpose)) {\n  const e = { valid:false, error:'purpose debe ser '+valid.join('|') };\n  return [{ json: e }];\n}\nconst expiresDays = Number(body.expires_days) || 90;\nconst out = {\n  valid: true,\n  project_id: body.project_id,\n  purpose: purpose,\n  expires_days: expiresDays,\n  notes: (body.notes || '').toString().slice(0, 500)\n};\nreturn [{ json: out }];"
+      }
+    },
+    {
+      "id": "tc-03",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -220,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "v1",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "tc-04",
+      "name": "Create Token",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        20,
+        220
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO client_access_tokens (project_id, client_id, purpose, expires_at, notes)\nSELECT $1::uuid, p.client_id, $2, now() + ($3::int || ' days')::interval, $4\n  FROM projects p WHERE p.id = $1::uuid\nRETURNING id, token, project_id, client_id, purpose, expires_at;",
+        "options": {
+          "queryReplacement": "={{ [ $json.project_id, $json.purpose, $json.expires_days, $json.notes || '' ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "tc-05",
+      "name": "Build URLs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        220
+      ],
+      "parameters": {
+        "jsCode": "const r = $input.first().json;\nconst N8N = 'https://n8n-n8n.zzeluw.easypanel.host';\nconst urls = {};\nif (r.purpose === 'aftercare_submit' || r.purpose === 'full_access') {\n  urls.aftercare_form = N8N + '/webhook/aftercare-public-form?token=' + encodeURIComponent(r.token);\n}\nif (r.purpose === 'project_view' || r.purpose === 'full_access') {\n  urls.project_summary = N8N + '/webhook/project-summary?token=' + encodeURIComponent(r.token);\n}\nif (r.purpose === 'client_ask' || r.purpose === 'full_access') {\n  urls.client_ask_endpoint = N8N + '/webhook/client-ask';\n  urls.client_ask_token = r.token;\n}\nreturn [{ json: { token_id: r.id, token: r.token, project_id: r.project_id, client_id: r.client_id, purpose: r.purpose, expires_at: r.expires_at, urls: urls } }];"
+      }
+    },
+    {
+      "id": "tc-06",
+      "name": "Respond 201",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        460,
+        220
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'created', token_id: $json.token_id, token: $json.token, project_id: $json.project_id, purpose: $json.purpose, expires_at: $json.expires_at, urls: $json.urls}) }}",
+        "options": {
+          "responseCode": 201
+        }
+      }
+    },
+    {
+      "id": "tc-07",
+      "name": "Respond 400",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        20,
+        400
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'error', error: $json.error}) }}",
+        "options": {
+          "responseCode": 400
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate": {
+      "main": [
+        [
+          {
+            "node": "Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid?": {
+      "main": [
+        [
+          {
+            "node": "Create Token",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 400",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Token": {
+      "main": [
+        [
+          {
+            "node": "Build URLs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build URLs": {
+      "main": [
+        [
+          {
+            "node": "Respond 201",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  }
+}

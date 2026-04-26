@@ -150,7 +150,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "INSERT INTO activity_log (\n  project_id,\n  agent_name,\n  action,\n  llm_model,\n  llm_tokens_in,\n  llm_tokens_out,\n  llm_cost_estimated,\n  duration_ms,\n  status,\n  error_message,\n  output_summary\n) VALUES (\n  $1::uuid,\n  $2,\n  'llm_call',\n  $3,\n  $4::int,\n  $5::int,\n  $6::numeric,\n  $7::int,\n  $8,\n  $9,\n  $10\n)",
+        "query": "INSERT INTO activity_log (\n  project_id, agent_name, action, llm_model, llm_tokens_in, llm_tokens_out,\n  llm_cost_estimated, duration_ms, status, error_message, output_summary\n) VALUES ($1::uuid, $2, 'llm_call', $3, $4::int, $5::int, $6::numeric, $7::int, $8, $9, $10);\nSELECT log_llm_call(\n  $2, $1::uuid, $3, $4::int, $5::int, $6::numeric, $7::int,\n  CASE WHEN $8 = 'success' THEN 'ok' ELSE 'error' END, $9\n) AS llm_call_id",
         "options": {
           "queryReplacement": "={{ [\n  $json.project_id === 'no_project' ? null : $json.project_id,\n  $json.agent_name,\n  $json.model,\n  $json.tokens_in,\n  $json.tokens_out,\n  $json.cost_estimated,\n  $json.duration_ms,\n  $json.status,\n  $json.status === 'error' ? $json.error_message : null,\n  $json.status === 'success' ? $json.text.substring(0, 200) : null\n] }}"
         }

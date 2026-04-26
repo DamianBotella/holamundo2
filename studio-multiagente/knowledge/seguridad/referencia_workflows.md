@@ -29,6 +29,7 @@
 | `GET /webhook/admin-pipeline` | `util_admin_pipeline_html` (`KdkEHQuMDQMpgckP`) | Header X-API-Key | Kanban visual de proyectos por fase (10 columnas) |
 | `GET /webhook/admin-help` | `util_admin_help_html` (`x45X3jL6MWhTjjaA`) | Header X-API-Key | Página de ayuda con FAQ + endpoints + comandos |
 | `POST /webhook/admin-note` | `util_admin_note_create` (`8okwSwHgLtU4fUac`) | Header X-API-Key | Crear nota rápida en proyecto (body 3-2000 chars) |
+| `POST /webhook/admin-note-toggle` | `util_admin_note_toggle` (`FOLt1PzhD1wh9WhX`) | Header X-API-Key | Pin/unpin/delete una nota existente |
 
 ### Endpoints públicos (con security_check integrado)
 

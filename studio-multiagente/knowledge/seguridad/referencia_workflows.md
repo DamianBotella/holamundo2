@@ -18,6 +18,10 @@
 | `GET /webhook/dashboard-summary` | `util_dashboard_summary` (`BfNjUhQECJY6J5n6`) | Header X-API-Key | KPIs estudio en JSON |
 | `GET /webhook/dashboard-html` | `util_dashboard_summary_html` (`3GKoism5dRILkE9T`) | Header X-API-Key | Vista HTML del dashboard del estudio (proyectos, finance, concierge) |
 | `GET /webhook/llm-costs-html` | `util_llm_costs_html` (`SM5LbXSelBgt3B1U`) | Header X-API-Key | Vista HTML de costes LLM (por agente, proyecto, modelo, errores) |
+| `GET /webhook/admin-index` | `util_admin_index_html` (`cRk4zHYROjVHzUBf`) | Header X-API-Key | Landing maestro con links a todos los dashboards |
+| `GET /webhook/admin-project?project_id=<uuid>` | `util_admin_project_view_html` (`OMtABOaVexcIAF8V`) | Header X-API-Key | Drill-down de un proyecto (admin view, todos los datos) |
+| `GET /webhook/admin-tokens` | `util_admin_tokens_html` (`iDgnbEj9bRBBp3Pb`) | Header X-API-Key | Vista read-only de tokens cliente |
+| `GET /webhook/admin-export?dataset=<name>` | `util_admin_export_csv` (`fKn8F4cXN17QXydM`) | Header X-API-Key | Export CSV multi-dataset |
 
 ### Endpoints públicos (con security_check integrado)
 
@@ -59,6 +63,8 @@
 | `0 6 * * *` (diario 06:00) | `cron_health_check` (`ztTrZupYJiQmkNGW`) | Verifica funciones SQL + tablas + roundtrip pii. Email crítico si falla |
 | `15 * * * *` (cada hora :15) | `cron_stuck_executions` (`eJD0DhgAvZXW5bYW`) | agent_executions running >10min → marcar failed |
 | `30 5 * * *` (diario 05:30) | `cron_data_integrity` (`XP04imsIGNlr1smJ`) | 15 chequeos de orphans / FKs / fases / enums |
+| `0 7 * * *` (diario 07:00) | `cron_backup_verify` (`ERiFhqiHEpcwHEbz`) | Alerta crítica si último backup >7d o failed |
+| `45 4 * * *` (diario 04:45) | `cron_db_size_check` (`edBWaDXssbrp96X0`) | Snapshot db_size + alerta si crece >50% en 7d |
 
 ## Funciones SQL (PostgreSQL)
 
@@ -132,3 +138,4 @@
 | 033 | `033_ip_blocklist.sql` | Tabla ip_blocklist + is_ip_blocked() + ban_ip() |
 | 034 | `034_drop_pii_plain_columns.sql` | DROP COLUMN question, answer, details (PII en plain eliminada) |
 | 035 | `035_llm_calls_tracking.sql` | Tabla llm_calls + función log_llm_call() + vista llm_costs_summary |
+| 036 | `036_db_size_history.sql` | Tabla db_size_history para tracking de crecimiento |

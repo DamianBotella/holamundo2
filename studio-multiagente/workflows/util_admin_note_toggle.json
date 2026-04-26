@@ -1,0 +1,99 @@
+{
+  "name": "util_admin_note_toggle",
+  "nodes": [
+    {
+      "id": "tg-01",
+      "name": "Webhook POST",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-700, 300],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "admin-note-toggle",
+        "responseMode": "responseNode",
+        "authentication": "headerAuth"
+      },
+      "credentials": { "httpHeaderAuth": { "id": "Ba643jvuElTgMawr", "name": "Webhook API Key (entrante)" } },
+      "webhookId": "tg-trigger"
+    },
+    {
+      "id": "tg-02",
+      "name": "Validate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-460, 300],
+      "parameters": {
+        "jsCode": "const body = ($('Webhook POST').first().json.body) || {};\nconst noteId = (body.note_id || '').trim();\nconst action = (body.action || '').trim();\nconst validActions = ['toggle_pin','delete'];\nif (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(noteId)) return [{json:{valid:false, error:'note_id debe ser UUID'}}];\nif (!validActions.includes(action)) return [{json:{valid:false, error:'action debe ser uno de: '+validActions.join(', ')}}];\nreturn [{json:{valid:true, note_id:noteId, action}}];"
+      }
+    },
+    {
+      "id": "tg-03",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [-220, 300],
+      "parameters": {
+        "conditions": {
+          "options": { "version": 2, "leftValue": "", "caseSensitive": true, "typeValidation": "loose" },
+          "combinator": "and",
+          "conditions": [
+            { "id": "v1", "leftValue": "={{ $json.valid }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true", "singleValue": true } }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "tg-04",
+      "name": "Apply Action",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [20, 220],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH \n  toggled AS (\n    UPDATE project_notes SET pinned = NOT pinned\n     WHERE id = $1::uuid AND $2 = 'toggle_pin'\n    RETURNING id, pinned, body, category, 'pinned_toggled' AS action_done\n  ),\n  deleted AS (\n    DELETE FROM project_notes\n     WHERE id = $1::uuid AND $2 = 'delete'\n    RETURNING id, body, 'deleted' AS action_done\n  )\nSELECT row_to_json(t) AS result FROM (\n  SELECT * FROM toggled\n  UNION ALL\n  SELECT id, NULL::boolean AS pinned, body, NULL AS category, action_done FROM deleted\n) t LIMIT 1;",
+        "options": { "queryReplacement": "={{ [ $json.note_id, $json.action ] }}" }
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } }
+    },
+    {
+      "id": "tg-05",
+      "name": "Respond OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [260, 220],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'ok', result: $json.result}) }}",
+        "options": { "responseCode": 200 }
+      }
+    },
+    {
+      "id": "tg-06",
+      "name": "Respond Bad",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [20, 420],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'error', error: $json.error}) }}",
+        "options": { "responseCode": 400 }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook POST": { "main": [[{ "node": "Validate",     "type": "main", "index": 0 }]] },
+    "Validate":     { "main": [[{ "node": "Valid?",       "type": "main", "index": 0 }]] },
+    "Valid?":       {
+      "main": [
+        [{ "node": "Apply Action", "type": "main", "index": 0 }],
+        [{ "node": "Respond Bad",  "type": "main", "index": 0 }]
+      ]
+    },
+    "Apply Action": { "main": [[{ "node": "Respond OK",   "type": "main", "index": 0 }]] }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5"
+  }
+}

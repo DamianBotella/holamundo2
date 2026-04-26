@@ -1,0 +1,55 @@
+{
+  "name": "util_hmac_verify",
+  "nodes": [
+    {
+      "id": "uh-01",
+      "name": "Receive Request",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [-700, 300],
+      "parameters": { "inputSource": "passthrough" }
+    },
+    {
+      "id": "uh-02",
+      "name": "Defaults",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [-460, 300],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            { "id": "d1", "name": "body_text",       "value": "={{ $json.body_text || '' }}",                                "type": "string" },
+            { "id": "d2", "name": "signature",       "value": "={{ ($json.signature || '').toString().trim() }}",            "type": "string" },
+            { "id": "d3", "name": "secret_key_name", "value": "={{ $json.secret_key_name || 'docusign_webhook_secret' }}",   "type": "string" },
+            { "id": "d4", "name": "algorithm",       "value": "={{ $json.algorithm || 'sha256' }}",                          "type": "string" },
+            { "id": "d5", "name": "encoding",        "value": "={{ $json.encoding || 'hex' }}",                              "type": "string" }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "uh-03b",
+      "name": "Verify HMAC",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [-220, 300],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH s AS (\n  SELECT value FROM system_config WHERE key = $3 LIMIT 1\n),\nresult AS (\n  SELECT\n    (SELECT value FROM s) AS secret,\n    CASE WHEN (SELECT value FROM s) IS NULL THEN NULL\n         WHEN LOWER($5) = 'base64' THEN encode(hmac($1::text, (SELECT value FROM s), $4::text), 'base64')\n         ELSE encode(hmac($1::text, (SELECT value FROM s), $4::text), 'hex')\n    END AS expected\n)\nSELECT\n  CASE\n    WHEN secret IS NULL THEN false\n    WHEN expected IS NULL THEN false\n    WHEN length($2) = 0 THEN false\n    WHEN LOWER($5) = 'base64' THEN expected = $2\n    ELSE LOWER(expected) = LOWER($2)\n  END AS valid,\n  CASE\n    WHEN secret IS NULL THEN 'secret_not_found'\n    WHEN length($2) = 0 THEN 'no_signature'\n    WHEN length(expected) <> length($2) THEN 'length_mismatch'\n    WHEN (LOWER($5) = 'base64' AND expected = $2) OR (LOWER($5) <> 'base64' AND LOWER(expected) = LOWER($2)) THEN 'ok'\n    ELSE 'mismatch'\n  END AS reason,\n  COALESCE(LEFT(expected, 12) || '...', '(no_secret)') AS expected_preview,\n  LEFT($2, 12) || (CASE WHEN length($2) > 12 THEN '...' ELSE '' END) AS given_preview,\n  $4 AS algorithm,\n  $5 AS encoding\nFROM result;",
+        "options": { "queryReplacement": "={{ [ $json.body_text, $json.signature, $json.secret_key_name, $json.algorithm, $json.encoding ] }}" }
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "alwaysOutputData": true
+    }
+  ],
+  "connections": {
+    "Receive Request": { "main": [[{ "node": "Defaults",   "type": "main", "index": 0 }]] },
+    "Defaults":        { "main": [[{ "node": "Verify HMAC","type": "main", "index": 0 }]] }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner"
+  }
+}

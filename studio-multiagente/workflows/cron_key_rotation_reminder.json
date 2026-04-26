@@ -1,0 +1,110 @@
+{
+  "name": "cron_key_rotation_reminder",
+  "nodes": [
+    {
+      "id": "kr-01",
+      "name": "Monthly Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-700, 300],
+      "parameters": {
+        "rule": { "interval": [{ "field": "cronExpression", "expression": "0 9 1 * *" }] }
+      }
+    },
+    {
+      "id": "kr-02",
+      "name": "Check Key Ages",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [-460, 300],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT json_build_object(\n  'rows', json_agg(json_build_object(\n    'key', key,\n    'days_old', days_old,\n    'urgency', urgency,\n    'updated_at', updated_at\n  ) ORDER BY days_old DESC),\n  'any_high', bool_or(urgency = 'high'),\n  'any_medium_or_high', bool_or(urgency IN ('medium','high')),\n  'count_total', count(*)\n) AS report\nFROM (\n  SELECT\n    key,\n    updated_at,\n    EXTRACT(DAY FROM NOW() - COALESCE(updated_at, NOW()))::int AS days_old,\n    CASE\n      WHEN updated_at < NOW() - INTERVAL '90 days' THEN 'high'\n      WHEN updated_at < NOW() - INTERVAL '60 days' THEN 'medium'\n      ELSE 'ok'\n    END AS urgency\n  FROM system_config\n  WHERE key IN ('webhook_api_key','encryption_key','docusign_webhook_secret','signaturit_webhook_secret')\n) x;",
+        "options": {}
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } }
+    },
+    {
+      "id": "kr-03",
+      "name": "Any Need Rotation?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [-220, 300],
+      "parameters": {
+        "conditions": {
+          "options": { "version": 2, "leftValue": "", "caseSensitive": true, "typeValidation": "loose" },
+          "combinator": "and",
+          "conditions": [
+            { "id": "k1", "leftValue": "={{ $json.report.any_medium_or_high }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true", "singleValue": true } }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "kr-04",
+      "name": "Load Architect Email",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [20, 220],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT value FROM system_config WHERE key = 'architect_email'",
+        "options": {}
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } }
+    },
+    {
+      "id": "kr-05",
+      "name": "Build Email Body",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [260, 220],
+      "parameters": {
+        "jsCode": "const report = $('Check Key Ages').first().json.report;\nconst rows = report.rows || [];\nconst urgencyColor = (u) => u === 'high' ? '#c0392b' : (u === 'medium' ? '#e67e22' : '#27ae60');\nconst urgencyLabel = (u) => u === 'high' ? 'CRITICA (>90 dias)' : (u === 'medium' ? 'Recomendada (>60 dias)' : 'OK');\nconst rowsHtml = rows.map(r => {\n  return `<tr><td>${r.key}</td><td>${r.days_old} dias</td><td style=\"color:${urgencyColor(r.urgency)};font-weight:bold\">${urgencyLabel(r.urgency)}</td><td>${(r.updated_at || '').slice(0,10)}</td></tr>`;\n}).join('');\nconst html = `<div style=\"font-family:Arial,sans-serif;max-width:700px;margin:0 auto\">\n<h2 style=\"color:${report.any_high ? '#c0392b' : '#e67e22'}\">Recordatorio: rotacion de claves de seguridad</h2>\n<p>Han pasado mas de 60 dias desde la ultima rotacion de algunas claves del sistema. Por buenas practicas (y antes de un eventual leak), conviene rotarlas.</p>\n<table border=\"1\" cellspacing=\"0\" cellpadding=\"6\" style=\"border-collapse:collapse;width:100%\">\n  <thead style=\"background:#f4f4f4\"><tr><th>Clave</th><th>Antiguedad</th><th>Urgencia</th><th>Ultima rotacion</th></tr></thead>\n  <tbody>${rowsHtml}</tbody>\n</table>\n<h3>Procedimiento de rotacion (manual)</h3>\n<ol>\n<li><b>webhook_api_key</b>: generar uno nuevo (<code>openssl rand -base64 32</code>), actualizar credencial 'ArquitAI Webhook API Key' en n8n, actualizar valor en system_config, y comunicarlo a integradores externos (DocuSign, formularios cliente).</li>\n<li><b>encryption_key</b>: requiere descifrar primero todas las columnas _enc con clave vieja, cambiar la clave en system_config, re-cifrar (ver migration 008 nota \"Rotacion de la clave de cifrado\").</li>\n<li><b>docusign/signaturit_webhook_secret</b>: regenerar en el panel del proveedor + actualizar en system_config.</li>\n</ol>\n<p style=\"color:#7f8c8d;font-size:12px\">Este recordatorio se envia automaticamente cada 1 de mes a las 09:00. Solo llega si hay alguna clave >60 dias.</p>\n</div>`;\nreturn [{ json: { html: html, subject: report.any_high ? '[ARQUITAI ALERTA] Rotar claves >90 dias' : '[ArquitAI] Recordatorio rotacion claves' } }];"
+      }
+    },
+    {
+      "id": "kr-06",
+      "name": "Send Reminder",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [500, 220],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $('Load Architect Email').first().json.value }}",
+        "subject": "={{ $('Build Email Body').first().json.subject }}",
+        "emailType": "html",
+        "message": "={{ $('Build Email Body').first().json.html }}",
+        "options": { "appendAttribution": false }
+      },
+      "credentials": { "gmailOAuth2": { "id": "cIma8ntTjZvIfU3H", "name": "damian2botella" } },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "kr-07",
+      "name": "No-op (all OK)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [20, 380],
+      "parameters": {}
+    }
+  ],
+  "connections": {
+    "Monthly Trigger":      { "main": [[{ "node": "Check Key Ages",      "type": "main", "index": 0 }]] },
+    "Check Key Ages":       { "main": [[{ "node": "Any Need Rotation?",  "type": "main", "index": 0 }]] },
+    "Any Need Rotation?":   {
+      "main": [
+        [{ "node": "Load Architect Email", "type": "main", "index": 0 }],
+        [{ "node": "No-op (all OK)",       "type": "main", "index": 0 }]
+      ]
+    },
+    "Load Architect Email": { "main": [[{ "node": "Build Email Body",    "type": "main", "index": 0 }]] },
+    "Build Email Body":     { "main": [[{ "node": "Send Reminder",       "type": "main", "index": 0 }]] }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5"
+  }
+}

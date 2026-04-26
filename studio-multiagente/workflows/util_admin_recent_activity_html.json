@@ -1,0 +1,73 @@
+{
+  "name": "util_admin_recent_activity_html",
+  "nodes": [
+    {
+      "id": "ra-01",
+      "name": "Webhook GET",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-700, 300],
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "admin-activity",
+        "responseMode": "responseNode",
+        "authentication": "headerAuth"
+      },
+      "credentials": { "httpHeaderAuth": { "id": "Ba643jvuElTgMawr", "name": "Webhook API Key (entrante)" } },
+      "webhookId": "ra-trigger"
+    },
+    {
+      "id": "ra-02",
+      "name": "Load Activity",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [-460, 300],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT json_build_object(\n  'activity_log', (SELECT json_agg(t.* ORDER BY t.created_at DESC) FROM (\n    SELECT created_at, agent_name, action, status, LEFT(output_summary, 100) AS preview\n      FROM activity_log\n     WHERE created_at > now() - INTERVAL '48 hours'\n     ORDER BY created_at DESC\n     LIMIT 50\n  ) t),\n  'security_events', (SELECT json_agg(t.* ORDER BY t.occurred_at DESC) FROM (\n    SELECT occurred_at, event_type, severity, source_ip, LEFT(description, 100) AS preview, resolved\n      FROM security_events\n     WHERE occurred_at > now() - INTERVAL '48 hours'\n     ORDER BY occurred_at DESC\n     LIMIT 30\n  ) t),\n  'workflow_errors_24h', (SELECT count(*) FROM activity_log WHERE action='workflow_error' AND created_at > now() - INTERVAL '24 hours')\n) AS report;",
+        "options": {}
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } }
+    },
+    {
+      "id": "ra-03",
+      "name": "Build HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-220, 300],
+      "parameters": {
+        "jsCode": "const r = $input.first().json.report || {};\nconst log = r.activity_log || [];\nconst events = r.security_events || [];\nconst sevColor = { critical: '#7f1d1d', high: '#dc2626', medium: '#ea580c', low: '#f59e0b', info: '#6b7280' };\nconst statusColor = s => s==='error' ? '#dc2626' : (s==='success' ? '#10b981' : '#6b7280');\nconst row = (cells) => '<tr>'+cells.map(c=>'<td style=\"padding:6px 8px;border-bottom:1px solid #eee;font-size:12px;vertical-align:top\">'+c+'</td>').join('')+'</tr>';\nconst tbl = (headers, rows) => '<table style=\"width:100%;background:white;border-collapse:collapse;border-radius:6px;overflow:hidden\"><thead style=\"background:#1f2937;color:white\"><tr>'+headers.map(h=>'<th style=\"padding:8px;text-align:left;font-size:11px\">'+h+'</th>').join('')+'</tr></thead><tbody>'+(rows.length>0?rows.join(''):row(headers.map(()=>'<i style=\"color:#10b981\">sin actividad</i>')))+'</tbody></table>';\nconst logRows = log.map(l=>row([\n  new Date(l.created_at).toISOString().slice(11,16),\n  '<b>'+(l.agent_name||'?')+'</b>',\n  '<code>'+l.action+'</code>',\n  '<span style=\"color:'+statusColor(l.status)+'\">'+(l.status||'-')+'</span>',\n  l.preview||'-'\n]));\nconst eventRows = events.map(e=>row([\n  new Date(e.occurred_at).toISOString().slice(11,16),\n  '<span style=\"background:'+(sevColor[e.severity]||'#6b7280')+';color:white;padding:1px 6px;border-radius:3px;font-size:10px\">'+(e.severity||'?').toUpperCase()+'</span>',\n  e.event_type,\n  e.source_ip||'-',\n  e.resolved ? '<span style=\"color:#10b981\">resolved</span>' : '<span style=\"color:#dc2626\">UNRESOLVED</span>',\n  e.preview||'-'\n]));\nconst html = '<!DOCTYPE html><html lang=\"es\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>Actividad reciente — ArquitAI</title>' +\n'<style>body{font-family:-apple-system,Arial,sans-serif;max-width:1100px;margin:24px auto;padding:16px;color:#1f2937;background:#f3f4f6}h1{color:#0f172a;margin:0 0 4px}h2{color:#374151;font-size:15px;margin:24px 0 8px}.meta{color:#64748b;font-size:13px}.errors{background:#fee2e2;color:#991b1b;padding:10px;border-radius:6px;font-size:13px}</style>' +\n'</head><body>' +\n'<a href=\"/webhook/admin-index\" style=\"color:#2563eb;font-size:13px;text-decoration:none\">← Admin index</a>' +\n'<h1>Actividad reciente</h1>' +\n'<div class=\"meta\">Ventana de 48h — ' + new Date().toLocaleString('es-ES') + '</div>' +\n((r.workflow_errors_24h||0) > 0 ? '<div class=\"errors\" style=\"margin:12px 0\"><b>'+r.workflow_errors_24h+' errores de workflow en 24h</b> — ver tabla activity_log</div>' : '') +\n'<h2>Security events 48h ('+events.length+')</h2>' +\n tbl(['Hora','Sev','Tipo','IP','Status','Descripcion'], eventRows) +\n'<h2>Activity log 48h, top 50 ('+log.length+')</h2>' +\n tbl(['Hora','Agent','Action','Status','Preview'], logRows) +\n'<p style=\"color:#94a3b8;font-size:11px;margin-top:32px;text-align:center\">Para historico mas alla de 48h: consulta SQL directa.</p>' +\n'</body></html>';\nreturn [{ json: { html } }];"
+      }
+    },
+    {
+      "id": "ra-04",
+      "name": "Respond HTML",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [20, 300],
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.html }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              { "name": "Content-Type", "value": "text/html; charset=utf-8" },
+              { "name": "X-Frame-Options", "value": "DENY" },
+              { "name": "Cache-Control", "value": "no-store" }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook GET":   { "main": [[{ "node": "Load Activity", "type": "main", "index": 0 }]] },
+    "Load Activity": { "main": [[{ "node": "Build HTML",    "type": "main", "index": 0 }]] },
+    "Build HTML":    { "main": [[{ "node": "Respond HTML",  "type": "main", "index": 0 }]] }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5"
+  }
+}

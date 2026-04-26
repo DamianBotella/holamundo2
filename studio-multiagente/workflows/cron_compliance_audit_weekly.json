@@ -1,0 +1,41 @@
+{
+  "name": "cron_compliance_audit_weekly",
+  "_n8n_id": "tTZaWj86DPW0TNRt",
+  "_purpose": "Fase 2 de 3.21 (compliance audit). Cron domingos 08:00 que recorre los proyectos activos (status=active, current_phase NOT IN completed/archived, max 50) y para cada uno hace POST /webhook/audit-project con send_email=false reutilizando agent_compliance_audit (RzLYzuMiDWBPpo6y). Aggrega scorecards: distribucion grades A/B/C/D, totales critical, lista proyectos con score<80 o critical>0. Si has_alerts -> email digest semanal al architect_email; sino -> Log Run con activity_log (cron_workflow_audit lo vigila).",
+  "_triggers": "cron 0 8 * * 0 (domingos 08:00)",
+  "_strategy": "HTTP loop con SplitInBatches (batch_size 1) sobre cada project_id, llamando al webhook ya existente. Reutiliza la logica del Build Scorecard sin duplicarla.",
+  "_audited_by": "cron_workflow_audit (action='compliance_audit_weekly_clean', INTERVAL 8 days)",
+  "nodes": [
+    { "id": "ccaw-01", "name": "Schedule Sunday 08:00", "type": "n8n-nodes-base.scheduleTrigger", "position": [-900, 300], "_cron": "0 8 * * 0" },
+    { "id": "ccaw-02", "name": "Load Architect Email",  "type": "n8n-nodes-base.postgres",        "position": [-700, 300] },
+    { "id": "ccaw-03", "name": "Find Active Projects",  "type": "n8n-nodes-base.postgres",        "position": [-460, 300], "_query_summary": "SELECT id, name, current_phase FROM projects WHERE current_phase NOT IN (completed/archived) AND status=active LIMIT 50" },
+    { "id": "ccaw-04", "name": "Split Projects",        "type": "n8n-nodes-base.splitInBatches",  "position": [-220, 300], "_batch_size": 1 },
+    { "id": "ccaw-05", "name": "Audit One Project",     "type": "n8n-nodes-base.httpRequest",     "position": [20, 300], "_url": "POST /webhook/audit-project con send_email=false (reutiliza agent_compliance_audit)" },
+    { "id": "ccaw-06", "name": "Aggregate Results",     "type": "n8n-nodes-base.code",            "position": [500, 220] },
+    { "id": "ccaw-07", "name": "Has Alerts?",           "type": "n8n-nodes-base.if",              "position": [740, 220], "_check": "low_scores.length > 0 (typeValidation: loose)" },
+    { "id": "ccaw-08", "name": "Build Email",           "type": "n8n-nodes-base.code",            "position": [980, 80] },
+    { "id": "ccaw-09", "name": "Send Email",            "type": "n8n-nodes-base.gmail",           "position": [1220, 80] },
+    { "id": "ccaw-10", "name": "Log Run",               "type": "n8n-nodes-base.postgres",        "position": [1460, 220], "_action": "compliance_audit_weekly_clean (status=warning|success)" }
+  ],
+  "connections": {
+    "Schedule Sunday 08:00": { "main": [[{ "node": "Load Architect Email",  "type": "main", "index": 0 }]] },
+    "Load Architect Email":  { "main": [[{ "node": "Find Active Projects",  "type": "main", "index": 0 }]] },
+    "Find Active Projects":  { "main": [[{ "node": "Split Projects",        "type": "main", "index": 0 }]] },
+    "Split Projects":        {
+      "main": [
+        [{ "node": "Aggregate Results", "type": "main", "index": 0 }],
+        [{ "node": "Audit One Project", "type": "main", "index": 0 }]
+      ]
+    },
+    "Audit One Project":     { "main": [[{ "node": "Split Projects",        "type": "main", "index": 0 }]] },
+    "Aggregate Results":     { "main": [[{ "node": "Has Alerts?",           "type": "main", "index": 0 }]] },
+    "Has Alerts?":           {
+      "main": [
+        [{ "node": "Build Email", "type": "main", "index": 0 }],
+        [{ "node": "Log Run",     "type": "main", "index": 0 }]
+      ]
+    },
+    "Build Email":           { "main": [[{ "node": "Send Email",            "type": "main", "index": 0 }]] },
+    "Send Email":            { "main": [[{ "node": "Log Run",               "type": "main", "index": 0 }]] }
+  }
+}

@@ -34,6 +34,7 @@
 | `GET /webhook/admin-llm-stats` | `util_admin_llm_stats_html` (`QlGwyyV9S4AuVtln`) | Header X-API-Key | Dashboard HTML de costes LLM 24h/7d/30d, por agente y modelo, banner si hay `unknown_agent` en 24h |
 | `GET /webhook/admin-pipeline-metrics` | `util_admin_pipeline_metrics_html` (`Zw6iaYTwznmgkeuL`) | Header X-API-Key | Dashboard ejecutivo: distribución por fase con barras, totales, agentes 7d, proyectos estancados >14d, recientes completados |
 | `GET /webhook/admin-trades-summary` | `util_admin_trades_summary_html` (`1CHP5KuDWNGqWvi9`) | Header X-API-Key | Dashboard agregado por gremio: response/accept rate, top 15 suppliers, solicitudes sin respuesta >14d |
+| `GET /webhook/admin-compliance-overview` | `util_admin_compliance_overview_html` (`jxCwiphu6ahrBNXv`) | Header X-API-Key | Snapshot inmediato (sin LLM) de compliance: grade A/B/C/D + 11 checks por proyecto activo |
 | `GET /webhook/qc-form?qc_id=<uuid>` | `qc_public_form` (`Pqod9AyvG0opCrLU`) | Header X-API-Key | Form HTML responsive móvil para marcar pass/fail/skip + comentario en items del qc_check (autosave via fetch al qc-complete existente) |
 
 ### Endpoints públicos (con security_check integrado)
@@ -88,6 +89,8 @@
 | `0 10 * * *` (diario 10:00) | `cron_collab_review` (`sJpNiWYCIlCvqB5i`) | Vigila colaboradores: deadline vencido + delivered>7d sin approved + invited>5d sin respuesta |
 | `45 9 * * *` (diario 09:45) | `cron_contract_followup` (`ZlzJpRwOnoG1altD`) | Vigila contratos: esperando firma >7d + drafts olvidados >14d + expirados |
 | `30 11 * * *` (diario 11:30) | `cron_invoice_approval_followup` (`xM7YlAGwbbgbFaGI`) | Vigila facturas: pending_review >5d + approved sin pagar >30d + disputed >14d |
+| `0 8 * * 0` (semanal Dom 08:00) | `cron_compliance_audit_weekly` (`tTZaWj86DPW0TNRt`) | Audit compliance semanal por cada proyecto activo (HTTP loop a agent_compliance_audit, digest si grade < B o critical > 0) |
+| `0 12 * * *` (diario 12:00) | `cron_pathology_review` (`tFYGrFmo3zBwirre`) | Vigila patologías: stale >30d sin actualizar + críticos/affects_safety sin resolver |
 
 ## Funciones SQL (PostgreSQL)
 

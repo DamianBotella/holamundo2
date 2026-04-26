@@ -1,0 +1,19 @@
+{
+  "name": "util_admin_compliance_overview_html",
+  "_n8n_id": "jxCwiphu6ahrBNXv",
+  "_purpose": "Dashboard HTML de compliance overview de TODOS los proyectos activos en una vista. GET /webhook/admin-compliance-overview con header x-api-key. Sin LLM (deterministico, instant): por cada proyecto activo, calcula grade A/B/C/D usando 11 checks (briefing/design/costs/encargo/permits/safety/acta/aftercare/gdpr/qc_blocked/pathology_critical) ponderados por fase. 7 KPI cards (total + grade A/B/C/D + aftercare urgent + pathology critical). Tabla compacta con +/- por check.",
+  "_triggers": "GET /webhook/admin-compliance-overview (header x-api-key)",
+  "_complementa_a": "agent_compliance_audit (audit detallado por proyecto con scorecard + email) y cron_compliance_audit_weekly (audit semanal automatico). Este es la vista agregada instant.",
+  "_links_to": "/webhook/admin-project?project_id=<uuid> (drill-down per proyecto)",
+  "nodes": [
+    { "id": "aco-01", "name": "Webhook GET",              "type": "n8n-nodes-base.webhook",          "position": [-700, 300] },
+    { "id": "aco-02", "name": "Load Compliance Snapshot", "type": "n8n-nodes-base.postgres",         "position": [-460, 300], "_query_summary": "Per project (max 60 active): EXISTS y count() para los 11 checks principales. SQL deterministico, no LLM." },
+    { "id": "aco-03", "name": "Build HTML",               "type": "n8n-nodes-base.code",             "position": [-220, 300], "_calc_grade": "Replica logica del Build Scorecard de agent_compliance_audit pero sin las recomendaciones detalladas. Phase rank pondera applicabilidad de cada check." },
+    { "id": "aco-04", "name": "Respond HTML",             "type": "n8n-nodes-base.respondToWebhook", "position": [20, 300] }
+  ],
+  "connections": {
+    "Webhook GET":              { "main": [[{ "node": "Load Compliance Snapshot", "type": "main", "index": 0 }]] },
+    "Load Compliance Snapshot": { "main": [[{ "node": "Build HTML",               "type": "main", "index": 0 }]] },
+    "Build HTML":               { "main": [[{ "node": "Respond HTML",             "type": "main", "index": 0 }]] }
+  }
+}

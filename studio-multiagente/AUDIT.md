@@ -6,9 +6,9 @@ Fecha: 2026-04-26
 
 | | Total |
 |---|---|
-| Workflows activos en n8n | **~133** (bloque 15 añade 2: cron_contract_followup + cron_invoice_approval_followup) |
-| JSONs locales en `workflows/` | **109+** |
-| En n8n SIN JSON local | **~16** (era 44, sincronizados 26 entre bloques 7-15) |
+| Workflows activos en n8n | **~136** (bloque 16 añade 3: cron_compliance_audit_weekly + cron_pathology_review + util_admin_compliance_overview_html) |
+| JSONs locales en `workflows/` | **112+** |
+| En n8n SIN JSON local | **~16** (era 44 — bloque 16 no sincroniza más huérfanos, los 3 son nuevos) |
 | En local SIN n8n | **0** |
 
 ## Sincronizados en bloque 7-12
@@ -33,6 +33,12 @@ Fecha: 2026-04-26
 - `agent_financial_tracker.json` (stub estructural — OCR facturas)
 - `cron_post_phase_audits.json` (stub estructural — cron 30min auditorías post-fase)
 - `util_admin_llm_stats_html.json` (workflow NUEVO — dashboard de costes LLM con drill-down)
+
+**Bloque 16** (Fase 2 hooks: 3 workflows nuevos):
+- `cron_compliance_audit_weekly.json` (workflow NUEVO `tTZaWj86DPW0TNRt`, activo — domingos 08:00 corre audit por cada proyecto activo via HTTP loop a agent_compliance_audit, agrega scorecards y manda digest si grade < B o critical>0)
+- `cron_pathology_review.json` (workflow NUEVO `tFYGrFmo3zBwirre`, activo — diario 12:00 alerta findings >30d sin actualizar + criticos sin resolver)
+- `util_admin_compliance_overview_html.json` (workflow NUEVO `jxCwiphu6ahrBNXv`, activo — GET /webhook/admin-compliance-overview, snapshot deterministico todos proyectos sin LLM)
+- Hook `agent_briefing` ↔ `pathology_findings` verificado en n8n vivo: el SQL de `Load Project + Client` ya inyecta el array de findings unresolved. P3 del plan no requirió cambios — ya implementado en sesiones previas. Documentado en CHANGELOG.
 
 **Bloque 15** (5 huérfanos + 2 nuevos crons + admin-index actualizado):
 - `cron_contract_followup.json` (workflow NUEVO `ZlzJpRwOnoG1altD`, activo — Fase 2 de 3.13: alerta contracts esperando firma >7d, drafts olvidados >14d, expirados)

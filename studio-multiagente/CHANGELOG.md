@@ -2,7 +2,17 @@
 
 Histórico cronológico de hitos del sistema. Generado a partir de git log.
 
-## 2026-04-26 — Bloques 7-15: sync huérfanos + meta-vigilancia + Fase 2 contracts/invoices
+## 2026-04-26 — Bloques 7-16: Fase 2 hooks compliance/pathology + dashboard overview
+
+### Bloque 16 (5 puntos): plan 5h
+- `cron_compliance_audit_weekly` (id `tTZaWj86DPW0TNRt`, activo): Fase 2 de 3.21. Cron domingos 08:00 hace HTTP loop sobre proyectos activos llamando a agent_compliance_audit con send_email=false; agrega scorecards y envia digest si has_alerts. Vigilado con INTERVAL 8 days.
+- `cron_pathology_review` (id `tFYGrFmo3zBwirre`, activo): Fase 2 de 3.18. Cron diario 12:00 alerta findings stale >30d sin actualizar + críticos/affects_safety sin resolver. Vigilado con INTERVAL 26h.
+- Hook `agent_briefing` ↔ `pathology_findings` verificado: el SQL de `Load Project + Client` ya incluye `(SELECT json_agg(...) FROM pathology_findings WHERE project_id=p.id AND status NOT IN ('repaired','dismissed')) AS pathology_findings`. P3 del plan resultó NoOp porque ya estaba implementado en sesiones previas. Documentado.
+- `util_admin_compliance_overview_html` (id `jxCwiphu6ahrBNXv`, activo): GET `/webhook/admin-compliance-overview`. Snapshot deterministico (sin LLM) de TODOS los proyectos activos con grade A/B/C/D + 11 checks +/-. Replica logica de scoring de agent_compliance_audit en JS para no llamar al LLM ni hacer HTTP requests.
+- Admin index actualizado con link al nuevo dashboard.
+- AUDIT.md, CHANGELOG, referencia_workflows actualizados.
+
+
 
 ### Bloque 15 (5 puntos): plan 5h
 - `cron_contract_followup` (id `ZlzJpRwOnoG1altD`, activo): Fase 2 de 3.13. Cron 09:45 con 3 condiciones (awaiting_signature >7d, forgotten_drafts >14d, expired). Email HTML agrupado. Vigilado por cron_workflow_audit con `contract_followup_clean`.

@@ -1,0 +1,30 @@
+{
+  "name": "cron_pathology_review",
+  "_n8n_id": "tFYGrFmo3zBwirre",
+  "_purpose": "Fase 2 de 3.18 (patologia). Cron diario 12:00 con 2 condiciones: (1) findings con status NOT IN (repaired/dismissed/monitored) y updated_at >30d (sin actualizar mucho tiempo, posible olvido); (2) findings con severity='critical' OR affects_safety=true y status NOT IN (repaired/dismissed) (todos los criticos, sin importar fecha). Si total > 0, email HTML agrupado por categoria al architect_email.",
+  "_triggers": "cron 0 12 * * * (diario 12:00)",
+  "_audited_by": "cron_workflow_audit (action='pathology_review_clean', INTERVAL 26h)",
+  "nodes": [
+    { "id": "cpr-01", "name": "Schedule 12:00 Daily", "type": "n8n-nodes-base.scheduleTrigger", "position": [-700, 300], "_cron": "0 12 * * *" },
+    { "id": "cpr-02", "name": "Load Architect Email", "type": "n8n-nodes-base.postgres",        "position": [-460, 300] },
+    { "id": "cpr-03", "name": "Find Issues",          "type": "n8n-nodes-base.postgres",        "position": [-220, 300], "_query_summary": "json con stale_findings (>30d sin update y status no terminal) + critical_unresolved (severity=critical OR affects_safety=true) + total_issues" },
+    { "id": "cpr-04", "name": "Has Issues?",          "type": "n8n-nodes-base.if",              "position": [20, 300], "_check": "total_issues > 0 (typeValidation: loose)" },
+    { "id": "cpr-05", "name": "Build Email",          "type": "n8n-nodes-base.code",            "position": [260, 160] },
+    { "id": "cpr-06", "name": "Send Email",           "type": "n8n-nodes-base.gmail",           "position": [500, 160] },
+    { "id": "cpr-07", "name": "Log Issues Found",     "type": "n8n-nodes-base.postgres",        "position": [740, 160], "_action": "pathology_review_clean (status=warning, summary 'ran_with_issues')" },
+    { "id": "cpr-08", "name": "Log Clean",            "type": "n8n-nodes-base.postgres",        "position": [260, 440], "_action": "pathology_review_clean (status=success)" }
+  ],
+  "connections": {
+    "Schedule 12:00 Daily": { "main": [[{ "node": "Load Architect Email", "type": "main", "index": 0 }]] },
+    "Load Architect Email": { "main": [[{ "node": "Find Issues",          "type": "main", "index": 0 }]] },
+    "Find Issues":          { "main": [[{ "node": "Has Issues?",          "type": "main", "index": 0 }]] },
+    "Has Issues?":          {
+      "main": [
+        [{ "node": "Build Email", "type": "main", "index": 0 }],
+        [{ "node": "Log Clean",   "type": "main", "index": 0 }]
+      ]
+    },
+    "Build Email":          { "main": [[{ "node": "Send Email",           "type": "main", "index": 0 }]] },
+    "Send Email":           { "main": [[{ "node": "Log Issues Found",     "type": "main", "index": 0 }]] }
+  }
+}

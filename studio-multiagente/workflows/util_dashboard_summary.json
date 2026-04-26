@@ -1,0 +1,68 @@
+{
+  "name": "util_dashboard_summary",
+  "nodes": [
+    {
+      "id": "ds-01",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -700,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "dashboard-summary",
+        "responseMode": "lastNode",
+        "authentication": "headerAuth"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "Ba643jvuElTgMawr",
+          "name": "Webhook API Key (entrante)"
+        }
+      },
+      "webhookId": "ds-trigger"
+    },
+    {
+      "id": "ds-02",
+      "name": "Build Dashboard",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -460,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT json_build_object(\n  'generated_at', now()::text,\n  'projects', json_build_object(\n    'total_active', (SELECT count(*) FROM projects WHERE status='active' AND current_phase NOT IN ('completed','archived')),\n    'by_phase', (SELECT json_object_agg(current_phase, n) FROM (SELECT current_phase, count(*) AS n FROM projects WHERE status='active' AND current_phase NOT IN ('completed','archived') GROUP BY current_phase) t),\n    'completed_last_30d', (SELECT count(*) FROM projects WHERE current_phase='completed' AND completed_at > now() - INTERVAL '30 days'),\n    'oldest_active_days', (SELECT EXTRACT(DAY FROM now() - min(updated_at))::int FROM projects WHERE status='active' AND current_phase NOT IN ('completed','archived'))\n  ),\n  'contracts', json_build_object(\n    'pending_signature', (SELECT count(*) FROM contracts WHERE status IN ('sent','ready_to_sign')),\n    'expiring_7d', (SELECT count(*) FROM contracts WHERE status IN ('sent','ready_to_sign','draft') AND expires_at BETWEEN now() AND now() + INTERVAL '7 days'),\n    'signed_last_30d', (SELECT count(*) FROM contracts WHERE status='signed' AND signed_at > now() - INTERVAL '30 days')\n  ),\n  'collaborators', json_build_object(\n    'active_assignments', (SELECT count(*) FROM collab_assignments WHERE status NOT IN ('closed','cancelled','rejected','approved')),\n    'overdue', (SELECT count(*) FROM collab_assignments WHERE status NOT IN ('approved','closed','cancelled','rejected') AND deadline IS NOT NULL AND deadline < now()::date),\n    'pending_review', (SELECT count(*) FROM collab_assignments WHERE status='delivered' AND delivered_at < now() - INTERVAL '3 days')\n  ),\n  'aftercare', json_build_object(\n    'open', (SELECT count(*) FROM aftercare_incidents WHERE status NOT IN ('resolved','closed','cancelled')),\n    'urgent_open', (SELECT count(*) FROM aftercare_incidents WHERE status NOT IN ('resolved','closed','cancelled') AND severity IN ('high','critical'))\n  ),\n  'permits', json_build_object(\n    'in_progress', (SELECT count(*) FROM permit_applications WHERE status NOT IN ('approved','rejected','withdrawn','expired'))\n  ),\n  'qc_checks', json_build_object(\n    'open', (SELECT count(*) FROM qc_checks WHERE status IN ('open','in_progress','blocked'))\n  ),\n  'anomalies', json_build_object(\n    'unreviewed', (SELECT count(*) FROM anomalies_detected WHERE status='detected')\n  ),\n  'consultations', json_build_object(\n    'pending', (SELECT count(*) FROM consultation_queue WHERE status='pending')\n  ),\n  'finance', json_build_object(\n    'invoices_pending_approval', (SELECT count(*) FROM invoices WHERE status='pending'),\n    'invoices_paid_last_30d_total_eur', COALESCE((SELECT round(sum(total_amount)::numeric, 2) FROM invoices WHERE status='paid' AND paid_at > now() - INTERVAL '30 days'), 0)\n  ),\n  'energy_assessments', json_build_object(\n    'projects_assessed', (SELECT count(DISTINCT project_id) FROM energy_assessments),\n    'avg_demanda_total', (SELECT round(avg(demanda_total_kwh_m2_anyo)::numeric, 1) FROM energy_assessments WHERE demanda_total_kwh_m2_anyo IS NOT NULL)\n  ),\n  'home_automation', json_build_object(\n    'proposals_total', (SELECT count(*) FROM home_automation_proposals),\n    'accepted_last_90d', (SELECT count(*) FROM home_automation_proposals WHERE status='accepted' AND updated_at > now() - INTERVAL '90 days')\n  ),\n  'client_concierge', json_build_object(\n    'questions_last_30d', (SELECT count(*) FROM client_conversations WHERE asked_at > now() - INTERVAL '30 days'),\n    'escalation_rate_pct', (SELECT round(100.0 * count(*) FILTER (WHERE escalated) / NULLIF(count(*),0), 1) FROM client_conversations WHERE asked_at > now() - INTERVAL '30 days'),\n    'cost_usd_last_30d', COALESCE((SELECT round(sum(llm_cost_usd)::numeric, 4) FROM client_conversations WHERE asked_at > now() - INTERVAL '30 days'), 0)\n  ),\n  'errors_last_24h', (SELECT count(*) FROM activity_log WHERE action='workflow_error' AND created_at > now() - INTERVAL '24 hours')\n) AS dashboard;",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Build Dashboard",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  }
+}

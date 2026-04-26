@@ -1,0 +1,233 @@
+{
+  "name": "cron_weekly_kpis",
+  "nodes": [
+    {
+      "id": "wk-01",
+      "name": "Schedule Lunes 08:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -700,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks",
+              "weeksInterval": 1,
+              "triggerAtDay": [
+                1
+              ],
+              "triggerAtHour": 8,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "wk-02",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -700,
+        500
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "trigger-weekly-kpis",
+        "responseMode": "lastNode",
+        "authentication": "headerAuth"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "Ba643jvuElTgMawr",
+          "name": "Webhook API Key (entrante)"
+        }
+      },
+      "webhookId": "wk-manual"
+    },
+    {
+      "id": "wk-03",
+      "name": "Load Architect Email",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -460,
+        400
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT value FROM system_config WHERE key = 'architect_email'",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "wk-04",
+      "name": "Load Dashboard",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -220,
+        400
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT json_build_object(\n  'generated_at', now()::text,\n  'projects', json_build_object(\n    'total_active', (SELECT count(*) FROM projects WHERE status='active' AND current_phase NOT IN ('completed','archived')),\n    'by_phase', (SELECT json_object_agg(current_phase, n) FROM (SELECT current_phase, count(*) AS n FROM projects WHERE status='active' AND current_phase NOT IN ('completed','archived') GROUP BY current_phase) t),\n    'completed_last_30d', (SELECT count(*) FROM projects WHERE current_phase='completed' AND completed_at > now() - INTERVAL '30 days'),\n    'oldest_active_days', (SELECT EXTRACT(DAY FROM now() - min(updated_at))::int FROM projects WHERE status='active' AND current_phase NOT IN ('completed','archived'))\n  ),\n  'contracts', json_build_object(\n    'pending_signature', (SELECT count(*) FROM contracts WHERE status IN ('sent','ready_to_sign')),\n    'expiring_7d', (SELECT count(*) FROM contracts WHERE status IN ('sent','ready_to_sign','draft') AND expires_at BETWEEN now() AND now() + INTERVAL '7 days'),\n    'signed_last_30d', (SELECT count(*) FROM contracts WHERE status='signed' AND signed_at > now() - INTERVAL '30 days')\n  ),\n  'collaborators', json_build_object(\n    'active_assignments', (SELECT count(*) FROM collab_assignments WHERE status NOT IN ('closed','cancelled','rejected','approved')),\n    'overdue', (SELECT count(*) FROM collab_assignments WHERE status NOT IN ('approved','closed','cancelled','rejected') AND deadline IS NOT NULL AND deadline < now()::date),\n    'pending_review', (SELECT count(*) FROM collab_assignments WHERE status='delivered' AND delivered_at < now() - INTERVAL '3 days')\n  ),\n  'aftercare', json_build_object(\n    'open', (SELECT count(*) FROM aftercare_incidents WHERE status NOT IN ('resolved','closed','cancelled')),\n    'urgent_open', (SELECT count(*) FROM aftercare_incidents WHERE status NOT IN ('resolved','closed','cancelled') AND severity IN ('high','critical'))\n  ),\n  'permits', json_build_object('in_progress', (SELECT count(*) FROM permit_applications WHERE status NOT IN ('approved','rejected','withdrawn','expired'))),\n  'qc_checks', json_build_object('open', (SELECT count(*) FROM qc_checks WHERE status IN ('open','in_progress','blocked'))),\n  'anomalies', json_build_object('unreviewed', (SELECT count(*) FROM anomalies_detected WHERE status='detected')),\n  'consultations', json_build_object('pending', (SELECT count(*) FROM consultation_queue WHERE status='pending')),\n  'finance', json_build_object(\n    'invoices_pending_approval', (SELECT count(*) FROM invoices WHERE status='pending'),\n    'invoices_paid_last_30d_total_eur', COALESCE((SELECT round(sum(total_amount)::numeric, 2) FROM invoices WHERE status='paid' AND paid_at > now() - INTERVAL '30 days'), 0)\n  ),\n  'errors_last_24h', (SELECT count(*) FROM activity_log WHERE action='workflow_error' AND created_at > now() - INTERVAL '24 hours')\n) AS dashboard;",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "wk-05",
+      "name": "Build Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        20,
+        400
+      ],
+      "parameters": {
+        "jsCode": "const d = $input.first().json.dashboard;\nconst byPhase = d.projects.by_phase || {};\nconst phaseRows = Object.entries(byPhase).map(([k,v]) => '<tr><td style=\\\"padding:4px 10px\\\">' + k + '</td><td style=\\\"padding:4px 10px;text-align:right\\\"><b>' + v + '</b></td></tr>').join('');\nconst kpi = (label, val, danger) => '<tr><td style=\\\"padding:6px 12px\\\">' + label + '</td><td style=\\\"padding:6px 12px;text-align:right\\\"' + (danger ? ' bgcolor=\\\"#ffe0e0\\\"' : '') + '><b>' + (val !== null && val !== undefined ? val : '-') + '</b></td></tr>';\nconst html = `<div style=\\\"font-family:Arial,sans-serif;max-width:720px;margin:0 auto\\\">\n<h2 style=\\\"color:#2c3e50\\\">KPIs semanales — ArquitAI</h2>\n<p style=\\\"color:#7f8c8d\\\">Resumen del estado del estudio. Generado: ${d.generated_at}</p>\n\n<h3 style=\\\"color:#2c3e50\\\">Proyectos</h3>\n<table style=\\\"border-collapse:collapse;width:100%\\\">\n${kpi('Activos', d.projects.total_active)}\n${kpi('Completados ult. 30d', d.projects.completed_last_30d)}\n${kpi('Mas antiguo sin tocar (dias)', d.projects.oldest_active_days, d.projects.oldest_active_days > 30)}\n</table>\n<h4>Por fase</h4>\n<table style=\\\"border-collapse:collapse\\\">${phaseRows}</table>\n\n<h3 style=\\\"color:#2c3e50;margin-top:24px\\\">Contratos</h3>\n<table style=\\\"border-collapse:collapse;width:100%\\\">\n${kpi('Pendientes de firma', d.contracts.pending_signature, d.contracts.pending_signature > 3)}\n${kpi('Expiran en 7d', d.contracts.expiring_7d, d.contracts.expiring_7d > 0)}\n${kpi('Firmados ult. 30d', d.contracts.signed_last_30d)}\n</table>\n\n<h3 style=\\\"color:#2c3e50;margin-top:24px\\\">Colaboradores</h3>\n<table style=\\\"border-collapse:collapse;width:100%\\\">\n${kpi('Asignaciones activas', d.collaborators.active_assignments)}\n${kpi('Overdue', d.collaborators.overdue, d.collaborators.overdue > 0)}\n${kpi('Pendientes revision', d.collaborators.pending_review, d.collaborators.pending_review > 0)}\n</table>\n\n<h3 style=\\\"color:#2c3e50;margin-top:24px\\\">Postventa / Permisos / QC</h3>\n<table style=\\\"border-collapse:collapse;width:100%\\\">\n${kpi('Aftercare abierto', d.aftercare.open)}\n${kpi('Aftercare urgente', d.aftercare.urgent_open, d.aftercare.urgent_open > 0)}\n${kpi('Permisos en progreso', d.permits.in_progress)}\n${kpi('QC checks abiertos', d.qc_checks.open)}\n</table>\n\n<h3 style=\\\"color:#2c3e50;margin-top:24px\\\">Pendientes de tu atencion</h3>\n<table style=\\\"border-collapse:collapse;width:100%\\\">\n${kpi('Anomalias sin revisar', d.anomalies.unreviewed, d.anomalies.unreviewed > 0)}\n${kpi('Consultas pendientes', d.consultations.pending, d.consultations.pending > 0)}\n${kpi('Facturas pendientes aprobar', d.finance.invoices_pending_approval, d.finance.invoices_pending_approval > 0)}\n</table>\n\n<h3 style=\\\"color:#2c3e50;margin-top:24px\\\">Finanzas</h3>\n<table style=\\\"border-collapse:collapse;width:100%\\\">\n${kpi('Facturas pagadas ult. 30d (EUR)', d.finance.invoices_paid_last_30d_total_eur)}\n</table>\n\n<h3 style=\\\"color:#2c3e50;margin-top:24px\\\">Salud sistema</h3>\n<table style=\\\"border-collapse:collapse;width:100%\\\">\n${kpi('Errores workflow ult. 24h', d.errors_last_24h, d.errors_last_24h > 5)}\n</table>\n\n<p style=\\\"font-size:11px;color:#95a5a6;margin-top:24px\\\">Endpoint API equivalente: <code>GET /webhook/dashboard-summary</code> con X-API-Key.</p>\n</div>`;\nconst totalAlerts = (d.aftercare.urgent_open || 0) + (d.contracts.expiring_7d || 0) + (d.collaborators.overdue || 0) + (d.anomalies.unreviewed || 0);\nreturn [{ json: { html_body: html, subject: 'ArquitAI — KPIs semanales' + (totalAlerts > 0 ? ' (' + totalAlerts + ' alertas)' : '') } }];"
+      }
+    },
+    {
+      "id": "wk-06",
+      "name": "Send Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        260,
+        400
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $('Load Architect Email').first().json.value }}",
+        "subject": "={{ $json.subject }}",
+        "emailType": "html",
+        "message": "={{ $json.html_body }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "cIma8ntTjZvIfU3H",
+          "name": "damian2botella"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "wk-07",
+      "name": "Log",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        500,
+        400
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, status, output_summary)\nVALUES (NULL, 'cron_weekly_kpis', 'send_kpis', 'success', $1)\nRETURNING id;",
+        "options": {
+          "queryReplacement": "={{ [ ('subject=' + $json.subject) ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Schedule Lunes 08:00": {
+      "main": [
+        [
+          {
+            "node": "Load Architect Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Load Architect Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Architect Email": {
+      "main": [
+        [
+          {
+            "node": "Load Dashboard",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Dashboard": {
+      "main": [
+        [
+          {
+            "node": "Build Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Email": {
+      "main": [
+        [
+          {
+            "node": "Send Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Email": {
+      "main": [
+        [
+          {
+            "node": "Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  }
+}

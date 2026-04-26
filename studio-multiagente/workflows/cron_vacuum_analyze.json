@@ -1,0 +1,47 @@
+{
+  "name": "cron_vacuum_analyze",
+  "nodes": [
+    {
+      "id": "va-01",
+      "name": "Sunday 03:30",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-700, 300],
+      "parameters": { "rule": { "interval": [{ "field": "cronExpression", "expression": "30 3 * * 0" }] } }
+    },
+    {
+      "id": "va-02",
+      "name": "VACUUM ANALYZE",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [-460, 300],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "VACUUM (ANALYZE, VERBOSE) projects;\nVACUUM (ANALYZE, VERBOSE) clients;\nVACUUM (ANALYZE, VERBOSE) briefings;\nVACUUM (ANALYZE, VERBOSE) client_conversations;\nVACUUM (ANALYZE, VERBOSE) gdpr_requests;\nVACUUM (ANALYZE, VERBOSE) security_events;\nVACUUM (ANALYZE, VERBOSE) access_log;\nVACUUM (ANALYZE, VERBOSE) rate_limits;\nVACUUM (ANALYZE, VERBOSE) ip_blocklist;\nVACUUM (ANALYZE, VERBOSE) llm_calls;\nVACUUM (ANALYZE, VERBOSE) activity_log;\nVACUUM (ANALYZE, VERBOSE) agent_executions;\nSELECT json_build_object(\n  'vacuum_completed_at', now(),\n  'tables_vacuumed', 12\n) AS report;",
+        "options": {}
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } }
+    },
+    {
+      "id": "va-03",
+      "name": "Log",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [-220, 300],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (action, agent_name, details) VALUES ('vacuum_analyze', 'cron_vacuum_analyze', $1::jsonb);",
+        "options": { "queryReplacement": "={{ [ JSON.stringify($json.report) ] }}" }
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } }
+    }
+  ],
+  "connections": {
+    "Sunday 03:30":   { "main": [[{ "node": "VACUUM ANALYZE", "type": "main", "index": 0 }]] },
+    "VACUUM ANALYZE": { "main": [[{ "node": "Log",            "type": "main", "index": 0 }]] }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5"
+  }
+}

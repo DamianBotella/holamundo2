@@ -1,0 +1,96 @@
+{
+  "name": "cron_data_integrity",
+  "nodes": [
+    {
+      "id": "di-01",
+      "name": "Daily 05:30",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-700, 300],
+      "parameters": {
+        "rule": { "interval": [{ "field": "cronExpression", "expression": "30 5 * * *" }] }
+      }
+    },
+    {
+      "id": "di-02",
+      "name": "Run Integrity Checks",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [-460, 300],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT json_build_object(\n  'orphan_briefings',         (SELECT count(*) FROM briefings b           WHERE NOT EXISTS (SELECT 1 FROM projects p WHERE p.id = b.project_id)),\n  'orphan_design_options',    (SELECT count(*) FROM design_options d      WHERE NOT EXISTS (SELECT 1 FROM projects p WHERE p.id = d.project_id)),\n  'orphan_regulatory_tasks',  (SELECT count(*) FROM regulatory_tasks rt   WHERE NOT EXISTS (SELECT 1 FROM projects p WHERE p.id = rt.project_id)),\n  'orphan_cost_estimates',    (SELECT count(*) FROM cost_estimates ce     WHERE NOT EXISTS (SELECT 1 FROM projects p WHERE p.id = ce.project_id)),\n  'orphan_proposals',         (SELECT count(*) FROM proposals pr          WHERE NOT EXISTS (SELECT 1 FROM projects p WHERE p.id = pr.project_id)),\n  'orphan_invoices',          (SELECT count(*) FROM invoices i            WHERE NOT EXISTS (SELECT 1 FROM projects p WHERE p.id = i.project_id)),\n  'orphan_aftercare',         (SELECT count(*) FROM aftercare_incidents a WHERE NOT EXISTS (SELECT 1 FROM projects p WHERE p.id = a.project_id)),\n  'orphan_consent_records',   (SELECT count(*) FROM consent_records cr    WHERE NOT EXISTS (SELECT 1 FROM clients c  WHERE c.id = cr.client_id)),\n  'orphan_client_tokens',     (SELECT count(*) FROM client_access_tokens t WHERE NOT EXISTS (SELECT 1 FROM clients c  WHERE c.id = t.client_id)),\n  'orphan_conversations',     (SELECT count(*) FROM client_conversations cc WHERE NOT EXISTS (SELECT 1 FROM projects p WHERE p.id = cc.project_id)),\n  'projects_without_client',  (SELECT count(*) FROM projects p             WHERE p.client_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM clients c WHERE c.id = p.client_id)),\n  'clients_without_consent',  (SELECT count(*) FROM clients c              WHERE NOT EXISTS (SELECT 1 FROM consent_records cr WHERE cr.client_id = c.id AND cr.revoked_at IS NULL)),\n  'projects_invalid_phase',   (SELECT count(*) FROM projects p             WHERE p.current_phase NOT IN ('intake','briefing_done','design_done','analysis_done','costs_done','trades_done','proposal_done','approved','planning_done','completed','archived')),\n  'tokens_invalid_purpose',   (SELECT count(*) FROM client_access_tokens t WHERE t.purpose NOT IN ('project_view','client_ask','aftercare_submit','gdpr_request','full_access')),\n  'briefings_no_project_ref', (SELECT count(*) FROM briefings b            WHERE b.project_id IS NULL)\n) AS report;",
+        "options": {}
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } }
+    },
+    {
+      "id": "di-03",
+      "name": "Has Issues?",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-220, 300],
+      "parameters": {
+        "jsCode": "const r = $input.first().json.report || {};\nconst issues = Object.entries(r).filter(([k,v]) => Number(v) > 0);\nconst totalIssues = issues.reduce((s, [k,v]) => s + Number(v), 0);\nreturn [{ json: { total_issues: totalIssues, issues_breakdown: Object.fromEntries(issues), report: r, has_issues: totalIssues > 0 } }];"
+      }
+    },
+    {
+      "id": "di-04",
+      "name": "Has Issues IF?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [20, 300],
+      "parameters": {
+        "conditions": {
+          "options": { "version": 2, "leftValue": "", "caseSensitive": true, "typeValidation": "loose" },
+          "combinator": "and",
+          "conditions": [
+            { "id": "h1", "leftValue": "={{ $json.has_issues }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true", "singleValue": true } }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "di-05",
+      "name": "Raise Event",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [260, 220],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT raise_security_event(\n  'unusual_access_pattern'::text,\n  CASE WHEN $1::int > 50 THEN 'high' ELSE 'medium' END,\n  'cron'::text, '/cron_data_integrity'::text, 'data_integrity'::text, NULL::uuid,\n  'Data integrity check: ' || $1 || ' filas con problema (orphans, FKs sueltas, fases invalidas).',\n  $2::jsonb\n) AS event_id;",
+        "options": { "queryReplacement": "={{ [ $json.total_issues, JSON.stringify($json.issues_breakdown) ] }}" }
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } }
+    },
+    {
+      "id": "di-06",
+      "name": "Log OK",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [260, 380],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (action, agent_name, details) VALUES ('data_integrity_ok', 'cron_data_integrity', $1::jsonb);",
+        "options": { "queryReplacement": "={{ [ JSON.stringify($json.report) ] }}" }
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } }
+    }
+  ],
+  "connections": {
+    "Daily 05:30":          { "main": [[{ "node": "Run Integrity Checks", "type": "main", "index": 0 }]] },
+    "Run Integrity Checks": { "main": [[{ "node": "Has Issues?",          "type": "main", "index": 0 }]] },
+    "Has Issues?":          { "main": [[{ "node": "Has Issues IF?",       "type": "main", "index": 0 }]] },
+    "Has Issues IF?":       {
+      "main": [
+        [{ "node": "Raise Event", "type": "main", "index": 0 }],
+        [{ "node": "Log OK",      "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5"
+  }
+}

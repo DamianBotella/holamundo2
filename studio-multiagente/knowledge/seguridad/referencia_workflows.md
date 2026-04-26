@@ -86,6 +86,8 @@
 | `0 11 * * *` (diario 11:00) | `cron_proposal_response_followup` (`YHTfBfLeaSFD7Vma`) | Email a Damián si propuestas sin respuesta cliente >7d |
 | `30 9 * * *` (diario 09:30) | `cron_unknown_agent_alert` (`3fNPnWuFjjcA7pBG`) | Vigila regresión del bug A2: alerta crítica si hay llm_calls con `agent_name IN ('unknown_agent','unknown','')` en últimas 24h |
 | `0 10 * * *` (diario 10:00) | `cron_collab_review` (`sJpNiWYCIlCvqB5i`) | Vigila colaboradores: deadline vencido + delivered>7d sin approved + invited>5d sin respuesta |
+| `45 9 * * *` (diario 09:45) | `cron_contract_followup` (`ZlzJpRwOnoG1altD`) | Vigila contratos: esperando firma >7d + drafts olvidados >14d + expirados |
+| `30 11 * * *` (diario 11:30) | `cron_invoice_approval_followup` (`xM7YlAGwbbgbFaGI`) | Vigila facturas: pending_review >5d + approved sin pagar >30d + disputed >14d |
 
 ## Funciones SQL (PostgreSQL)
 

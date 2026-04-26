@@ -1,233 +1,33 @@
 {
   "name": "cron_briefing_postprocess",
+  "_n8n_id": "88Q1eBSmIDOIPWyZ",
+  "_note": "Stub sincronizado 2026-04-26 (bloque 15). Para version completa: mcp__n8n__n8n_get_workflow id=88Q1eBSmIDOIPWyZ mode=full",
+  "_purpose": "Cron horario + Manual Trigger. Find Briefings Smart busca briefings recien aprobados que mencionan domotica/smart home/automatizacion en el campo client_needs o objectives. Si hay matches, dispara agent_home_automation automaticamente (auto-trigger sin esperar a Damian). Hook de fase 2 mencionado en ArquitAI sec 3.16.",
+  "_triggers": {
+    "Schedule Hourly": "cron horario para captar briefings nuevos rapidamente",
+    "Manual Trigger": "POST /webhook/trigger-briefing-postprocess"
+  },
+  "_dispatches": "agent_home_automation (6f25BcR8LwNX2HQH) via executeWorkflow",
+  "_log_action": "briefing_postprocess_dispatch (en Log Dispatch al completar)",
   "nodes": [
-    {
-      "id": "bp-01",
-      "name": "Schedule Hourly",
-      "type": "n8n-nodes-base.scheduleTrigger",
-      "typeVersion": 1.2,
-      "position": [
-        -700,
-        300
-      ],
-      "parameters": {
-        "rule": {
-          "interval": [
-            {
-              "field": "hours",
-              "hoursInterval": 1
-            }
-          ]
-        }
-      }
-    },
-    {
-      "id": "bp-02",
-      "name": "Manual Trigger",
-      "type": "n8n-nodes-base.webhook",
-      "typeVersion": 2,
-      "position": [
-        -700,
-        500
-      ],
-      "parameters": {
-        "httpMethod": "POST",
-        "path": "trigger-briefing-postprocess",
-        "responseMode": "lastNode",
-        "authentication": "headerAuth"
-      },
-      "credentials": {
-        "httpHeaderAuth": {
-          "id": "Ba643jvuElTgMawr",
-          "name": "Webhook API Key (entrante)"
-        }
-      },
-      "webhookId": "bp-manual"
-    },
-    {
-      "id": "bp-03",
-      "name": "Find Briefings Smart",
-      "type": "n8n-nodes-base.postgres",
-      "typeVersion": 2.5,
-      "position": [
-        -460,
-        400
-      ],
-      "parameters": {
-        "operation": "executeQuery",
-        "query": "SELECT b.id AS briefing_id, b.project_id\n  FROM briefings b\n WHERE b.status = 'approved'\n   AND b.created_at > now() - INTERVAL '7 days'\n   AND NOT EXISTS (SELECT 1 FROM home_automation_proposals h WHERE h.project_id = b.project_id)\n   AND (\n     COALESCE(b.summary, '') ~* '\\m(smart|domotic|alexa|google\\\\s+home|home\\\\s+assistant|knx|zigbee|matter|inteligente)\\M'\n     OR COALESCE(b.objectives::text, '') ~* '\\m(smart|domotic|alexa|google\\\\s+home|home\\\\s+assistant|knx|zigbee|matter|inteligente)\\M'\n     OR COALESCE(pii_decrypt(b.client_needs_enc), b.client_needs::text, '') ~* '\\m(smart|domotic|alexa|google\\\\s+home|home\\\\s+assistant|knx|zigbee|matter|inteligente)\\M'\n   )\n LIMIT 10;",
-        "options": {}
-      },
-      "credentials": {
-        "postgres": {
-          "id": "cfxNZdzy0NB3xkYC",
-          "name": "Postgres account"
-        }
-      },
-      "alwaysOutputData": true
-    },
-    {
-      "id": "bp-04",
-      "name": "Has Matches?",
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 2.2,
-      "position": [
-        -220,
-        400
-      ],
-      "parameters": {
-        "conditions": {
-          "options": {
-            "version": 2,
-            "leftValue": "",
-            "caseSensitive": true,
-            "typeValidation": "loose"
-          },
-          "combinator": "and",
-          "conditions": [
-            {
-              "id": "h1",
-              "leftValue": "={{ $json.project_id }}",
-              "rightValue": "",
-              "operator": {
-                "type": "string",
-                "operation": "exists",
-                "singleValue": true
-              }
-            }
-          ]
-        },
-        "options": {}
-      }
-    },
-    {
-      "id": "bp-05",
-      "name": "Dispatch Home Auto",
-      "type": "n8n-nodes-base.executeWorkflow",
-      "typeVersion": 1.2,
-      "position": [
-        20,
-        320
-      ],
-      "parameters": {
-        "workflowId": {
-          "__rl": true,
-          "value": "6f25BcR8LwNX2HQH",
-          "mode": "id"
-        },
-        "workflowInputs": {
-          "mappingMode": "autoMapInputData",
-          "value": {},
-          "matchingColumns": [],
-          "schema": []
-        },
-        "options": {}
-      },
-      "onError": "continueRegularOutput"
-    },
-    {
-      "id": "bp-06",
-      "name": "Log Dispatch",
-      "type": "n8n-nodes-base.postgres",
-      "typeVersion": 2.5,
-      "position": [
-        260,
-        320
-      ],
-      "parameters": {
-        "operation": "executeQuery",
-        "query": "INSERT INTO activity_log (project_id, agent_name, action, status, output_summary)\nVALUES ($1::uuid, 'cron_briefing_postprocess', 'auto_dispatch_home_automation', 'success', $2)\nRETURNING id;",
-        "options": {
-          "queryReplacement": "={{ [ $('Find Briefings Smart').item.json.project_id, ('briefing=' + $('Find Briefings Smart').item.json.briefing_id) ] }}"
-        }
-      },
-      "credentials": {
-        "postgres": {
-          "id": "cfxNZdzy0NB3xkYC",
-          "name": "Postgres account"
-        }
-      }
-    },
-    {
-      "id": "bp-07",
-      "name": "Nothing",
-      "type": "n8n-nodes-base.noOp",
-      "typeVersion": 1,
-      "position": [
-        20,
-        480
-      ],
-      "parameters": {}
-    }
+    { "id": "bp-01", "name": "Schedule Hourly",      "type": "n8n-nodes-base.scheduleTrigger", "position": [-700, 300] },
+    { "id": "bp-02", "name": "Manual Trigger",       "type": "n8n-nodes-base.webhook",         "position": [-700, 500] },
+    { "id": "bp-03", "name": "Find Briefings Smart", "type": "n8n-nodes-base.postgres",        "position": [-460, 400] },
+    { "id": "bp-04", "name": "Has Matches?",         "type": "n8n-nodes-base.if",              "position": [-220, 400] },
+    { "id": "bp-05", "name": "Dispatch Home Auto",   "type": "n8n-nodes-base.executeWorkflow", "position": [20, 320], "_dispatches": "agent_home_automation" },
+    { "id": "bp-06", "name": "Log Dispatch",         "type": "n8n-nodes-base.postgres",        "position": [260, 320] },
+    { "id": "bp-07", "name": "Nothing",              "type": "n8n-nodes-base.noOp",            "position": [20, 480] }
   ],
   "connections": {
-    "Schedule Hourly": {
+    "Schedule Hourly":       { "main": [[{ "node": "Find Briefings Smart", "type": "main", "index": 0 }]] },
+    "Manual Trigger":        { "main": [[{ "node": "Find Briefings Smart", "type": "main", "index": 0 }]] },
+    "Find Briefings Smart":  { "main": [[{ "node": "Has Matches?",         "type": "main", "index": 0 }]] },
+    "Has Matches?":          {
       "main": [
-        [
-          {
-            "node": "Find Briefings Smart",
-            "type": "main",
-            "index": 0
-          }
-        ]
+        [{ "node": "Dispatch Home Auto", "type": "main", "index": 0 }],
+        [{ "node": "Nothing",            "type": "main", "index": 0 }]
       ]
     },
-    "Manual Trigger": {
-      "main": [
-        [
-          {
-            "node": "Find Briefings Smart",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Find Briefings Smart": {
-      "main": [
-        [
-          {
-            "node": "Has Matches?",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Has Matches?": {
-      "main": [
-        [
-          {
-            "node": "Dispatch Home Auto",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "Nothing",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Dispatch Home Auto": {
-      "main": [
-        [
-          {
-            "node": "Log Dispatch",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    }
-  },
-  "settings": {
-    "executionOrder": "v1",
-    "errorWorkflow": "qfQWaGSpyjgdeFt5",
-    "callerPolicy": "workflowsFromSameOwner",
-    "availableInMCP": false
+    "Dispatch Home Auto":    { "main": [[{ "node": "Log Dispatch",         "type": "main", "index": 0 }]] }
   }
 }

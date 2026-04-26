@@ -1,293 +1,36 @@
 {
   "name": "cron_qc_handover_to_acta",
+  "_n8n_id": "QNp8QK9x7XFehSs6",
+  "_note": "Stub sincronizado 2026-04-26 (bloque 15). Para version completa: mcp__n8n__n8n_get_workflow id=QNp8QK9x7XFehSs6 mode=full",
+  "_purpose": "Cron diario 11:00 + Manual Trigger. Cierra el ciclo QC -> acta_recepcion_provisional -> CFO. Find Pending detecta qc_checks de phase_key='recepcion_provisional' cerrados como 'complete' en los ultimos 14d que aun no tienen contracts de tipo 'acta_recepcion_provisional' active. Si hay matches, email al arquitecto con tabla + comando curl pre-construido para usar agent_contracts y generar el acta. Sugerencia adicional: tambien generar CFO (Certificado Final de Obra) via agent_certificate_generator.",
+  "_triggers": {
+    "Schedule Daily 11:00": "cron 0 11 * * *",
+    "Manual Trigger": "POST /webhook/trigger-qc-handover-to-acta"
+  },
+  "_chain_LOE": "qc.recepcion_provisional complete -> acta_recepcion_provisional firmada -> aftercare period inicia (1ano + 3anos + 10anos LOE) -> CFO archivado",
   "nodes": [
-    {
-      "id": "qa-01",
-      "name": "Schedule Daily 11:00",
-      "type": "n8n-nodes-base.scheduleTrigger",
-      "typeVersion": 1.2,
-      "position": [
-        -700,
-        300
-      ],
-      "parameters": {
-        "rule": {
-          "interval": [
-            {
-              "field": "days",
-              "daysInterval": 1,
-              "triggerAtHour": 11,
-              "triggerAtMinute": 0
-            }
-          ]
-        }
-      }
-    },
-    {
-      "id": "qa-02",
-      "name": "Manual Trigger",
-      "type": "n8n-nodes-base.webhook",
-      "typeVersion": 2,
-      "position": [
-        -700,
-        500
-      ],
-      "parameters": {
-        "httpMethod": "POST",
-        "path": "trigger-qc-handover-to-acta",
-        "responseMode": "lastNode",
-        "authentication": "headerAuth"
-      },
-      "credentials": {
-        "httpHeaderAuth": {
-          "id": "Ba643jvuElTgMawr",
-          "name": "Webhook API Key (entrante)"
-        }
-      },
-      "webhookId": "qa-manual"
-    },
-    {
-      "id": "qa-03",
-      "name": "Load Architect Email",
-      "type": "n8n-nodes-base.postgres",
-      "typeVersion": 2.5,
-      "position": [
-        -460,
-        400
-      ],
-      "parameters": {
-        "operation": "executeQuery",
-        "query": "SELECT value FROM system_config WHERE key = 'architect_email'",
-        "options": {}
-      },
-      "credentials": {
-        "postgres": {
-          "id": "cfxNZdzy0NB3xkYC",
-          "name": "Postgres account"
-        }
-      }
-    },
-    {
-      "id": "qa-04",
-      "name": "Find Pending",
-      "type": "n8n-nodes-base.postgres",
-      "typeVersion": 2.5,
-      "position": [
-        -220,
-        400
-      ],
-      "parameters": {
-        "operation": "executeQuery",
-        "query": "SELECT json_agg(t.* ORDER BY t.qc_completed_at DESC) AS rows, count(*) AS total\n  FROM (\n    SELECT qc.id AS qc_id, qc.project_id, qc.completed_at AS qc_completed_at,\n           p.name AS project_name, p.handover_date,\n           c.name AS client_name\n    FROM qc_checks qc\n    JOIN projects p ON p.id = qc.project_id\n    LEFT JOIN clients c ON c.id = p.client_id\n    WHERE qc.phase_key = 'recepcion_provisional'\n      AND qc.status = 'complete'\n      AND qc.completed_at > now() - INTERVAL '14 days'\n      AND NOT EXISTS (\n        SELECT 1 FROM contracts ct\n         WHERE ct.project_id = qc.project_id\n           AND ct.contract_type = 'acta_recepcion_provisional'\n           AND ct.status NOT IN ('cancelled','rejected')\n      )\n  ) t;",
-        "options": {}
-      },
-      "credentials": {
-        "postgres": {
-          "id": "cfxNZdzy0NB3xkYC",
-          "name": "Postgres account"
-        }
-      },
-      "alwaysOutputData": true
-    },
-    {
-      "id": "qa-05",
-      "name": "Has Pending?",
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 2.2,
-      "position": [
-        20,
-        400
-      ],
-      "parameters": {
-        "conditions": {
-          "options": {
-            "version": 2,
-            "leftValue": "",
-            "caseSensitive": true,
-            "typeValidation": "strict"
-          },
-          "combinator": "and",
-          "conditions": [
-            {
-              "id": "h1",
-              "leftValue": "={{ Number($json.total) || 0 }}",
-              "rightValue": 0,
-              "operator": {
-                "type": "number",
-                "operation": "gt"
-              }
-            }
-          ]
-        },
-        "options": {}
-      }
-    },
-    {
-      "id": "qa-06",
-      "name": "Build Email",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        260,
-        320
-      ],
-      "parameters": {
-        "jsCode": "const data = $input.first().json;\nconst rows = (data.rows || []).map(r => '<tr>' +\n  '<td><b>' + (r.project_name || '?') + '</b></td>' +\n  '<td>' + (r.client_name || '?') + '</td>' +\n  '<td>' + (r.handover_date ? r.handover_date.substring(0,10) : '—') + '</td>' +\n  '<td>' + (r.qc_completed_at ? r.qc_completed_at.substring(0,10) : '—') + '</td>' +\n  '<td><code style=\\\"font-size:11px\\\">' + r.project_id + '</code></td>' +\n  '</tr>').join('');\nconst html = '<h2>Recepcion provisional cerrada — generar acta</h2>' +\n  '<p>Total: <b>' + data.total + '</b>. La checklist QC de recepcion provisional ha pasado a complete (LOE inicia). Genera el <code>acta_recepcion_provisional</code> firmable y registralo.</p>' +\n  '<table border=\\\"1\\\" cellpadding=\\\"6\\\" cellspacing=\\\"0\\\" style=\\\"border-collapse:collapse;font-family:sans-serif;font-size:13px\\\">' +\n  '<thead><tr style=\\\"background:#f3f4f6\\\"><th>Proyecto</th><th>Cliente</th><th>Handover</th><th>QC Completado</th><th>Project ID</th></tr></thead>' +\n  '<tbody>' + rows + '</tbody></table>' +\n  '<h3>Comando para generar el acta:</h3>' +\n  '<pre style=\\\"background:#f3f4f6;padding:10px;border-radius:6px;font-size:11px\\\">' +\n  'curl -X POST https://n8n-n8n.zzeluw.easypanel.host/webhook/contract-generate \\\\\\n' +\n  '  -H \"X-API-Key: arquitai-...\" -H \"Content-Type: application/json\" \\\\\\n' +\n  '  -d \\'{\"project_id\":\"&lt;uuid&gt;\",\"contract_type\":\"acta_recepcion_provisional\",\\\\\\n' +\n  '       \"parties\":[{\"role\":\"propiedad\",\"name\":\"...\"},{\"role\":\"contratista\",\"name\":\"...\"},{\"role\":\"director_ejecucion\",\"name\":\"Damian Martinez\"}],\\\\\\n' +\n  '       \"scope\":\"Sin incidencias / Incidencias anexas...\"}\\'' +\n  '</pre>' +\n  '<p style=\\\"font-size:11px;color:#7f8c8d\\\">Considera tambien generar el CFO con POST /webhook/certificate-generate type=cfo.</p>';\nreturn [{ json: { html_body: html, count: data.total } }];"
-      }
-    },
-    {
-      "id": "qa-07",
-      "name": "Send Email",
-      "type": "n8n-nodes-base.gmail",
-      "typeVersion": 2.1,
-      "position": [
-        500,
-        320
-      ],
-      "parameters": {
-        "resource": "message",
-        "operation": "send",
-        "sendTo": "={{ $('Load Architect Email').first().json.value }}",
-        "subject": "=ArquitAI — {{ $json.count }} recepcion(es) sin acta firmada",
-        "emailType": "html",
-        "message": "={{ $json.html_body }}",
-        "options": {
-          "appendAttribution": false
-        }
-      },
-      "credentials": {
-        "gmailOAuth2": {
-          "id": "cIma8ntTjZvIfU3H",
-          "name": "damian2botella"
-        }
-      },
-      "onError": "continueRegularOutput"
-    },
-    {
-      "id": "qa-08",
-      "name": "Log",
-      "type": "n8n-nodes-base.postgres",
-      "typeVersion": 2.5,
-      "position": [
-        740,
-        320
-      ],
-      "parameters": {
-        "operation": "executeQuery",
-        "query": "INSERT INTO activity_log (project_id, agent_name, action, status, input_summary)\nVALUES (NULL, 'cron_qc_handover_to_acta', 'suggest_acta_recepcion', 'success', $1)\nRETURNING id;",
-        "options": {
-          "queryReplacement": "={{ [ ('pending=' + $json.count) ] }}"
-        }
-      },
-      "credentials": {
-        "postgres": {
-          "id": "cfxNZdzy0NB3xkYC",
-          "name": "Postgres account"
-        }
-      }
-    },
-    {
-      "id": "qa-09",
-      "name": "Nothing",
-      "type": "n8n-nodes-base.noOp",
-      "typeVersion": 1,
-      "position": [
-        260,
-        480
-      ],
-      "parameters": {}
-    }
+    { "id": "qa-01", "name": "Schedule Daily 11:00", "type": "n8n-nodes-base.scheduleTrigger", "position": [-700, 300] },
+    { "id": "qa-02", "name": "Manual Trigger",       "type": "n8n-nodes-base.webhook",         "position": [-700, 500] },
+    { "id": "qa-03", "name": "Load Architect Email", "type": "n8n-nodes-base.postgres",        "position": [-460, 400] },
+    { "id": "qa-04", "name": "Find Pending",         "type": "n8n-nodes-base.postgres",        "position": [-220, 400] },
+    { "id": "qa-05", "name": "Has Pending?",         "type": "n8n-nodes-base.if",              "position": [20, 400] },
+    { "id": "qa-06", "name": "Build Email",          "type": "n8n-nodes-base.code",            "position": [260, 320] },
+    { "id": "qa-07", "name": "Send Email",           "type": "n8n-nodes-base.gmail",           "position": [500, 320] },
+    { "id": "qa-08", "name": "Log",                  "type": "n8n-nodes-base.postgres",        "position": [740, 320] },
+    { "id": "qa-09", "name": "Nothing",              "type": "n8n-nodes-base.noOp",            "position": [260, 480] }
   ],
   "connections": {
-    "Schedule Daily 11:00": {
+    "Schedule Daily 11:00": { "main": [[{ "node": "Load Architect Email", "type": "main", "index": 0 }]] },
+    "Manual Trigger":       { "main": [[{ "node": "Load Architect Email", "type": "main", "index": 0 }]] },
+    "Load Architect Email": { "main": [[{ "node": "Find Pending",         "type": "main", "index": 0 }]] },
+    "Find Pending":         { "main": [[{ "node": "Has Pending?",         "type": "main", "index": 0 }]] },
+    "Has Pending?":         {
       "main": [
-        [
-          {
-            "node": "Load Architect Email",
-            "type": "main",
-            "index": 0
-          }
-        ]
+        [{ "node": "Build Email", "type": "main", "index": 0 }],
+        [{ "node": "Nothing",     "type": "main", "index": 0 }]
       ]
     },
-    "Manual Trigger": {
-      "main": [
-        [
-          {
-            "node": "Load Architect Email",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Load Architect Email": {
-      "main": [
-        [
-          {
-            "node": "Find Pending",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Find Pending": {
-      "main": [
-        [
-          {
-            "node": "Has Pending?",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Has Pending?": {
-      "main": [
-        [
-          {
-            "node": "Build Email",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "Nothing",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Build Email": {
-      "main": [
-        [
-          {
-            "node": "Send Email",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Send Email": {
-      "main": [
-        [
-          {
-            "node": "Log",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    }
-  },
-  "settings": {
-    "executionOrder": "v1",
-    "errorWorkflow": "qfQWaGSpyjgdeFt5",
-    "callerPolicy": "workflowsFromSameOwner",
-    "availableInMCP": false
+    "Build Email":          { "main": [[{ "node": "Send Email",           "type": "main", "index": 0 }]] },
+    "Send Email":           { "main": [[{ "node": "Log",                  "type": "main", "index": 0 }]] }
   }
 }

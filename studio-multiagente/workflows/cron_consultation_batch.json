@@ -1,178 +1,35 @@
 {
   "name": "cron_consultation_batch",
+  "_n8n_id": "4vyizezPgg3kr192",
+  "_note": "Stub sincronizado 2026-04-26 (bloque 15). Para version completa: mcp__n8n__n8n_get_workflow id=4vyizezPgg3kr192 mode=full",
+  "_purpose": "Cron cada 4 horas. Backup del sistema de presencia: si arquitecto se queda offline mas de 4h y hay consultations en cola con created_at > 4h, fuerza envio del batch agrupado al architect_email (mismo patron que util_architect_presence pero sin esperar al toggle online->offline manual). Resuelve el caso de que Damian olvide marcar offline.",
+  "_triggers": "cron */4 * * * (cada 4 horas)",
+  "_companion": "util_architect_presence (1WLpSzgcitGJoaoZ) y util_consultation (bjKNchMYN2wXKO0k) — este cron es el safety net.",
+  "_dispatches": "util_notification (no en este workflow directo, llamado via Send Reminder Email executeWorkflow) para enviar el batch agrupado.",
   "nodes": [
-    {
-      "parameters": {
-        "rule": {
-          "interval": [{ "field": "hours", "hoursInterval": 4 }]
-        }
-      },
-      "type": "n8n-nodes-base.scheduleTrigger",
-      "typeVersion": 1.2,
-      "position": [250, 300],
-      "id": "cb000001-0000-0000-0000-000000000001",
-      "name": "Every 4 Hours"
-    },
-    {
-      "parameters": {
-        "operation": "executeQuery",
-        "query": "SELECT a.is_online, a.went_offline_at, COUNT(cq.id) as pending_count FROM architect_status a LEFT JOIN consultation_queue cq ON cq.status = 'pending' AND cq.created_at < now() - interval '4 hours' WHERE a.id = 1 GROUP BY a.is_online, a.went_offline_at",
-        "options": {}
-      },
-      "credentials": {
-        "postgres": {
-          "id": "PLACEHOLDER",
-          "name": "Postgres account"
-        }
-      },
-      "type": "n8n-nodes-base.postgres",
-      "typeVersion": 2.5,
-      "position": [500, 300],
-      "id": "cb000001-0000-0000-0000-000000000002",
-      "name": "Check Stale Consultations"
-    },
-    {
-      "parameters": {
-        "conditions": {
-          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
-          "conditions": [
-            {
-              "id": "cb000001-cond-0001",
-              "leftValue": "={{ Number($json.pending_count) }}",
-              "rightValue": 0,
-              "operator": { "type": "number", "operation": "gt" }
-            }
-          ],
-          "combinator": "and"
-        },
-        "options": {}
-      },
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 2.2,
-      "position": [750, 300],
-      "id": "cb000001-0000-0000-0000-000000000003",
-      "name": "Has Stale Consultations?"
-    },
-    {
-      "parameters": {
-        "operation": "executeQuery",
-        "query": "SELECT cq.*, p.name as project_name FROM consultation_queue cq LEFT JOIN projects p ON cq.project_id = p.id WHERE cq.status = 'pending' AND cq.created_at < now() - interval '4 hours' ORDER BY cq.created_at ASC",
-        "options": {}
-      },
-      "credentials": {
-        "postgres": {
-          "id": "PLACEHOLDER",
-          "name": "Postgres account"
-        }
-      },
-      "type": "n8n-nodes-base.postgres",
-      "typeVersion": 2.5,
-      "position": [1000, 200],
-      "id": "cb000001-0000-0000-0000-000000000004",
-      "name": "Load Stale Consultations"
-    },
-    {
-      "parameters": {
-        "mode": "runOnceForAllItems",
-        "jsCode": "const items = $input.all();\nconst consultations = items.map(i => i.json);\nreturn [{ json: { consultations, count: consultations.length } }];"
-      },
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [1250, 200],
-      "id": "cb000001-0000-0000-0000-000000000005",
-      "name": "Aggregate Consultations"
-    },
-    {
-      "parameters": {
-        "workflowId": {
-          "__rl": true,
-          "value": "={{ $workflow.id }}",
-          "mode": "id"
-        },
-        "workflowInputs": {
-          "mappingMode": "defineBelow",
-          "value": {
-            "project_id":    "",
-            "type":          "consultation_batch",
-            "subject":       "=Recordatorio: {{ $json.count }} consulta{{ $json.count !== 1 ? 's' : '' }} pendiente{{ $json.count !== 1 ? 's' : '' }} sin respuesta",
-            "message":       "",
-            "approval_id":   "",
-            "recipient":     "botelladesdeel98@gmail.com",
-            "consultations": "={{ $json.consultations }}"
-          }
-        }
-      },
-      "type": "n8n-nodes-base.executeWorkflow",
-      "typeVersion": 1.1,
-      "position": [1500, 200],
-      "id": "cb000001-0000-0000-0000-000000000006",
-      "name": "Send Reminder Email"
-    },
-    {
-      "parameters": {
-        "operation": "executeQuery",
-        "query": "UPDATE consultation_queue SET status = 'sent', sent_at = now() WHERE status = 'pending' AND created_at < now() - interval '4 hours'",
-        "options": {}
-      },
-      "credentials": {
-        "postgres": {
-          "id": "PLACEHOLDER",
-          "name": "Postgres account"
-        }
-      },
-      "type": "n8n-nodes-base.postgres",
-      "typeVersion": 2.5,
-      "position": [1750, 200],
-      "id": "cb000001-0000-0000-0000-000000000007",
-      "name": "Mark As Sent"
-    },
-    {
-      "parameters": {
-        "operation": "executeQuery",
-        "query": "INSERT INTO activity_log (project_id, agent_name, action, status, output_summary) VALUES (null, 'cron_consultation_batch', 'reminder_sent', 'success', $1)",
-        "options": {
-          "queryReplacement": "={{ [$('Aggregate Consultations').first().json.count + ' consultas enviadas como recordatorio'] }}"
-        }
-      },
-      "credentials": {
-        "postgres": {
-          "id": "PLACEHOLDER",
-          "name": "Postgres account"
-        }
-      },
-      "type": "n8n-nodes-base.postgres",
-      "typeVersion": 2.5,
-      "position": [2000, 200],
-      "id": "cb000001-0000-0000-0000-000000000008",
-      "name": "Log Reminder"
-    }
+    { "id": "cb000001-0000-0000-0000-000000000001", "name": "Every 4 Hours",            "type": "n8n-nodes-base.scheduleTrigger", "position": [250, 300] },
+    { "id": "dcf0863b-c9b5-4472-b560-275c1aab21dc", "name": "Load Architect Email",     "type": "n8n-nodes-base.postgres",        "position": [350, 300] },
+    { "id": "cb000001-0000-0000-0000-000000000002", "name": "Check Stale Consultations","type": "n8n-nodes-base.postgres",        "position": [500, 300] },
+    { "id": "cb000001-0000-0000-0000-000000000003", "name": "Has Stale Consultations?","type": "n8n-nodes-base.if",               "position": [750, 300] },
+    { "id": "cb000001-0000-0000-0000-000000000004", "name": "Load Stale Consultations","type": "n8n-nodes-base.postgres",         "position": [1000, 200] },
+    { "id": "cb000001-0000-0000-0000-000000000005", "name": "Aggregate Consultations", "type": "n8n-nodes-base.code",             "position": [1250, 200] },
+    { "id": "cb000001-0000-0000-0000-000000000006", "name": "Send Reminder Email",     "type": "n8n-nodes-base.executeWorkflow",  "position": [1500, 200] },
+    { "id": "cb000001-0000-0000-0000-000000000007", "name": "Mark As Sent",            "type": "n8n-nodes-base.postgres",         "position": [1750, 200] },
+    { "id": "cb000001-0000-0000-0000-000000000008", "name": "Log Reminder",            "type": "n8n-nodes-base.postgres",         "position": [2000, 200] }
   ],
   "connections": {
-    "Every 4 Hours": {
-      "main": [[{ "node": "Check Stale Consultations", "type": "main", "index": 0 }]]
-    },
-    "Check Stale Consultations": {
-      "main": [[{ "node": "Has Stale Consultations?", "type": "main", "index": 0 }]]
-    },
-    "Has Stale Consultations?": {
+    "Every 4 Hours":             { "main": [[{ "node": "Load Architect Email",      "type": "main", "index": 0 }]] },
+    "Load Architect Email":      { "main": [[{ "node": "Check Stale Consultations", "type": "main", "index": 0 }]] },
+    "Check Stale Consultations": { "main": [[{ "node": "Has Stale Consultations?",  "type": "main", "index": 0 }]] },
+    "Has Stale Consultations?":  {
       "main": [
         [{ "node": "Load Stale Consultations", "type": "main", "index": 0 }],
         []
       ]
     },
-    "Load Stale Consultations": {
-      "main": [[{ "node": "Aggregate Consultations", "type": "main", "index": 0 }]]
-    },
-    "Aggregate Consultations": {
-      "main": [[{ "node": "Send Reminder Email", "type": "main", "index": 0 }]]
-    },
-    "Send Reminder Email": {
-      "main": [[{ "node": "Mark As Sent", "type": "main", "index": 0 }]]
-    },
-    "Mark As Sent": {
-      "main": [[{ "node": "Log Reminder", "type": "main", "index": 0 }]]
-    }
-  },
-  "settings": { "executionOrder": "v1" },
-  "pinData": {}
+    "Load Stale Consultations":  { "main": [[{ "node": "Aggregate Consultations",   "type": "main", "index": 0 }]] },
+    "Aggregate Consultations":   { "main": [[{ "node": "Send Reminder Email",       "type": "main", "index": 0 }]] },
+    "Send Reminder Email":       { "main": [[{ "node": "Mark As Sent",              "type": "main", "index": 0 }]] },
+    "Mark As Sent":              { "main": [[{ "node": "Log Reminder",              "type": "main", "index": 0 }]] }
+  }
 }

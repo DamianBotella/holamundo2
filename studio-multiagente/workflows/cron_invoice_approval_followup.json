@@ -1,0 +1,30 @@
+{
+  "name": "cron_invoice_approval_followup",
+  "_n8n_id": "xM7YlAGwbbgbFaGI",
+  "_purpose": "Fase 2 de 3.5 (control financiero). Cron diario 11:30 con 3 condiciones: (1) status='pending_review' y created_at >5d (Damian olvido decidir), (2) status='approved' y paid_at IS NULL y approved_at >30d (aprobada pero sin pagar), (3) status='disputed' y created_at >14d (disputa estancada). Si total > 0, email HTML agrupado al architect_email con secciones + total_amount_pending para priorizacion.",
+  "_triggers": "cron 30 11 * * * (diario 11:30)",
+  "_audited_by": "cron_workflow_audit (action='invoice_followup_clean', INTERVAL 26h)",
+  "nodes": [
+    { "id": "ciaf-01", "name": "Schedule 11:30 Daily", "type": "n8n-nodes-base.scheduleTrigger", "position": [-700, 300], "_cron": "30 11 * * *" },
+    { "id": "ciaf-02", "name": "Load Architect Email", "type": "n8n-nodes-base.postgres",        "position": [-460, 300] },
+    { "id": "ciaf-03", "name": "Find Issues",          "type": "n8n-nodes-base.postgres",        "position": [-220, 300], "_query_summary": "json con pending_decision/approved_unpaid/disputed_stale + total_issues + total_amount_pending" },
+    { "id": "ciaf-04", "name": "Has Issues?",          "type": "n8n-nodes-base.if",              "position": [20, 300], "_check": "total_issues > 0 (typeValidation: loose)" },
+    { "id": "ciaf-05", "name": "Build Email",          "type": "n8n-nodes-base.code",            "position": [260, 160] },
+    { "id": "ciaf-06", "name": "Send Email",           "type": "n8n-nodes-base.gmail",           "position": [500, 160] },
+    { "id": "ciaf-07", "name": "Log Issues Found",     "type": "n8n-nodes-base.postgres",        "position": [740, 160], "_action": "invoice_followup_clean (status=warning, summary 'ran_with_issues')" },
+    { "id": "ciaf-08", "name": "Log Clean",            "type": "n8n-nodes-base.postgres",        "position": [260, 440], "_action": "invoice_followup_clean (status=success)" }
+  ],
+  "connections": {
+    "Schedule 11:30 Daily": { "main": [[{ "node": "Load Architect Email", "type": "main", "index": 0 }]] },
+    "Load Architect Email": { "main": [[{ "node": "Find Issues",          "type": "main", "index": 0 }]] },
+    "Find Issues":          { "main": [[{ "node": "Has Issues?",          "type": "main", "index": 0 }]] },
+    "Has Issues?":          {
+      "main": [
+        [{ "node": "Build Email", "type": "main", "index": 0 }],
+        [{ "node": "Log Clean",   "type": "main", "index": 0 }]
+      ]
+    },
+    "Build Email":          { "main": [[{ "node": "Send Email",           "type": "main", "index": 0 }]] },
+    "Send Email":           { "main": [[{ "node": "Log Issues Found",     "type": "main", "index": 0 }]] }
+  }
+}

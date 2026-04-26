@@ -6,9 +6,9 @@ Fecha: 2026-04-26
 
 | | Total |
 |---|---|
-| Workflows activos en n8n | **~131** (bloque 14 añade 3: cron_collab_review + qc_public_form + util_admin_trades_summary_html) |
-| JSONs locales en `workflows/` | **102+** |
-| En n8n SIN JSON local | **~21** (era 44, sincronizados 21 entre bloques 7-14) |
+| Workflows activos en n8n | **~133** (bloque 15 añade 2: cron_contract_followup + cron_invoice_approval_followup) |
+| JSONs locales en `workflows/` | **109+** |
+| En n8n SIN JSON local | **~16** (era 44, sincronizados 26 entre bloques 7-15) |
 | En local SIN n8n | **0** |
 
 ## Sincronizados en bloque 7-12
@@ -34,6 +34,16 @@ Fecha: 2026-04-26
 - `cron_post_phase_audits.json` (stub estructural — cron 30min auditorías post-fase)
 - `util_admin_llm_stats_html.json` (workflow NUEVO — dashboard de costes LLM con drill-down)
 
+**Bloque 15** (5 huérfanos + 2 nuevos crons + admin-index actualizado):
+- `cron_contract_followup.json` (workflow NUEVO `ZlzJpRwOnoG1altD`, activo — Fase 2 de 3.13: alerta contracts esperando firma >7d, drafts olvidados >14d, expirados)
+- `cron_invoice_approval_followup.json` (workflow NUEVO `xM7YlAGwbbgbFaGI`, activo — Fase 2 de 3.5: alerta invoices pending >5d, aprobadas sin pagar >30d, disputed >14d)
+- `cron_proposal_to_contract.json` (stub — cron 10:30 detecta proposals aprobadas sin contract activo)
+- `cron_briefing_postprocess.json` (stub — cron horario auto-dispara agent_home_automation si briefing menciona smart)
+- `cron_qc_review.json` (stub — cron 09:15 alerta qc_checks bloqueados >7d)
+- `cron_qc_handover_to_acta.json` (stub — cron 11:00 cierra ciclo QC→acta_recepcion_provisional→CFO)
+- `cron_consultation_batch.json` (stub — cron cada 4h backup del sistema de presencia)
+- `util_admin_index_html` modificado in-place: añade 4 dashboards nuevos (admin-llm-stats, admin-pipeline-metrics, admin-trades-summary, admin-notes-list) en sección "Dashboards web".
+
 **Bloque 14** (5 huérfanos + 3 workflows nuevos):
 - `cron_collab_review.json` (workflow NUEVO `sJpNiWYCIlCvqB5i` — cron 10:00 alerta deadline vencido + delivered>7d sin approved + invited>5d sin respuesta)
 - `qc_public_form.json` (workflow NUEVO `Pqod9AyvG0opCrLU` — form HTML responsive móvil para QC durante visita a obra)
@@ -55,7 +65,7 @@ Fecha: 2026-04-26
 
 > **Stub estructural** = `_n8n_id` + `_purpose` + nodes (id+name+type+position) + connections completas + settings. Sin `parameters` detallados (jsCode, SQL queries largos, HTML emails). Para versión completa: `mcp__n8n__n8n_get_workflow id=<n8n_id> mode=full`.
 
-## ~21 workflows aún sin JSON local (era 44)
+## ~16 workflows aún sin JSON local (era 44)
 
 Estos son workflows que existen y están activos en n8n, pero no tienen su JSON sincronizado en `workflows/`. Razón típica: son piezas heredadas de sesiones anteriores donde el patrón "todo en JSON local" todavía no se aplicaba sistemáticamente.
 

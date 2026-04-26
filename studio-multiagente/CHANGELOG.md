@@ -2,7 +2,16 @@
 
 Histórico cronológico de hitos del sistema. Generado a partir de git log.
 
-## 2026-04-26 — Bloques 7-14: sync huérfanos + audits + meta-vigilancia LLM + fase 2 collabs/QC
+## 2026-04-26 — Bloques 7-15: sync huérfanos + meta-vigilancia + Fase 2 contracts/invoices
+
+### Bloque 15 (5 puntos): plan 5h
+- `cron_contract_followup` (id `ZlzJpRwOnoG1altD`, activo): Fase 2 de 3.13. Cron 09:45 con 3 condiciones (awaiting_signature >7d, forgotten_drafts >14d, expired). Email HTML agrupado. Vigilado por cron_workflow_audit con `contract_followup_clean`.
+- `cron_invoice_approval_followup` (id `xM7YlAGwbbgbFaGI`, activo): Fase 2 de 3.5. Cron 11:30 con 3 condiciones (pending_review >5d, approved sin pagar >30d, disputed >14d). Email HTML con total_amount_pending para priorización. Vigilado por cron_workflow_audit con `invoice_followup_clean`.
+- `util_admin_index_html` actualizado: 4 dashboards nuevos en sección "Dashboards web" (admin-llm-stats, admin-pipeline-metrics, admin-trades-summary, admin-notes-list). Patch in-place via patchNodeField.
+- 5 stubs huérfanos sincronizados: `cron_proposal_to_contract`, `cron_briefing_postprocess`, `cron_qc_review`, `cron_qc_handover_to_acta`, `cron_consultation_batch`.
+- AUDIT.md huérfanos 21→16. CHANGELOG bloque 15. referencia_workflows (2 crons nuevos).
+
+
 
 ### Bloque 14 (5 puntos): plan 5h
 - `cron_collab_review` (id `sJpNiWYCIlCvqB5i`, activo): Fase 2 de 3.20. Cron 10:00 alerta deadline vencido, delivered>7d sin aprobar, invited>5d sin respuesta. Email HTML agrupado. Aplicada lección bloque 12: ambas ramas escriben action='collab_review_clean' (status warning|success). Añadido a `cron_workflow_audit` (INTERVAL 26h).

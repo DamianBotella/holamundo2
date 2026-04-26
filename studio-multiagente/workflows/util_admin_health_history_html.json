@@ -1,0 +1,73 @@
+{
+  "name": "util_admin_health_history_html",
+  "nodes": [
+    {
+      "id": "hh-01",
+      "name": "Webhook GET",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-700, 300],
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "admin-health-history",
+        "responseMode": "responseNode",
+        "authentication": "headerAuth"
+      },
+      "credentials": { "httpHeaderAuth": { "id": "Ba643jvuElTgMawr", "name": "Webhook API Key (entrante)" } },
+      "webhookId": "hh-trigger"
+    },
+    {
+      "id": "hh-02",
+      "name": "Load History",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [-460, 300],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT json_build_object(\n  'current', (SELECT row_to_json(s) FROM system_health_score s),\n  'history_30d', (SELECT json_agg(t.* ORDER BY t.snapshot_at) FROM (\n    SELECT snapshot_at, score, color, critical_unresolved, ips_blocked, workflow_errors_24h\n      FROM health_score_history\n     WHERE snapshot_at > now() - INTERVAL '30 days'\n     ORDER BY snapshot_at\n  ) t),\n  'avg_30d', (SELECT round(avg(score)::numeric, 1) FROM health_score_history WHERE snapshot_at > now() - INTERVAL '30 days'),\n  'min_30d', (SELECT min(score) FROM health_score_history WHERE snapshot_at > now() - INTERVAL '30 days'),\n  'max_30d', (SELECT max(score) FROM health_score_history WHERE snapshot_at > now() - INTERVAL '30 days'),\n  'days_red_30d', (SELECT count(*) FROM health_score_history WHERE snapshot_at > now() - INTERVAL '30 days' AND color='red'),\n  'days_yellow_30d', (SELECT count(*) FROM health_score_history WHERE snapshot_at > now() - INTERVAL '30 days' AND color='yellow')\n) AS report;",
+        "options": {}
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } }
+    },
+    {
+      "id": "hh-03",
+      "name": "Build HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-220, 300],
+      "parameters": {
+        "jsCode": "const r = $input.first().json.report || {};\nconst c = r.current || {};\nconst hist = r.history_30d || [];\nconst color = c.color || 'gray';\nconst bg = color === 'green' ? '#10b981' : (color === 'yellow' ? '#f59e0b' : (color === 'red' ? '#dc2626' : '#6b7280'));\nconst chartHeight = 200;\nconst chartWidth = 1000;\nconst maxScore = 100;\nlet barsHtml = '';\nif (hist.length > 0) {\n  const barWidth = Math.max(8, Math.floor(chartWidth / hist.length) - 2);\n  hist.forEach((h, i) => {\n    const h_pct = (h.score / maxScore) * chartHeight;\n    const x = i * (barWidth + 2);\n    const y = chartHeight - h_pct;\n    const bcolor = h.color === 'green' ? '#10b981' : (h.color === 'yellow' ? '#f59e0b' : '#dc2626');\n    const dt = new Date(h.snapshot_at).toISOString().slice(5,10);\n    barsHtml += '<g><rect x=\"'+x+'\" y=\"'+y+'\" width=\"'+barWidth+'\" height=\"'+h_pct+'\" fill=\"'+bcolor+'\"><title>'+dt+': '+h.score+' ('+h.color+')</title></rect><text x=\"'+(x+barWidth/2)+'\" y=\"'+(chartHeight-2)+'\" text-anchor=\"middle\" font-size=\"9\" fill=\"white\">'+h.score+'</text></g>';\n  });\n}\nconst card = (label, value) => '<td style=\"padding:14px;background:#f9fafb;border-radius:6px;width:25%;vertical-align:top\"><div style=\"font-size:11px;color:#6b7280;text-transform:uppercase\">'+label+'</div><div style=\"font-size:22px;font-weight:bold;color:#1f2937;margin-top:4px\">'+(value!=null?value:'-')+'</div></td>';\nconst html = '<!DOCTYPE html><html lang=\"es\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>Health History</title>' +\n'<style>body{font-family:-apple-system,Arial,sans-serif;max-width:1100px;margin:24px auto;padding:16px;color:#1f2937;background:#f3f4f6}h1{color:#0f172a;margin:0 0 4px}h2{color:#374151;font-size:15px;margin:24px 0 8px}.meta{color:#64748b;font-size:13px}</style>' +\n'</head><body>' +\n'<a href=\"/webhook/admin-index\" style=\"color:#2563eb;font-size:13px;text-decoration:none\">← Admin index</a>' +\n'<h1>Health Score History</h1>' +\n'<div class=\"meta\">Snapshot diario via cron_health_score_snapshot 06:30</div>' +\n'<div style=\"background:'+bg+';color:white;padding:14px 20px;border-radius:8px;margin:16px 0;display:flex;align-items:center;gap:14px\"><div style=\"font-size:36px;font-weight:bold\">'+(c.score!=null?c.score:'?')+'</div><div><div style=\"font-size:11px;text-transform:uppercase;letter-spacing:1px;opacity:.85\">Score actual</div><div style=\"font-size:14px;font-weight:600\">'+color.toUpperCase()+'</div></div></div>' +\n'<table style=\"width:100%;border-spacing:8px;border-collapse:separate\">' +\n  '<tr>' + card('Avg 30d', r.avg_30d||'-') + card('Min 30d', r.min_30d||'-') + card('Max 30d', r.max_30d||'-') + card('Dias yellow/red', (r.days_yellow_30d||0)+' / '+(r.days_red_30d||0)) + '</tr>' +\n'</table>' +\n'<h2>Tendencia 30 dias</h2>' +\n(hist.length > 0 ?\n  '<div style=\"background:#1f2937;padding:16px;border-radius:8px;overflow-x:auto\"><svg width=\"'+chartWidth+'\" height=\"'+(chartHeight+20)+'\" style=\"display:block\"><line x1=\"0\" y1=\"'+(chartHeight - 0.85*chartHeight)+'\" x2=\"'+chartWidth+'\" y2=\"'+(chartHeight - 0.85*chartHeight)+'\" stroke=\"#10b981\" stroke-dasharray=\"2,2\" opacity=\"0.5\"/><line x1=\"0\" y1=\"'+(chartHeight - 0.6*chartHeight)+'\" x2=\"'+chartWidth+'\" y2=\"'+(chartHeight - 0.6*chartHeight)+'\" stroke=\"#f59e0b\" stroke-dasharray=\"2,2\" opacity=\"0.5\"/>'+barsHtml+'</svg><div style=\"color:#9ca3af;font-size:11px;margin-top:6px\">Linea verde = 85 (green threshold). Linea naranja = 60 (yellow threshold). Hover para ver fecha.</div></div>'\n : '<div style=\"background:white;padding:14px;border-radius:6px;color:#6b7280\"><i>Aun no hay datos. El primer snapshot se grabara manana a las 06:30 (cron_health_score_snapshot).</i></div>') +\n'</body></html>';\nreturn [{ json: { html } }];"
+      }
+    },
+    {
+      "id": "hh-04",
+      "name": "Respond HTML",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [20, 300],
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.html }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              { "name": "Content-Type", "value": "text/html; charset=utf-8" },
+              { "name": "X-Frame-Options", "value": "DENY" },
+              { "name": "Cache-Control", "value": "no-store" }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook GET":  { "main": [[{ "node": "Load History", "type": "main", "index": 0 }]] },
+    "Load History": { "main": [[{ "node": "Build HTML",   "type": "main", "index": 0 }]] },
+    "Build HTML":   { "main": [[{ "node": "Respond HTML", "type": "main", "index": 0 }]] }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5"
+  }
+}

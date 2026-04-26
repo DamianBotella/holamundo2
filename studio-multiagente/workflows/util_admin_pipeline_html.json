@@ -1,0 +1,73 @@
+{
+  "name": "util_admin_pipeline_html",
+  "nodes": [
+    {
+      "id": "pl-01",
+      "name": "Webhook GET",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-700, 300],
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "admin-pipeline",
+        "responseMode": "responseNode",
+        "authentication": "headerAuth"
+      },
+      "credentials": { "httpHeaderAuth": { "id": "Ba643jvuElTgMawr", "name": "Webhook API Key (entrante)" } },
+      "webhookId": "pl-trigger"
+    },
+    {
+      "id": "pl-02",
+      "name": "Load Pipeline",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [-460, 300],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT json_agg(t.* ORDER BY t.phase_order, t.updated_at DESC) AS projects FROM (\n  SELECT\n    p.id, p.name, p.current_phase,\n    CASE p.current_phase\n      WHEN 'intake' THEN 1\n      WHEN 'briefing_done' THEN 2\n      WHEN 'design_done' THEN 3\n      WHEN 'analysis_done' THEN 4\n      WHEN 'costs_done' THEN 5\n      WHEN 'trades_done' THEN 6\n      WHEN 'proposal_done' THEN 7\n      WHEN 'approved' THEN 8\n      WHEN 'planning_done' THEN 9\n      WHEN 'in_construction' THEN 10\n      ELSE 99\n    END AS phase_order,\n    p.budget_target, p.location_city, p.updated_at,\n    EXTRACT(DAY FROM now() - p.updated_at)::int AS days_idle,\n    c.name AS client_name\n  FROM projects p LEFT JOIN clients c ON c.id = p.client_id\n  WHERE p.status='active' AND p.current_phase NOT IN ('completed','archived')\n) t;",
+        "options": {}
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } }
+    },
+    {
+      "id": "pl-03",
+      "name": "Build HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-220, 300],
+      "parameters": {
+        "jsCode": "const projs = $input.first().json.projects || [];\nconst phases = ['intake','briefing_done','design_done','analysis_done','costs_done','trades_done','proposal_done','approved','planning_done','in_construction'];\nconst phaseLabel = { intake:'Intake', briefing_done:'Briefing', design_done:'Design', analysis_done:'Regulatorio', costs_done:'Costes', trades_done:'Trades', proposal_done:'Propuesta', approved:'Aprobado', planning_done:'Planning', in_construction:'En obra' };\nconst byPhase = {};\nphases.forEach(p => byPhase[p] = []);\nprojs.forEach(p => { if (byPhase[p.current_phase]) byPhase[p.current_phase].push(p); });\nconst card = p => '<a href=\"/webhook/admin-project?project_id='+p.id+'\" style=\"display:block;background:white;padding:10px 12px;border-radius:6px;text-decoration:none;color:#1f2937;margin-bottom:8px;border-left:3px solid '+(p.days_idle > 14 ? '#dc2626' : (p.days_idle > 7 ? '#f59e0b' : '#10b981'))+'\"><div style=\"font-weight:600;font-size:13px\">'+(p.name||'?')+'</div><div style=\"color:#6b7280;font-size:11px;margin-top:2px\">'+(p.client_name||'?')+' • '+(p.location_city||'?')+'</div><div style=\"color:'+(p.days_idle > 7 ? '#dc2626' : '#9ca3af')+';font-size:11px;margin-top:2px\">'+p.days_idle+'d sin actividad'+(p.budget_target ? ' • '+Number(p.budget_target).toLocaleString('es-ES')+' EUR' : '')+'</div></a>';\nconst column = phase => '<div style=\"flex:0 0 240px;background:#f9fafb;padding:12px;border-radius:8px;min-height:200px\"><div style=\"font-size:11px;color:#6b7280;text-transform:uppercase;font-weight:600;margin-bottom:8px;letter-spacing:.5px\">'+phaseLabel[phase]+' <span style=\"color:#9ca3af;font-weight:normal\">('+byPhase[phase].length+')</span></div>'+(byPhase[phase].length>0 ? byPhase[phase].map(card).join('') : '<div style=\"color:#9ca3af;font-size:12px;font-style:italic\">vacio</div>')+'</div>';\nconst html = '<!DOCTYPE html><html lang=\"es\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>Pipeline — ArquitAI</title>' +\n'<style>body{font-family:-apple-system,Arial,sans-serif;max-width:none;margin:24px;padding:16px;color:#1f2937;background:#f3f4f6}h1{color:#0f172a;margin:0 0 4px}.meta{color:#64748b;font-size:13px}.kanban{display:flex;gap:12px;overflow-x:auto;padding-bottom:12px;margin-top:16px}</style>' +\n'</head><body>' +\n'<a href=\"/webhook/admin-index\" style=\"color:#2563eb;font-size:13px;text-decoration:none\">← Admin index</a>' +\n'<h1>Pipeline de proyectos</h1>' +\n'<div class=\"meta\">'+projs.length+' proyectos activos. Borde verde: <7d sin actividad. Naranja: 7-14d. Rojo: >14d. Click en un proyecto para abrir su drill-down.</div>' +\n'<div class=\"kanban\">' + phases.map(column).join('') + '</div>' +\n'<p style=\"color:#94a3b8;font-size:11px;margin-top:24px;text-align:center\">Datos: projects.current_phase. Para mas detalle de un proyecto, click en su tarjeta.</p>' +\n'</body></html>';\nreturn [{ json: { html } }];"
+      }
+    },
+    {
+      "id": "pl-04",
+      "name": "Respond HTML",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [20, 300],
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.html }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              { "name": "Content-Type", "value": "text/html; charset=utf-8" },
+              { "name": "X-Frame-Options", "value": "DENY" },
+              { "name": "Cache-Control", "value": "no-store" }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook GET":   { "main": [[{ "node": "Load Pipeline", "type": "main", "index": 0 }]] },
+    "Load Pipeline": { "main": [[{ "node": "Build HTML",    "type": "main", "index": 0 }]] },
+    "Build HTML":    { "main": [[{ "node": "Respond HTML",  "type": "main", "index": 0 }]] }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5"
+  }
+}

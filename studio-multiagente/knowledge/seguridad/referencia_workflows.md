@@ -22,6 +22,8 @@
 | `GET /webhook/admin-project?project_id=<uuid>` | `util_admin_project_view_html` (`OMtABOaVexcIAF8V`) | Header X-API-Key | Drill-down de un proyecto (admin view, todos los datos) |
 | `GET /webhook/admin-tokens` | `util_admin_tokens_html` (`iDgnbEj9bRBBp3Pb`) | Header X-API-Key | Vista read-only de tokens cliente |
 | `GET /webhook/admin-export?dataset=<name>` | `util_admin_export_csv` (`fKn8F4cXN17QXydM`) | Header X-API-Key | Export CSV multi-dataset |
+| `GET /webhook/admin-search?q=<term>` | `util_admin_search_html` (`64dANKQHPVyfKnbG`) | Header X-API-Key | Búsqueda transversal proyectos/clientes/eventos |
+| `GET /webhook/admin-activity` | `util_admin_recent_activity_html` (`6Rk662AIopY93BGw`) | Header X-API-Key | Timeline 48h security events + activity_log |
 
 ### Endpoints públicos (con security_check integrado)
 
@@ -65,6 +67,8 @@
 | `30 5 * * *` (diario 05:30) | `cron_data_integrity` (`XP04imsIGNlr1smJ`) | 15 chequeos de orphans / FKs / fases / enums |
 | `0 7 * * *` (diario 07:00) | `cron_backup_verify` (`ERiFhqiHEpcwHEbz`) | Alerta crítica si último backup >7d o failed |
 | `45 4 * * *` (diario 04:45) | `cron_db_size_check` (`edBWaDXssbrp96X0`) | Snapshot db_size + alerta si crece >50% en 7d |
+| `30 3 * * 0` (semanal Dom 03:30) | `cron_vacuum_analyze` (`TGie3Mfy5jKqTF7z`) | VACUUM ANALYZE sobre 12 tablas core |
+| `0 9 * * 1` (semanal Lun 09:00) | `cron_normativa_freshness` (`bMhUwi8PdlIlh5aW`) | Alerta si normativa_knowledge stale >90d |
 
 ## Funciones SQL (PostgreSQL)
 
@@ -139,3 +143,5 @@
 | 034 | `034_drop_pii_plain_columns.sql` | DROP COLUMN question, answer, details (PII en plain eliminada) |
 | 035 | `035_llm_calls_tracking.sql` | Tabla llm_calls + función log_llm_call() + vista llm_costs_summary |
 | 036 | `036_db_size_history.sql` | Tabla db_size_history para tracking de crecimiento |
+| 037 | `037_agent_prompts_history.sql` | Tabla agent_prompts_history + trigger snapshot + vista churn |
+| 038 | `038_system_health_score.sql` | Vista system_health_score (0-100 con color green/yellow/red) |

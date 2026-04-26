@@ -1,0 +1,70 @@
+{
+  "name": "agent_materials",
+  "_n8n_id": "SOJW7SgCrJebLRP8",
+  "_note": "Stub sincronizado 2026-04-26 (bloque 10). Para version completa: mcp__n8n__n8n_get_workflow id=SOJW7SgCrJebLRP8 mode=full",
+  "_purpose": "Genera lista de materiales del proyecto en base al design seleccionado + briefing. LLM-driven con enriquecimiento de precios reales: lee supplier_catalog (catalogo del arquitecto) para usar items conocidos, y para los main items por categoria llama util_price_search (Jina Reader -> Leroy Merlin) para verificar precios de mercado.",
+  "_phase": "design_done -> analysis_done (parcial; agent_costs hace cierre)",
+  "_pipeline": "Receive -> Load Project/Design/Briefing/Prompt -> Load Supplier Catalog -> Start Execution -> Prepare Prompt (con catalog incrustado) -> Call LLM -> Parse -> Extract Main Items -> [Split for Price Lookup -> Search Material Price (util_price_search)] (loop hasta 6 categorias) -> Apply Enriched Prices -> Split Materials -> Insert Material (loop) -> Confirm -> Complete -> Return + Notify Architect",
+  "_bloque10_fix": "Load Supplier Catalog era nodo Code stub que devolvia [{}] con comentario 'table not yet created'. La tabla supplier_catalog SI existe (migration 003_prices.sql). Reemplazado por Postgres real que filtra por valid_until y ordena por quality_tier. Si la tabla esta vacia (0 filas), Prepare Materials Prompt ya hace fallback al texto '(Sin catalogo - usar precios estandar de mercado)'.",
+  "nodes": [
+    { "id": "e5a3-0001", "name": "Receive Project",             "type": "n8n-nodes-base.executeWorkflowTrigger", "position": [300, 300] },
+    { "id": "e5a3-0002", "name": "Load Project",                "type": "n8n-nodes-base.postgres",               "position": [500, 300] },
+    { "id": "e5a3-0003", "name": "Load Selected Design Option", "type": "n8n-nodes-base.postgres",               "position": [700, 300] },
+    { "id": "e5a3-0004", "name": "Load Briefing",               "type": "n8n-nodes-base.postgres",               "position": [900, 300] },
+    { "id": "e5a3-0005", "name": "Load Agent Prompt",           "type": "n8n-nodes-base.postgres",               "position": [1100, 300] },
+    { "id": "am-load-catalog", "name": "Load Supplier Catalog", "type": "n8n-nodes-base.postgres",               "position": [1225, 100], "_query": "SELECT id, supplier_name, category, item_name, brand, model_ref, unit_price, unit, quality_tier, notes FROM supplier_catalog WHERE valid_until IS NULL OR valid_until >= CURRENT_DATE ORDER BY category, CASE quality_tier WHEN 'economica' THEN 1 WHEN 'media' THEN 2 WHEN 'alta' THEN 3 WHEN 'premium' THEN 4 ELSE 5 END" },
+    { "id": "e5a3-0006", "name": "Start Execution",             "type": "n8n-nodes-base.postgres",               "position": [1350, 300] },
+    { "id": "e5a3-0007", "name": "Prepare Materials Prompt",    "type": "n8n-nodes-base.code",                   "position": [1550, 300] },
+    { "id": "e5a3-0008", "name": "Call LLM",                    "type": "n8n-nodes-base.executeWorkflow",        "position": [1750, 300] },
+    { "id": "e5a3-0009", "name": "Parse Materials",             "type": "n8n-nodes-base.code",                   "position": [1950, 300] },
+    { "id": "e5a3-0017", "name": "Extract Main Items",          "type": "n8n-nodes-base.code",                   "position": [2000, 100] },
+    { "id": "e5a3-0018", "name": "Split for Price Lookup",      "type": "n8n-nodes-base.splitInBatches",         "position": [2200, 100] },
+    { "id": "e5a3-0019", "name": "Search Material Price",       "type": "n8n-nodes-base.executeWorkflow",        "position": [2400, 100], "_calls": "util_price_search (PsKCThwfby9t9Zfz)" },
+    { "id": "e5a3-0020", "name": "Apply Enriched Prices",       "type": "n8n-nodes-base.code",                   "position": [2600, 100] },
+    { "id": "e5a3-0010", "name": "Split Materials",             "type": "n8n-nodes-base.splitInBatches",         "position": [2800, 300] },
+    { "id": "e5a3-0011", "name": "Insert Material",             "type": "n8n-nodes-base.postgres",               "position": [3000, 300] },
+    { "id": "e5a3-0012", "name": "Collect All Materials",       "type": "n8n-nodes-base.code",                   "position": [3000, 500] },
+    { "id": "e5a3-0013", "name": "Confirm Data",                "type": "n8n-nodes-base.postgres",               "position": [3200, 500] },
+    { "id": "e5a3-0014", "name": "Complete Execution",          "type": "n8n-nodes-base.postgres",               "position": [3400, 500] },
+    { "id": "e5a3-0015", "name": "Notify Architect",            "type": "n8n-nodes-base.executeWorkflow",        "position": [3600, 500] },
+    { "id": "e5a3-0021", "name": "Return Success",              "type": "n8n-nodes-base.set",                    "position": [3800, 500] }
+  ],
+  "connections": {
+    "Receive Project":             { "main": [[{ "node": "Load Project",                "type": "main", "index": 0 }]] },
+    "Load Project":                { "main": [[{ "node": "Load Selected Design Option", "type": "main", "index": 0 }]] },
+    "Load Selected Design Option": { "main": [[{ "node": "Load Briefing",               "type": "main", "index": 0 }]] },
+    "Load Briefing":               { "main": [[{ "node": "Load Agent Prompt",           "type": "main", "index": 0 }]] },
+    "Load Agent Prompt":           { "main": [[{ "node": "Load Supplier Catalog",       "type": "main", "index": 0 }]] },
+    "Load Supplier Catalog":       { "main": [[{ "node": "Start Execution",             "type": "main", "index": 0 }]] },
+    "Start Execution":             { "main": [[{ "node": "Prepare Materials Prompt",    "type": "main", "index": 0 }]] },
+    "Prepare Materials Prompt":    { "main": [[{ "node": "Call LLM",                    "type": "main", "index": 0 }]] },
+    "Call LLM":                    { "main": [[{ "node": "Parse Materials",             "type": "main", "index": 0 }]] },
+    "Parse Materials":             { "main": [[{ "node": "Extract Main Items",          "type": "main", "index": 0 }]] },
+    "Extract Main Items":          { "main": [[{ "node": "Split for Price Lookup",      "type": "main", "index": 0 }]] },
+    "Split for Price Lookup":      {
+      "main": [
+        [{ "node": "Search Material Price",  "type": "main", "index": 0 }],
+        [{ "node": "Apply Enriched Prices",  "type": "main", "index": 0 }]
+      ]
+    },
+    "Search Material Price":       { "main": [[{ "node": "Split for Price Lookup",      "type": "main", "index": 0 }]] },
+    "Apply Enriched Prices":       { "main": [[{ "node": "Split Materials",             "type": "main", "index": 0 }]] },
+    "Split Materials":             {
+      "main": [
+        [{ "node": "Insert Material",        "type": "main", "index": 0 }],
+        [{ "node": "Collect All Materials",  "type": "main", "index": 0 }]
+      ]
+    },
+    "Insert Material":             { "main": [[{ "node": "Split Materials",             "type": "main", "index": 0 }]] },
+    "Collect All Materials":       { "main": [[{ "node": "Confirm Data",                "type": "main", "index": 0 }]] },
+    "Confirm Data":                { "main": [[{ "node": "Complete Execution",          "type": "main", "index": 0 }]] },
+    "Complete Execution":          {
+      "main": [
+        [
+          { "node": "Return Success",   "type": "main", "index": 0 },
+          { "node": "Notify Architect", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  }
+}

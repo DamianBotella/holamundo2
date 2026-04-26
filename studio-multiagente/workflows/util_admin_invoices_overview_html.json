@@ -1,0 +1,19 @@
+{
+  "name": "util_admin_invoices_overview_html",
+  "_n8n_id": "pvWPutYJLSQgyItV",
+  "_purpose": "Vista agregada de facturas (proveedores). GET /webhook/admin-invoices-overview con header x-api-key. 4 KPI cards (pending review + amount, approved sin pagar + amount, paid 30d + amount, disputed). Tabla pending por categoria, tabla historica por gremio (con avg amount), top 20 pending mas antiguas primero coloreado por dias.",
+  "_triggers": "GET /webhook/admin-invoices-overview (header x-api-key)",
+  "_data_source": "tabla invoices (migration 012)",
+  "_complementa_a": "cron_invoice_approval_followup (digest diario), agent_financial_tracker (entrada via OCR Vision)",
+  "nodes": [
+    { "id": "aio-01", "name": "Webhook GET",        "type": "n8n-nodes-base.webhook",          "position": [-700, 300] },
+    { "id": "aio-02", "name": "Load Invoice Stats", "type": "n8n-nodes-base.postgres",         "position": [-460, 300], "_query_summary": "json con totals + by_category (pending) + by_trade (historico) + recent_pending" },
+    { "id": "aio-03", "name": "Build HTML",         "type": "n8n-nodes-base.code",             "position": [-220, 300] },
+    { "id": "aio-04", "name": "Respond HTML",       "type": "n8n-nodes-base.respondToWebhook", "position": [20, 300] }
+  ],
+  "connections": {
+    "Webhook GET":        { "main": [[{ "node": "Load Invoice Stats", "type": "main", "index": 0 }]] },
+    "Load Invoice Stats": { "main": [[{ "node": "Build HTML",         "type": "main", "index": 0 }]] },
+    "Build HTML":         { "main": [[{ "node": "Respond HTML",       "type": "main", "index": 0 }]] }
+  }
+}

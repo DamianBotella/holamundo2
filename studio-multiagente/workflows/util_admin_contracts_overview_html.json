@@ -1,0 +1,19 @@
+{
+  "name": "util_admin_contracts_overview_html",
+  "_n8n_id": "Pl6oXMSLdWP1aAni",
+  "_purpose": "Vista agregada de contratos del estudio. GET /webhook/admin-contracts-overview con header x-api-key. 5 KPI cards (total, draft, esperando firma, signed + amount 30d, expired sin marcar). Tabla por contract_type. Top 25 pendientes ordenados por urgency (expired=100, drafts>14d=80, sent>7d=60).",
+  "_triggers": "GET /webhook/admin-contracts-overview (header x-api-key)",
+  "_data_source": "tabla contracts (migration 022)",
+  "_complementa_a": "cron_contract_followup (digest diario), agent_contracts (generacion via Google Doc)",
+  "nodes": [
+    { "id": "aco-01", "name": "Webhook GET",          "type": "n8n-nodes-base.webhook",          "position": [-700, 300] },
+    { "id": "aco-02", "name": "Load Contracts Stats", "type": "n8n-nodes-base.postgres",         "position": [-460, 300], "_query_summary": "json con totals + by_type + pending_action con urgency CASE" },
+    { "id": "aco-03", "name": "Build HTML",           "type": "n8n-nodes-base.code",             "position": [-220, 300] },
+    { "id": "aco-04", "name": "Respond HTML",         "type": "n8n-nodes-base.respondToWebhook", "position": [20, 300] }
+  ],
+  "connections": {
+    "Webhook GET":          { "main": [[{ "node": "Load Contracts Stats", "type": "main", "index": 0 }]] },
+    "Load Contracts Stats": { "main": [[{ "node": "Build HTML",           "type": "main", "index": 0 }]] },
+    "Build HTML":           { "main": [[{ "node": "Respond HTML",         "type": "main", "index": 0 }]] }
+  }
+}

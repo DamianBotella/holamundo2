@@ -6,8 +6,8 @@ Fecha: 2026-04-26
 
 | | Total |
 |---|---|
-| Workflows activos en n8n | **~142** (bloque 18 añade 4: 2 dashboards overview + cron_normativa_review_monthly + cron_compliance_critical_alert) |
-| JSONs locales en `workflows/` | **118+** |
+| Workflows activos en n8n | **~144** (bloque 19 añade 2: invoices/contracts overview) |
+| JSONs locales en `workflows/` | **120+** |
 | En n8n SIN JSON local | **~16** (rendimiento decreciente — bloques 17+ priorizan Fase 2 hooks vs sync) |
 | En local SIN n8n | **0** |
 
@@ -33,6 +33,12 @@ Fecha: 2026-04-26
 - `agent_financial_tracker.json` (stub estructural — OCR facturas)
 - `cron_post_phase_audits.json` (stub estructural — cron 30min auditorías post-fase)
 - `util_admin_llm_stats_html.json` (workflow NUEVO — dashboard de costes LLM con drill-down)
+
+**Bloque 19** (2 overview dashboards finales + REPORTE_15H.md):
+- `util_admin_invoices_overview_html.json` (workflow NUEVO `pvWPutYJLSQgyItV`, activo — pending/approved/disputed por categoría/gremio)
+- `util_admin_contracts_overview_html.json` (workflow NUEVO `Pl6oXMSLdWP1aAni`, activo — por tipo + pendientes priorizados por urgency)
+- `studio-multiagente/docs/REPORTE_15H.md` — reporte ejecutivo de las 15h trabajadas en bloques 17-19, con TL;DR + entregas + estado del sistema + qué necesito de Damián priorizado.
+- admin-index actualizado con 2 dashboards nuevos.
 
 **Bloque 18** (4 workflows nuevos: 2 overview dashboards + 2 crons preventivos):
 - `util_admin_pathology_overview_html.json` (workflow NUEVO `fmm3V3fWsyksUH7c`, activo — vista agregada findings por tipo, proyecto, criticos recientes)

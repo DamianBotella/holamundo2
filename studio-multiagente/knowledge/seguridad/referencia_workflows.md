@@ -38,6 +38,8 @@
 | `GET /webhook/admin-endpoints` | `util_admin_endpoints_html` (`BLrbGTcoGeEZIhyu`) | Header X-API-Key | Catálogo exhaustivo de endpoints (5 grupos) + botón copiar curl ready-to-paste |
 | `GET /webhook/admin-pathology-overview` | `util_admin_pathology_overview_html` (`fmm3V3fWsyksUH7c`) | Header X-API-Key | Vista agregada de patologías: por tipo, por proyecto, criticals/safety recientes |
 | `GET /webhook/admin-aftercare-overview` | `util_admin_aftercare_overview_html` (`V1duL8iwHBBwLCR6`) | Header X-API-Key | Vista agregada postventa: por severidad/categoría + top 25 open + SLA breach destacado |
+| `GET /webhook/admin-invoices-overview` | `util_admin_invoices_overview_html` (`pvWPutYJLSQgyItV`) | Header X-API-Key | Vista agregada facturas: pending/approved/disputed por categoría y gremio |
+| `GET /webhook/admin-contracts-overview` | `util_admin_contracts_overview_html` (`Pl6oXMSLdWP1aAni`) | Header X-API-Key | Vista agregada contratos: por tipo + pendientes de acción priorizados por urgency |
 | `GET /webhook/qc-form?qc_id=<uuid>` | `qc_public_form` (`Pqod9AyvG0opCrLU`) | Header X-API-Key | Form HTML responsive móvil para marcar pass/fail/skip + comentario en items del qc_check (autosave via fetch al qc-complete existente) |
 
 ### Endpoints públicos (con security_check integrado)

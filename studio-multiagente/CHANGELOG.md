@@ -2,7 +2,15 @@
 
 Histórico cronológico de hitos del sistema. Generado a partir de git log.
 
-## 2026-04-26 — Bloques 7-18: Fase 2 + overviews agregados + alertas críticas
+## 2026-04-26 — Bloques 7-19: Fase 2 completa + 5 overviews agregados + REPORTE_15H
+
+### Bloque 19 (5 puntos): plan 5h — sesión autónoma de Damián descansando
+- `util_admin_invoices_overview_html` (id `pvWPutYJLSQgyItV`, activo): GET `/webhook/admin-invoices-overview`. 4 KPI cards con totales y amounts. Tabla pending por categoría, histórico por gremio, top 20 pending más antiguas primero coloreadas.
+- `util_admin_contracts_overview_html` (id `Pl6oXMSLdWP1aAni`, activo): GET `/webhook/admin-contracts-overview`. 5 KPI cards. Tabla por contract_type. Top 25 pendientes ordenados por urgency CASE (expired=100, drafts>14d=80, sent>7d=60).
+- admin-index actualizado con 2 dashboards nuevos.
+- `studio-multiagente/docs/REPORTE_15H.md` — reporte ejecutivo del trabajo autónomo de 15h: TL;DR, entregas por bloque, estado del sistema, lo que necesito de Damián priorizado, lecciones operativas acumuladas. Para que mañana tenga lectura rápida del progreso.
+
+
 
 ### Bloque 18 (5 puntos): plan 5h
 - `util_admin_pathology_overview_html` (id `fmm3V3fWsyksUH7c`, activo): GET `/webhook/admin-pathology-overview`. 5 KPI cards (total/unresolved/critical/safety/in_repair) + tabla por tipo con avg coste max + tabla por proyecto + recientes critical/safety unresolved. Sin LLM.

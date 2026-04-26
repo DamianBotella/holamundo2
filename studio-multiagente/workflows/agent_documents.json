@@ -1,0 +1,57 @@
+{
+  "name": "agent_documents",
+  "_n8n_id": "E5uOVocm8GwNH278",
+  "_note": "Stub sincronizado 2026-04-26 (bloque 12). Para version completa: mcp__n8n__n8n_get_workflow id=E5uOVocm8GwNH278 mode=full",
+  "_purpose": "Gestor documental NO-LLM (logica determinista). Sub-workflow llamado por main_orchestrator: lista archivos en la carpeta Drive del proyecto, los compara contra la lista de documentos requeridos por fase, inserta nuevos en la tabla project_documents, y registra warnings si hay docs requeridos faltantes.",
+  "_phase": "Cualquier fase (orquestador lo invoca tras milestones para asegurar trazabilidad documental)",
+  "_no_llm": "Logica determinista — no llama a util_llm_call. Solo Drive listing + comparacion + insert.",
+  "_persists_to": "project_documents (project_id, doc_type, drive_file_id, name, status, phase, uploaded_at)",
+  "nodes": [
+    { "id": "ad-01", "name": "Receive Project",         "type": "n8n-nodes-base.executeWorkflowTrigger", "position": [112, 304] },
+    { "id": "ad-02", "name": "Load Project",            "type": "n8n-nodes-base.postgres",               "position": [304, 304] },
+    { "id": "ad-03", "name": "Load Existing Documents", "type": "n8n-nodes-base.postgres",               "position": [512, 304] },
+    { "id": "ad-04", "name": "Prepare Drive Request",   "type": "n8n-nodes-base.code",                   "position": [704, 304] },
+    { "id": "ad-05", "name": "IF Has Drive Folder?",    "type": "n8n-nodes-base.if",                     "position": [912, 304] },
+    { "id": "ad-06", "name": "List Project Files",      "type": "n8n-nodes-base.googleDrive",            "position": [1104, 160] },
+    { "id": "ad-07", "name": "Compare and Classify",    "type": "n8n-nodes-base.code",                   "position": [1360, 304] },
+    { "id": "ad-08", "name": "IF New Files?",           "type": "n8n-nodes-base.if",                     "position": [1552, 304] },
+    { "id": "ad-09", "name": "Prepare Insert Items",    "type": "n8n-nodes-base.code",                   "position": [1760, 160] },
+    { "id": "ad-10", "name": "Insert New Document",     "type": "n8n-nodes-base.postgres",               "position": [1952, 160] },
+    { "id": "ad-11", "name": "After Files",             "type": "n8n-nodes-base.code",                   "position": [2160, 304] },
+    { "id": "ad-12", "name": "IF Has Missing?",         "type": "n8n-nodes-base.if",                     "position": [2352, 304] },
+    { "id": "ad-13", "name": "Log Missing Warning",     "type": "n8n-nodes-base.postgres",               "position": [2560, 160] },
+    { "id": "ad-14", "name": "Log Execution",           "type": "n8n-nodes-base.postgres",               "position": [2752, 304] },
+    { "id": "ad-15", "name": "Return Result",           "type": "n8n-nodes-base.set",                    "position": [2960, 304] }
+  ],
+  "connections": {
+    "Receive Project":         { "main": [[{ "node": "Load Project",            "type": "main", "index": 0 }]] },
+    "Load Project":            { "main": [[{ "node": "Load Existing Documents", "type": "main", "index": 0 }]] },
+    "Load Existing Documents": { "main": [[{ "node": "Prepare Drive Request",   "type": "main", "index": 0 }]] },
+    "Prepare Drive Request":   { "main": [[{ "node": "IF Has Drive Folder?",    "type": "main", "index": 0 }]] },
+    "IF Has Drive Folder?":    {
+      "main": [
+        [{ "node": "List Project Files",   "type": "main", "index": 0 }],
+        [{ "node": "Compare and Classify", "type": "main", "index": 0 }]
+      ]
+    },
+    "List Project Files":      { "main": [[{ "node": "Compare and Classify",   "type": "main", "index": 0 }]] },
+    "Compare and Classify":    { "main": [[{ "node": "IF New Files?",          "type": "main", "index": 0 }]] },
+    "IF New Files?":           {
+      "main": [
+        [{ "node": "Prepare Insert Items", "type": "main", "index": 0 }],
+        [{ "node": "After Files",          "type": "main", "index": 0 }]
+      ]
+    },
+    "Prepare Insert Items":    { "main": [[{ "node": "Insert New Document",    "type": "main", "index": 0 }]] },
+    "Insert New Document":     { "main": [[{ "node": "After Files",            "type": "main", "index": 0 }]] },
+    "After Files":             { "main": [[{ "node": "IF Has Missing?",        "type": "main", "index": 0 }]] },
+    "IF Has Missing?":         {
+      "main": [
+        [{ "node": "Log Missing Warning", "type": "main", "index": 0 }],
+        [{ "node": "Log Execution",       "type": "main", "index": 0 }]
+      ]
+    },
+    "Log Missing Warning":     { "main": [[{ "node": "Log Execution",          "type": "main", "index": 0 }]] },
+    "Log Execution":           { "main": [[{ "node": "Return Result",          "type": "main", "index": 0 }]] }
+  }
+}

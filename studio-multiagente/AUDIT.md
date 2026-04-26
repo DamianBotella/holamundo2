@@ -6,22 +6,37 @@ Fecha: 2026-04-26
 
 | | Total |
 |---|---|
-| Workflows activos en n8n | **~125** |
-| JSONs locales en `workflows/` | **80+** |
-| En n8n SIN JSON local | **~40** (era 44, sincronizados 4 críticos en bloque 8 + agent_proposal en bloque 7) |
+| Workflows activos en n8n | **~127** (suma 2: cron_unknown_agent_alert + util_admin_llm_stats_html) |
+| JSONs locales en `workflows/` | **88+** |
+| En n8n SIN JSON local | **~33** (era 44, sincronizados 11 entre bloques 7-12) |
 | En local SIN n8n | **0** |
 
-## Sincronizados en bloque 7-8
+## Sincronizados en bloque 7-12
 
+**Bloque 7-8** (5 stubs):
 - `agent_proposal.json` (bloque 7, 2fd83bb) — versión simplificada con queries SQL completas, jsCode embedded omitido
 - `agent_planner.json` (bloque 8, stub estructural)
 - `agent_memory.json` (bloque 8, stub estructural)
 - `cron_external_backup.json` (bloque 8, stub estructural)
 - `util_normativa_fetch.json` (bloque 8, stub estructural)
 
+**Bloque 8** (cierre ciclo notes): `util_admin_notes_list.json` (stub completo, endpoint nuevo).
+
+**Bloque 10** (fix cableado): `agent_materials.json` (stub estructural creado por primera vez tras fix Load Supplier Catalog).
+
+**Bloque 11** (cron preventivo): `cron_unknown_agent_alert.json` (workflow nuevo, vigila regresión bug A2).
+
+**Bloque 12** (5 huérfanos críticos sincronizados + 1 nuevo workflow):
+- `agent_pathology.json` (stub estructural — Vision LLM, detección patologías)
+- `agent_site_monitor.json` (stub estructural — Vision LLM, monitoreo obra)
+- `agent_documents.json` (stub estructural — gestor documental Drive determinista)
+- `agent_financial_tracker.json` (stub estructural — OCR facturas)
+- `cron_post_phase_audits.json` (stub estructural — cron 30min auditorías post-fase)
+- `util_admin_llm_stats_html.json` (workflow NUEVO — dashboard de costes LLM con drill-down)
+
 > **Stub estructural** = `_n8n_id` + `_purpose` + nodes (id+name+type+position) + connections completas + settings. Sin `parameters` detallados (jsCode, SQL queries largos, HTML emails). Para versión completa: `mcp__n8n__n8n_get_workflow id=<n8n_id> mode=full`.
 
-## 44 workflows sin JSON local
+## ~33 workflows aún sin JSON local (era 44)
 
 Estos son workflows que existen y están activos en n8n, pero no tienen su JSON sincronizado en `workflows/`. Razón típica: son piezas heredadas de sesiones anteriores donde el patrón "todo en JSON local" todavía no se aplicaba sistemáticamente.
 

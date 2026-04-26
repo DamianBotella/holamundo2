@@ -1,0 +1,59 @@
+{
+  "name": "agent_site_monitor",
+  "_n8n_id": "DPy3FBugAbWP10BD",
+  "_note": "Stub sincronizado 2026-04-26 (bloque 12). Para version completa: mcp__n8n__n8n_get_workflow id=DPy3FBugAbWP10BD mode=full",
+  "_purpose": "Monitorea progreso visual de obra. Webhook publico que recibe foto + project_id; carga el plan del proyecto; llama a Vision LLM para evaluar la foto contra el plan (fase actual, calidad, desviaciones); persiste site_report con flagged=true si detecta problemas; alerta al arquitecto si flagged.",
+  "_triggers": "POST /webhook/site-report",
+  "_persists_to": "site_reports (project_id, photo_url, current_phase_observed, deviations_json, flagged, llm_analysis)",
+  "_alerts_when": "flagged=true -> Send Alert via Gmail al architect_email",
+  "nodes": [
+    { "id": "asm-01", "name": "Webhook Site Report",   "type": "n8n-nodes-base.webhook",          "position": [-900, 300] },
+    { "id": "5a25909e-a815-4b4b-b409-6cc63b4de7ec", "name": "Load Architect Email", "type": "n8n-nodes-base.postgres", "position": [-800, 300] },
+    { "id": "asm-02", "name": "Validate Input",        "type": "n8n-nodes-base.code",             "position": [-680, 300] },
+    { "id": "asm-03", "name": "Valid?",                "type": "n8n-nodes-base.if",               "position": [-460, 300] },
+    { "id": "asm-04", "name": "Respond 400",           "type": "n8n-nodes-base.respondToWebhook", "position": [-220, 480] },
+    { "id": "asm-05", "name": "Load Project + Plan",   "type": "n8n-nodes-base.postgres",         "position": [-220, 220] },
+    { "id": "asm-06", "name": "Build Vision Prompt",   "type": "n8n-nodes-base.code",             "position": [0, 220] },
+    { "id": "asm-07", "name": "Call Vision LLM",       "type": "n8n-nodes-base.httpRequest",      "position": [220, 220] },
+    { "id": "asm-08", "name": "Parse Vision Response", "type": "n8n-nodes-base.code",             "position": [440, 160] },
+    { "id": "asm-09", "name": "Insert Site Report",    "type": "n8n-nodes-base.postgres",         "position": [660, 160] },
+    { "id": "asm-10", "name": "Flagged?",              "type": "n8n-nodes-base.if",               "position": [880, 160] },
+    { "id": "asm-11", "name": "Build Alert Email",     "type": "n8n-nodes-base.code",             "position": [1100, 60] },
+    { "id": "asm-12", "name": "Send Alert",            "type": "n8n-nodes-base.gmail",            "position": [1320, 60] },
+    { "id": "asm-13", "name": "Mark Alert Sent",       "type": "n8n-nodes-base.postgres",         "position": [1540, 60] },
+    { "id": "asm-14", "name": "Respond 200",           "type": "n8n-nodes-base.respondToWebhook", "position": [1760, 160] },
+    { "id": "asm-15", "name": "Handle Vision Error",   "type": "n8n-nodes-base.code",             "position": [440, 320] },
+    { "id": "asm-16", "name": "Respond 502",           "type": "n8n-nodes-base.respondToWebhook", "position": [660, 320] }
+  ],
+  "connections": {
+    "Webhook Site Report":   { "main": [[{ "node": "Load Architect Email", "type": "main", "index": 0 }]] },
+    "Load Architect Email":  { "main": [[{ "node": "Validate Input",       "type": "main", "index": 0 }]] },
+    "Validate Input":        { "main": [[{ "node": "Valid?",               "type": "main", "index": 0 }]] },
+    "Valid?":                {
+      "main": [
+        [{ "node": "Load Project + Plan", "type": "main", "index": 0 }],
+        [{ "node": "Respond 400",         "type": "main", "index": 0 }]
+      ]
+    },
+    "Load Project + Plan":   { "main": [[{ "node": "Build Vision Prompt", "type": "main", "index": 0 }]] },
+    "Build Vision Prompt":   { "main": [[{ "node": "Call Vision LLM",     "type": "main", "index": 0 }]] },
+    "Call Vision LLM":       {
+      "main": [
+        [{ "node": "Parse Vision Response", "type": "main", "index": 0 }],
+        [{ "node": "Handle Vision Error",   "type": "main", "index": 0 }]
+      ]
+    },
+    "Parse Vision Response": { "main": [[{ "node": "Insert Site Report",  "type": "main", "index": 0 }]] },
+    "Insert Site Report":    { "main": [[{ "node": "Flagged?",            "type": "main", "index": 0 }]] },
+    "Flagged?":              {
+      "main": [
+        [{ "node": "Build Alert Email", "type": "main", "index": 0 }],
+        [{ "node": "Respond 200",       "type": "main", "index": 0 }]
+      ]
+    },
+    "Build Alert Email":     { "main": [[{ "node": "Send Alert",          "type": "main", "index": 0 }]] },
+    "Send Alert":            { "main": [[{ "node": "Mark Alert Sent",     "type": "main", "index": 0 }]] },
+    "Mark Alert Sent":       { "main": [[{ "node": "Respond 200",         "type": "main", "index": 0 }]] },
+    "Handle Vision Error":   { "main": [[{ "node": "Respond 502",         "type": "main", "index": 0 }]] }
+  }
+}

@@ -1,0 +1,48 @@
+{
+  "name": "agent_financial_tracker",
+  "_n8n_id": "LEspjLl6VEHPclPG",
+  "_note": "Stub sincronizado 2026-04-26 (bloque 12). Para version completa: mcp__n8n__n8n_get_workflow id=LEspjLl6VEHPclPG mode=full",
+  "_purpose": "Procesa facturas/justificantes de obra. Webhook publico con imagen + project_id; OCR via Vision LLM; extrae proveedor, fecha, importe, partidas; persiste en invoices con status='pending_decision'; envia email de decision al arquitecto (aprobar/rechazar/dudar) que se procesa en invoice_decision.",
+  "_triggers": "POST /webhook/invoice-upload",
+  "_persists_to": "invoices (project_id, supplier_name, invoice_date, total_amount, vat, line_items_json, photo_url, status)",
+  "_chain": "factura subida -> OCR -> insert pending -> email decision -> Damian aprueba via invoice_decision -> status=approved",
+  "nodes": [
+    { "id": "ft-01", "name": "Webhook Invoice Upload", "type": "n8n-nodes-base.webhook",          "position": [-900, 300] },
+    { "id": "9693452b-c820-4fed-b7dc-6ce1b4e8a171", "name": "Load Architect Email", "type": "n8n-nodes-base.postgres", "position": [-800, 300] },
+    { "id": "ft-02", "name": "Validate Input",         "type": "n8n-nodes-base.code",             "position": [-680, 300] },
+    { "id": "ft-03", "name": "Valid?",                 "type": "n8n-nodes-base.if",               "position": [-460, 300] },
+    { "id": "ft-04", "name": "Respond 400",            "type": "n8n-nodes-base.respondToWebhook", "position": [-220, 480] },
+    { "id": "ft-05", "name": "Build OCR Prompt",       "type": "n8n-nodes-base.code",             "position": [-220, 220] },
+    { "id": "ft-06", "name": "Call Vision OCR",        "type": "n8n-nodes-base.httpRequest",      "position": [0, 220] },
+    { "id": "ft-07", "name": "Parse OCR",              "type": "n8n-nodes-base.code",             "position": [220, 160] },
+    { "id": "ft-08", "name": "Insert Invoice",         "type": "n8n-nodes-base.postgres",         "position": [440, 160] },
+    { "id": "ft-12", "name": "Build Decision Email",   "type": "n8n-nodes-base.code",             "position": [660, 60] },
+    { "id": "ft-13", "name": "Send Decision Email",    "type": "n8n-nodes-base.gmail",            "position": [880, 60] },
+    { "id": "ft-09", "name": "Respond 201",            "type": "n8n-nodes-base.respondToWebhook", "position": [660, 160] },
+    { "id": "ft-10", "name": "Handle OCR Error",       "type": "n8n-nodes-base.code",             "position": [220, 320] },
+    { "id": "ft-11", "name": "Respond 502",            "type": "n8n-nodes-base.respondToWebhook", "position": [440, 320] }
+  ],
+  "connections": {
+    "Webhook Invoice Upload": { "main": [[{ "node": "Load Architect Email", "type": "main", "index": 0 }]] },
+    "Load Architect Email":   { "main": [[{ "node": "Validate Input",       "type": "main", "index": 0 }]] },
+    "Validate Input":         { "main": [[{ "node": "Valid?",               "type": "main", "index": 0 }]] },
+    "Valid?":                 {
+      "main": [
+        [{ "node": "Build OCR Prompt", "type": "main", "index": 0 }],
+        [{ "node": "Respond 400",      "type": "main", "index": 0 }]
+      ]
+    },
+    "Build OCR Prompt":       { "main": [[{ "node": "Call Vision OCR",      "type": "main", "index": 0 }]] },
+    "Call Vision OCR":        {
+      "main": [
+        [{ "node": "Parse OCR",         "type": "main", "index": 0 }],
+        [{ "node": "Handle OCR Error",  "type": "main", "index": 0 }]
+      ]
+    },
+    "Parse OCR":              { "main": [[{ "node": "Insert Invoice",       "type": "main", "index": 0 }]] },
+    "Insert Invoice":         { "main": [[{ "node": "Build Decision Email", "type": "main", "index": 0 }]] },
+    "Build Decision Email":   { "main": [[{ "node": "Send Decision Email",  "type": "main", "index": 0 }]] },
+    "Send Decision Email":    { "main": [[{ "node": "Respond 201",          "type": "main", "index": 0 }]] },
+    "Handle OCR Error":       { "main": [[{ "node": "Respond 502",          "type": "main", "index": 0 }]] }
+  }
+}

@@ -1,0 +1,69 @@
+{
+  "name": "agent_pathology",
+  "_n8n_id": "I34LYGuiWTQ8WJCa",
+  "_note": "Stub sincronizado 2026-04-26 (bloque 12). Para version completa: mcp__n8n__n8n_get_workflow id=I34LYGuiWTQ8WJCa mode=full",
+  "_purpose": "Detecta patologias del inmueble (humedades, grietas, instalaciones obsoletas) a partir de fotos. Webhook publico que recibe imagenes; llama a Vision LLM (claude/gpt-4-vision); persiste cada finding en pathology_findings con severity + cost_min/max + recommended_action; si severity=critical o affects_safety=true envia alerta inmediata al arquitecto.",
+  "_triggers": "POST /webhook/pathology-detect (con archivos imagen + project_id)",
+  "_persists_to": "pathology_findings (project_id, type, severity, description, cost_min, cost_max, affects_safety, recommended_action)",
+  "_alerts_when": "severity=critical OR affects_safety=true -> Send Alert via Gmail al architect_email",
+  "nodes": [
+    { "id": "ap-01", "name": "Webhook",                "type": "n8n-nodes-base.webhook",          "position": [-900, 300] },
+    { "id": "11f52f3b-3363-4fe5-8ef9-1cd37d3d849a", "name": "Load Architect Email", "type": "n8n-nodes-base.postgres", "position": [-800, 300] },
+    { "id": "ap-02", "name": "Validate",               "type": "n8n-nodes-base.code",             "position": [-680, 300] },
+    { "id": "ap-03", "name": "Valid?",                 "type": "n8n-nodes-base.if",               "position": [-460, 300] },
+    { "id": "ap-04", "name": "Respond 400",            "type": "n8n-nodes-base.respondToWebhook", "position": [-220, 480] },
+    { "id": "ap-05", "name": "Load Project Context",   "type": "n8n-nodes-base.postgres",         "position": [-220, 220] },
+    { "id": "ap-06", "name": "Build Prompt",           "type": "n8n-nodes-base.code",             "position": [0, 220] },
+    { "id": "ap-07", "name": "Call Vision",            "type": "n8n-nodes-base.httpRequest",      "position": [220, 220] },
+    { "id": "ap-08", "name": "Parse Findings",         "type": "n8n-nodes-base.code",             "position": [440, 160] },
+    { "id": "ap-09", "name": "Has Findings?",          "type": "n8n-nodes-base.if",               "position": [660, 160] },
+    { "id": "ap-10", "name": "Insert Findings (loop)", "type": "n8n-nodes-base.code",             "position": [880, 80] },
+    { "id": "ap-11", "name": "Insert Pathology",       "type": "n8n-nodes-base.postgres",         "position": [1100, 80] },
+    { "id": "ap-12", "name": "Aggregate Inserted",     "type": "n8n-nodes-base.code",             "position": [1320, 80] },
+    { "id": "ap-13", "name": "Critical?",              "type": "n8n-nodes-base.if",               "position": [1540, 80] },
+    { "id": "ap-14", "name": "Build Alert Email",      "type": "n8n-nodes-base.code",             "position": [1760, 0] },
+    { "id": "ap-15", "name": "Send Alert",             "type": "n8n-nodes-base.gmail",            "position": [1980, 0] },
+    { "id": "ap-16", "name": "Respond 201",            "type": "n8n-nodes-base.respondToWebhook", "position": [2200, 80] },
+    { "id": "ap-17", "name": "Respond No Findings",    "type": "n8n-nodes-base.respondToWebhook", "position": [880, 240] },
+    { "id": "ap-18", "name": "Handle Vision Error",    "type": "n8n-nodes-base.code",             "position": [440, 320] },
+    { "id": "ap-19", "name": "Respond 502",            "type": "n8n-nodes-base.respondToWebhook", "position": [660, 320] }
+  ],
+  "connections": {
+    "Webhook":               { "main": [[{ "node": "Load Architect Email", "type": "main", "index": 0 }]] },
+    "Load Architect Email":  { "main": [[{ "node": "Validate",             "type": "main", "index": 0 }]] },
+    "Validate":              { "main": [[{ "node": "Valid?",               "type": "main", "index": 0 }]] },
+    "Valid?":                {
+      "main": [
+        [{ "node": "Load Project Context", "type": "main", "index": 0 }],
+        [{ "node": "Respond 400",          "type": "main", "index": 0 }]
+      ]
+    },
+    "Load Project Context":  { "main": [[{ "node": "Build Prompt",         "type": "main", "index": 0 }]] },
+    "Build Prompt":          { "main": [[{ "node": "Call Vision",          "type": "main", "index": 0 }]] },
+    "Call Vision":           {
+      "main": [
+        [{ "node": "Parse Findings",      "type": "main", "index": 0 }],
+        [{ "node": "Handle Vision Error", "type": "main", "index": 0 }]
+      ]
+    },
+    "Parse Findings":        { "main": [[{ "node": "Has Findings?",        "type": "main", "index": 0 }]] },
+    "Has Findings?":         {
+      "main": [
+        [{ "node": "Insert Findings (loop)", "type": "main", "index": 0 }],
+        [{ "node": "Respond No Findings",    "type": "main", "index": 0 }]
+      ]
+    },
+    "Insert Findings (loop)":{ "main": [[{ "node": "Insert Pathology",     "type": "main", "index": 0 }]] },
+    "Insert Pathology":      { "main": [[{ "node": "Aggregate Inserted",   "type": "main", "index": 0 }]] },
+    "Aggregate Inserted":    { "main": [[{ "node": "Critical?",            "type": "main", "index": 0 }]] },
+    "Critical?":             {
+      "main": [
+        [{ "node": "Build Alert Email", "type": "main", "index": 0 }],
+        [{ "node": "Respond 201",       "type": "main", "index": 0 }]
+      ]
+    },
+    "Build Alert Email":     { "main": [[{ "node": "Send Alert",           "type": "main", "index": 0 }]] },
+    "Send Alert":            { "main": [[{ "node": "Respond 201",          "type": "main", "index": 0 }]] },
+    "Handle Vision Error":   { "main": [[{ "node": "Respond 502",          "type": "main", "index": 0 }]] }
+  }
+}

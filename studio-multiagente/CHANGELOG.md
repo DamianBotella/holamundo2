@@ -2,6 +2,34 @@
 
 Histórico cronológico de hitos del sistema. Generado a partir de git log.
 
+## 2026-04-26 — Bloques 7-12: sync huérfanos + audits + meta-vigilancia LLM
+
+### Bloque 12 (5 puntos): plan 5h
+- `cron_workflow_audit` ahora vigila también `cron_unknown_agent_alert` (action `unknown_agent_check_clean`, ventana 26h). El cron ahora escribe activity_log también cuando count=0 (rama NoOp reemplazada por Postgres).
+- 5 stubs estructurales nuevos: `agent_pathology`, `agent_site_monitor`, `agent_documents`, `agent_financial_tracker`, `cron_post_phase_audits`.
+- Workflow nuevo `util_admin_llm_stats_html` (id `QlGwyyV9S4AuVtln`, activo): GET `/webhook/admin-llm-stats` con header x-api-key. Dashboard HTML compacto: 3 cards 24h/7d/30d, tabla por agente ordenada por coste, tabla por modelo, banner rojo si hay `agent_name='unknown_agent'` en 24h.
+- Script SQL `studio-multiagente/sql/cleanup_test_project.sql` para A6 (limpieza idempotente del proyecto test `5c230fc9-...`, con DO block + verificación).
+- AUDIT.md y referencia_workflows.md actualizados con los nuevos endpoints y stubs.
+
+### Bloque 11
+- `cron_unknown_agent_alert` (id `3fNPnWuFjjcA7pBG`): cron diario 09:30 que cuenta llamadas en `llm_calls` con `agent_name IN ('unknown_agent','unknown','')` en últimas 24h y manda email crítico al architect_email si count > 0. Blinda regresión del bug A2.
+
+### Bloque 10
+- Fix puntual en `agent_materials`: nodo `Load Supplier Catalog` era Code stub (`return [{}]`); reemplazado por Postgres real que filtra por `valid_until` y ordena por `quality_tier`. Tabla supplier_catalog ya existe (migración 003) — el stub estaba obsoleto.
+
+### Bloque 9
+- Audit Fase A nodo a nodo. Resultado: A2/A3/A4/A7 ya cerrados desde sesión 24-04. A1/A5/A6 quedan pendientes (no son bugs sino entregables/SQL del usuario).
+- Doc nuevo: `studio-multiagente/docs/fase_a_audit.md`.
+
+### Bloque 8 (cierre ciclo notes)
+- `util_admin_notes_list` (id `yL2a8zawMoQrZtRH`): GET `/webhook/admin-notes-list[?project_id]`. Cierra ciclo project_notes.
+- 4 stubs estructurales sincronizados: `agent_planner`, `agent_memory`, `cron_external_backup`, `util_normativa_fetch`.
+- AUDIT.md actualizado.
+
+### Bloque 7
+- `agent_proposal.json` sincronizado en local (parcial, sin jsCode largos).
+- Setup multi-PC: `.claude-memory-snapshot/` (snapshot del directorio memory) + `.mcp.example.json` con placeholders.
+
 ## 2026-04-26 (post-bloque 6) — Bug fixes runtime
 
 - **Fix `cron_quote_expiry`**: IF "Has Expired?" tenía `typeValidation:"strict"` que rechazaba el `Number($json.expired_count)` (Postgres devuelve count como string). Cambiado a `"loose"`. Ahora el cron corre sin error y devuelve `{rows:null, expired_count:"0"}` cuando no hay quotes vencidos. Fix aplicado directamente en n8n (workflow no sincronizado en repo local — uno de los 43 huérfanos del AUDIT.md).

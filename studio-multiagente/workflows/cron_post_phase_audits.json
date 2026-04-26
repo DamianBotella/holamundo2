@@ -1,0 +1,54 @@
+{
+  "name": "cron_post_phase_audits",
+  "_n8n_id": "UyfJNFuf17w2BmFU",
+  "_note": "Stub sincronizado 2026-04-26 (bloque 12). Para version completa: mcp__n8n__n8n_get_workflow id=UyfJNFuf17w2BmFU mode=full",
+  "_purpose": "Cron cada 30min que detecta proyectos donde se acaba de cerrar una fase y dispara los sub-agentes de auditoria (agent_accessibility, agent_safety_plan) sobre esa fase. Tambien tiene un Manual Trigger publico (con security_check previo) para forzar la auditoria por webhook.",
+  "_triggers": {
+    "Schedule 30min": "cron cada 30 minutos (intervalo no expression)",
+    "Manual Trigger": "POST /webhook/post-phase-audit-trigger (con security_check previo via util_webhook_security)"
+  },
+  "_routes_to": "agent_accessibility (audit_type=accessibility) | agent_safety_plan (audit_type=safety)",
+  "_log_action": "Log Activity (cuando ejecuto auditoria) | Log No Pending (cuando no hay nada que auditar)",
+  "nodes": [
+    { "id": "cpa-01",       "name": "Schedule 30min",         "type": "n8n-nodes-base.scheduleTrigger", "position": [0, 300] },
+    { "id": "cpa-02",       "name": "Find Pending Audits",    "type": "n8n-nodes-base.postgres",        "position": [250, 300] },
+    { "id": "cpa-03",       "name": "Has Pending?",           "type": "n8n-nodes-base.if",              "position": [500, 300] },
+    { "id": "cpa-04",       "name": "Route by Audit Type",    "type": "n8n-nodes-base.switch",          "position": [750, 300] },
+    { "id": "cpa-05",       "name": "Run Accessibility",      "type": "n8n-nodes-base.executeWorkflow", "position": [1000, 200] },
+    { "id": "cpa-06",       "name": "Run Safety Plan",        "type": "n8n-nodes-base.executeWorkflow", "position": [1000, 400] },
+    { "id": "cpa-07",       "name": "Log Activity",           "type": "n8n-nodes-base.postgres",        "position": [1250, 300] },
+    { "id": "cpa-08",       "name": "Log No Pending",         "type": "n8n-nodes-base.postgres",        "position": [750, 500] },
+    { "id": "cpa-manual",   "name": "Manual Trigger",         "type": "n8n-nodes-base.webhook",         "position": [0, 500] },
+    { "id": "cpa-sec-prep", "name": "Prepare Security Input", "type": "n8n-nodes-base.code",            "position": [220, 500] },
+    { "id": "cpa-sec-call", "name": "Webhook Security",       "type": "n8n-nodes-base.executeWorkflow", "position": [440, 500] },
+    { "id": "cpa-sec-if",   "name": "Security Allowed?",      "type": "n8n-nodes-base.if",              "position": [660, 500] },
+    { "id": "cpa-sec-drop", "name": "Drop Blocked",           "type": "n8n-nodes-base.noOp",            "position": [660, 660] }
+  ],
+  "connections": {
+    "Schedule 30min":         { "main": [[{ "node": "Find Pending Audits",    "type": "main", "index": 0 }]] },
+    "Find Pending Audits":    { "main": [[{ "node": "Has Pending?",           "type": "main", "index": 0 }]] },
+    "Has Pending?":           {
+      "main": [
+        [{ "node": "Route by Audit Type", "type": "main", "index": 0 }],
+        [{ "node": "Log No Pending",      "type": "main", "index": 0 }]
+      ]
+    },
+    "Route by Audit Type":    {
+      "main": [
+        [{ "node": "Run Accessibility", "type": "main", "index": 0 }],
+        [{ "node": "Run Safety Plan",   "type": "main", "index": 0 }]
+      ]
+    },
+    "Run Accessibility":      { "main": [[{ "node": "Log Activity",           "type": "main", "index": 0 }]] },
+    "Run Safety Plan":        { "main": [[{ "node": "Log Activity",           "type": "main", "index": 0 }]] },
+    "Manual Trigger":         { "main": [[{ "node": "Prepare Security Input", "type": "main", "index": 0 }]] },
+    "Prepare Security Input": { "main": [[{ "node": "Webhook Security",       "type": "main", "index": 0 }]] },
+    "Webhook Security":       { "main": [[{ "node": "Security Allowed?",      "type": "main", "index": 0 }]] },
+    "Security Allowed?":      {
+      "main": [
+        [{ "node": "Find Pending Audits", "type": "main", "index": 0 }],
+        [{ "node": "Drop Blocked",        "type": "main", "index": 0 }]
+      ]
+    }
+  }
+}

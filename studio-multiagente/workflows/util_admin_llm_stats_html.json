@@ -1,0 +1,19 @@
+{
+  "name": "util_admin_llm_stats_html",
+  "_n8n_id": "QlGwyyV9S4AuVtln",
+  "_purpose": "Dashboard HTML de costes y latencia LLM. GET /webhook/admin-llm-stats con header x-api-key. Muestra 3 KPI cards (24h/7d/30d), tabla por agente (30d ordenado por coste), tabla por modelo, banner rojo si hay llamadas con agent_name=unknown_agent en las 24h.",
+  "_triggers": "GET /webhook/admin-llm-stats (header x-api-key)",
+  "_data_source": "tabla llm_calls (migration 035) y vista llm_costs_summary",
+  "_complementa_a": "util_llm_costs_html (SM5LbXSelBgt3B1U) — este es mas compacto + integra alerta de unknown_agent",
+  "nodes": [
+    { "id": "als-01", "name": "Webhook GET",   "type": "n8n-nodes-base.webhook",          "position": [-700, 300], "_path": "admin-llm-stats", "_auth": "headerAuth credential 'Webhook API Key (entrante)'" },
+    { "id": "als-02", "name": "Load Stats",    "type": "n8n-nodes-base.postgres",         "position": [-460, 300], "_query_summary": "json_build_object con period_24h/7d/30d (calls, cost, errors), by_agent_30d (group by agent_name), by_model_30d (group by model), unknown_agent_24h (count)" },
+    { "id": "als-03", "name": "Build HTML",    "type": "n8n-nodes-base.code",             "position": [-220, 300] },
+    { "id": "als-04", "name": "Respond HTML",  "type": "n8n-nodes-base.respondToWebhook", "position": [20, 300], "_headers": "Content-Type: text/html; charset=utf-8 + Cache-Control: no-store" }
+  ],
+  "connections": {
+    "Webhook GET":   { "main": [[{ "node": "Load Stats",   "type": "main", "index": 0 }]] },
+    "Load Stats":    { "main": [[{ "node": "Build HTML",   "type": "main", "index": 0 }]] },
+    "Build HTML":    { "main": [[{ "node": "Respond HTML", "type": "main", "index": 0 }]] }
+  }
+}

@@ -1,0 +1,59 @@
+{
+  "name": "util_admin_help_html",
+  "_note": "Workflow grande (jsCode con HTML embebido). Para inspeccion completa, usar mcp__n8n__n8n_get_workflow id='x45X3jL6MWhTjjaA' mode='full'.",
+  "nodes": [
+    {
+      "id": "hp-01",
+      "name": "Webhook GET",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-700, 300],
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "admin-help",
+        "responseMode": "responseNode",
+        "authentication": "headerAuth"
+      },
+      "credentials": { "httpHeaderAuth": { "id": "Ba643jvuElTgMawr", "name": "Webhook API Key (entrante)" } },
+      "webhookId": "hp-trigger"
+    },
+    {
+      "id": "hp-02",
+      "name": "Build HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-460, 300],
+      "_summary": "Genera HTML con secciones: 11 endpoints HTML + 5 endpoints API + 9 FAQs + capa seguridad (auto-bans + rate limits) + comandos curl utiles",
+      "parameters": { "jsCode": "_full_jsCode_in_n8n" }
+    },
+    {
+      "id": "hp-03",
+      "name": "Respond HTML",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [-220, 300],
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.html }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              { "name": "Content-Type", "value": "text/html; charset=utf-8" },
+              { "name": "X-Frame-Options", "value": "DENY" },
+              { "name": "Cache-Control", "value": "no-store" }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook GET":  { "main": [[{ "node": "Build HTML",   "type": "main", "index": 0 }]] },
+    "Build HTML":   { "main": [[{ "node": "Respond HTML", "type": "main", "index": 0 }]] }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5"
+  }
+}

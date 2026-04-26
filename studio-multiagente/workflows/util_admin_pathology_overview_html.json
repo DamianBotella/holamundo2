@@ -1,0 +1,19 @@
+{
+  "name": "util_admin_pathology_overview_html",
+  "_n8n_id": "fmm3V3fWsyksUH7c",
+  "_purpose": "Vista agregada de patologias detectadas en todos los proyectos. GET /webhook/admin-pathology-overview con header x-api-key. 5 KPI cards (total findings, unresolved, critical unresolved, safety unresolved, in_repair). Tabla por tipo de patologia con avg coste max. Tabla por proyecto con findings unresolved. Tabla recientes critical/safety. Sin LLM, deterministico.",
+  "_triggers": "GET /webhook/admin-pathology-overview (header x-api-key)",
+  "_data_source": "tabla pathology_findings (migration 014)",
+  "_complementa_a": "cron_pathology_review (digest diario) y agent_pathology (deteccion via Vision)",
+  "nodes": [
+    { "id": "apo-01", "name": "Webhook GET",          "type": "n8n-nodes-base.webhook",          "position": [-700, 300] },
+    { "id": "apo-02", "name": "Load Pathology Stats", "type": "n8n-nodes-base.postgres",         "position": [-460, 300], "_query_summary": "json con totals + by_type + by_project + recent_critical" },
+    { "id": "apo-03", "name": "Build HTML",           "type": "n8n-nodes-base.code",             "position": [-220, 300] },
+    { "id": "apo-04", "name": "Respond HTML",         "type": "n8n-nodes-base.respondToWebhook", "position": [20, 300] }
+  ],
+  "connections": {
+    "Webhook GET":          { "main": [[{ "node": "Load Pathology Stats", "type": "main", "index": 0 }]] },
+    "Load Pathology Stats": { "main": [[{ "node": "Build HTML",           "type": "main", "index": 0 }]] },
+    "Build HTML":           { "main": [[{ "node": "Respond HTML",         "type": "main", "index": 0 }]] }
+  }
+}

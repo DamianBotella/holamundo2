@@ -1,0 +1,32 @@
+{
+  "name": "cron_compliance_critical_alert",
+  "_n8n_id": "8rg1QPw64qX3csx1",
+  "_purpose": "Fase 2 de 3.21 (compliance) - alerta inmediata vs digest semanal. Cron cada 6h busca 4 condiciones criticas que indicarian grade=D inmediato: (1) pathology_findings con affects_safety=true unresolved en proyecto activo; (2) aftercare_incidents urgent/high open >24h; (3) proyectos en obra (approved/planning_done) sin safety_plan confirmado (RD 1627/1997 obligatorio); (4) proyectos en obra sin encargo_profesional firmado (riesgo legal). Si total > 0 envia email rojo CRITICO con secciones por categoria.",
+  "_triggers": "cron 0 */6 * * * (cada 6h)",
+  "_audited_by": "cron_workflow_audit (action='compliance_critical_clean', INTERVAL 8h)",
+  "_complementa_a": "cron_compliance_audit_weekly (digest semanal con audit completo) - este es el SOS inmediato",
+  "_no_dedup": "Sin anti-spam — frecuencia 6h aceptable. Si Damian recibe el mismo email 4 veces al dia significa que NO esta atendiendo el critical (escalable).",
+  "nodes": [
+    { "id": "ccca-01", "name": "Schedule Every 6h",   "type": "n8n-nodes-base.scheduleTrigger", "position": [-700, 300], "_cron": "0 */6 * * *" },
+    { "id": "ccca-02", "name": "Load Architect Email","type": "n8n-nodes-base.postgres",        "position": [-460, 300] },
+    { "id": "ccca-03", "name": "Find Critical",       "type": "n8n-nodes-base.postgres",        "position": [-220, 300], "_query_summary": "json con safety_pathology_unresolved + aftercare_urgent_open_24h + safety_unconfirmed_in_obra + no_encargo_in_obra + total_critical" },
+    { "id": "ccca-04", "name": "Has Critical?",       "type": "n8n-nodes-base.if",              "position": [20, 300], "_check": "total_critical > 0 (typeValidation: loose)" },
+    { "id": "ccca-05", "name": "Build Email",         "type": "n8n-nodes-base.code",            "position": [260, 160] },
+    { "id": "ccca-06", "name": "Send Email",          "type": "n8n-nodes-base.gmail",           "position": [500, 160] },
+    { "id": "ccca-07", "name": "Log Issues Found",    "type": "n8n-nodes-base.postgres",        "position": [740, 160], "_action": "compliance_critical_clean (status=warning)" },
+    { "id": "ccca-08", "name": "Log Clean",           "type": "n8n-nodes-base.postgres",        "position": [260, 440], "_action": "compliance_critical_clean (status=success)" }
+  ],
+  "connections": {
+    "Schedule Every 6h":    { "main": [[{ "node": "Load Architect Email", "type": "main", "index": 0 }]] },
+    "Load Architect Email": { "main": [[{ "node": "Find Critical",        "type": "main", "index": 0 }]] },
+    "Find Critical":        { "main": [[{ "node": "Has Critical?",        "type": "main", "index": 0 }]] },
+    "Has Critical?":        {
+      "main": [
+        [{ "node": "Build Email", "type": "main", "index": 0 }],
+        [{ "node": "Log Clean",   "type": "main", "index": 0 }]
+      ]
+    },
+    "Build Email":          { "main": [[{ "node": "Send Email",           "type": "main", "index": 0 }]] },
+    "Send Email":           { "main": [[{ "node": "Log Issues Found",     "type": "main", "index": 0 }]] }
+  }
+}

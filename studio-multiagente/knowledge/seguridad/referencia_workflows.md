@@ -36,6 +36,8 @@
 | `GET /webhook/admin-trades-summary` | `util_admin_trades_summary_html` (`1CHP5KuDWNGqWvi9`) | Header X-API-Key | Dashboard agregado por gremio: response/accept rate, top 15 suppliers, solicitudes sin respuesta >14d |
 | `GET /webhook/admin-compliance-overview` | `util_admin_compliance_overview_html` (`jxCwiphu6ahrBNXv`) | Header X-API-Key | Snapshot inmediato (sin LLM) de compliance: grade A/B/C/D + 11 checks por proyecto activo |
 | `GET /webhook/admin-endpoints` | `util_admin_endpoints_html` (`BLrbGTcoGeEZIhyu`) | Header X-API-Key | Catálogo exhaustivo de endpoints (5 grupos) + botón copiar curl ready-to-paste |
+| `GET /webhook/admin-pathology-overview` | `util_admin_pathology_overview_html` (`fmm3V3fWsyksUH7c`) | Header X-API-Key | Vista agregada de patologías: por tipo, por proyecto, criticals/safety recientes |
+| `GET /webhook/admin-aftercare-overview` | `util_admin_aftercare_overview_html` (`V1duL8iwHBBwLCR6`) | Header X-API-Key | Vista agregada postventa: por severidad/categoría + top 25 open + SLA breach destacado |
 | `GET /webhook/qc-form?qc_id=<uuid>` | `qc_public_form` (`Pqod9AyvG0opCrLU`) | Header X-API-Key | Form HTML responsive móvil para marcar pass/fail/skip + comentario en items del qc_check (autosave via fetch al qc-complete existente) |
 
 ### Endpoints públicos (con security_check integrado)
@@ -93,6 +95,8 @@
 | `0 8 * * 0` (semanal Dom 08:00) | `cron_compliance_audit_weekly` (`tTZaWj86DPW0TNRt`) | Audit compliance semanal por cada proyecto activo (HTTP loop a agent_compliance_audit, digest si grade < B o critical > 0) |
 | `0 12 * * *` (diario 12:00) | `cron_pathology_review` (`tFYGrFmo3zBwirre`) | Vigila patologías: stale >30d sin actualizar + críticos/affects_safety sin resolver |
 | `30 8 * * *` (diario 08:30) | `cron_aftercare_sla_breach` (`U5hvcNLQGOrbyQ6J`) | SLA por severidad incidentes asignados (urgent=2d, high=5d, medium=14d, low=30d) |
+| `0 */6 * * *` (cada 6h) | `cron_compliance_critical_alert` (`8rg1QPw64qX3csx1`) | Alerta inmediata si pathology safety unresolved + aftercare urgent>24h + obra sin safety + obra sin encargo |
+| `0 6 1 * *` (mensual día 1, 06:00) | `cron_normativa_review_monthly` (`l5jtvV5AqpQZ6BXt`) | Refresh automático mensual de la cache de normativa via agent_normativa_refresh |
 
 ## Funciones SQL (PostgreSQL)
 

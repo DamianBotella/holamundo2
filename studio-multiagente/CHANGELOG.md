@@ -2,7 +2,16 @@
 
 Histórico cronológico de hitos del sistema. Generado a partir de git log.
 
-## 2026-04-26 — Bloques 7-17: Fase 2 hooks completa + seed supplier_catalog + endpoints catalog
+## 2026-04-26 — Bloques 7-18: Fase 2 + overviews agregados + alertas críticas
+
+### Bloque 18 (5 puntos): plan 5h
+- `util_admin_pathology_overview_html` (id `fmm3V3fWsyksUH7c`, activo): GET `/webhook/admin-pathology-overview`. 5 KPI cards (total/unresolved/critical/safety/in_repair) + tabla por tipo con avg coste max + tabla por proyecto + recientes critical/safety unresolved. Sin LLM.
+- `util_admin_aftercare_overview_html` (id `V1duL8iwHBBwLCR6`, activo): GET `/webhook/admin-aftercare-overview`. 6 KPI cards incluido SLA breach calculado por severidad. Tablas por severidad y categoría. Top 25 incidentes open ordenados con SLA breach destacado en rojo.
+- `cron_normativa_review_monthly` (id `l5jtvV5AqpQZ6BXt`, activo): cron día 1 mes 06:00. Snapshot pre → POST /webhook/normativa-refresh (HTTP a agent_normativa_refresh) → Wait 90s → Snapshot post → email comparativo before/after. Mantiene cache de normativa fresco automáticamente.
+- `cron_compliance_critical_alert` (id `8rg1QPw64qX3csx1`, activo): cron cada 6h con 4 condiciones críticas (pathology safety unresolved, aftercare urgent/high open >24h, proyectos en obra sin safety_plan confirmado, proyectos en obra sin encargo_profesional firmado). Email rojo CRITICO. Complementa el digest semanal con alertas inmediatas.
+- admin-index actualizado, AUDIT (142 workflows total), CHANGELOG, referencia_workflows (2 endpoints + 2 crons).
+
+
 
 ### Bloque 17 (5 puntos): plan 5h
 - `ArquitAI.md` sec 3 actualizado masivamente: marca como ✅ Fase 2 cerradas las features cubiertas por bloques 14-16 (3.5/3.6/3.8/3.13/3.18/3.20/3.21). Cada Pendiente fase 2 reescrito con lo construido y lo que aún queda real.

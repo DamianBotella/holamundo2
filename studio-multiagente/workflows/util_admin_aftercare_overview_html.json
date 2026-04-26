@@ -1,0 +1,19 @@
+{
+  "name": "util_admin_aftercare_overview_html",
+  "_n8n_id": "V1duL8iwHBBwLCR6",
+  "_purpose": "Vista agregada de incidencias postventa LOE. GET /webhook/admin-aftercare-overview con header x-api-key. 6 KPI cards (total, open, urgent/high, in_progress, sla_breach, resolved 30d). Tablas por severidad y categoria. Top 25 incidentes open ordenados por severidad+antiguedad con SLA breach destacado en rojo.",
+  "_triggers": "GET /webhook/admin-aftercare-overview (header x-api-key)",
+  "_data_source": "tabla aftercare_incidents (migration 013)",
+  "_complementa_a": "cron_aftercare_review (digest diario), cron_aftercare_sla_breach (alertas SLA), aftercare_submit (entrada via Vision)",
+  "nodes": [
+    { "id": "aao-01", "name": "Webhook GET",          "type": "n8n-nodes-base.webhook",          "position": [-700, 300] },
+    { "id": "aao-02", "name": "Load Aftercare Stats", "type": "n8n-nodes-base.postgres",         "position": [-460, 300], "_query_summary": "json con totals (incl sla_breach calculado por severity) + by_severity + by_category + recent_open ordenados por severity+ASC reported_at" },
+    { "id": "aao-03", "name": "Build HTML",           "type": "n8n-nodes-base.code",             "position": [-220, 300] },
+    { "id": "aao-04", "name": "Respond HTML",         "type": "n8n-nodes-base.respondToWebhook", "position": [20, 300] }
+  ],
+  "connections": {
+    "Webhook GET":          { "main": [[{ "node": "Load Aftercare Stats", "type": "main", "index": 0 }]] },
+    "Load Aftercare Stats": { "main": [[{ "node": "Build HTML",           "type": "main", "index": 0 }]] },
+    "Build HTML":           { "main": [[{ "node": "Respond HTML",         "type": "main", "index": 0 }]] }
+  }
+}

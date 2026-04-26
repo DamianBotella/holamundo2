@@ -1,0 +1,29 @@
+{
+  "name": "cron_normativa_review_monthly",
+  "_n8n_id": "l5jtvV5AqpQZ6BXt",
+  "_purpose": "Refresh automatico mensual de la cache de normativa. Dia 1 a las 06:00. Snapshot pre-refresh -> POST /webhook/normativa-refresh (HTTP a agent_normativa_refresh) -> Wait 90s -> Snapshot post-refresh -> Email comparativo. Mantiene el cache de normativa fresco sin intervencion manual. Complementa a cron_normativa_freshness que solo ALERTA si stale, este RESUELVE haciendo el refresh.",
+  "_triggers": "cron 0 6 1 * * (dia 1 de cada mes 06:00)",
+  "_audited_by": "cron_workflow_audit (action='normativa_review_monthly_clean', INTERVAL 32 days)",
+  "_chain": "cron_normativa_review_monthly -> agent_normativa_refresh (loops sources, fetch via Jina, LLM extract, hash detect, mark requires_review en regulatory_tasks) -> snapshot post + email",
+  "nodes": [
+    { "id": "cnr-01", "name": "Schedule Day 1 06:00", "type": "n8n-nodes-base.scheduleTrigger", "position": [-700, 300], "_cron": "0 6 1 * *" },
+    { "id": "cnr-02", "name": "Load Architect Email", "type": "n8n-nodes-base.postgres",        "position": [-460, 300] },
+    { "id": "cnr-03", "name": "Snapshot Before",      "type": "n8n-nodes-base.postgres",        "position": [-220, 300], "_query": "count(*), min(verified_date), avg age en days" },
+    { "id": "cnr-04", "name": "Trigger Refresh",      "type": "n8n-nodes-base.httpRequest",     "position": [20, 300], "_url": "POST /webhook/normativa-refresh con auth headerAuth" },
+    { "id": "cnr-05", "name": "Wait 90s",             "type": "n8n-nodes-base.wait",            "position": [260, 300] },
+    { "id": "cnr-06", "name": "Snapshot After",       "type": "n8n-nodes-base.postgres",        "position": [500, 300], "_query": "count(*), max(verified_date), updated_24h" },
+    { "id": "cnr-07", "name": "Build Summary Email",  "type": "n8n-nodes-base.code",            "position": [740, 300] },
+    { "id": "cnr-08", "name": "Send Email",           "type": "n8n-nodes-base.gmail",           "position": [980, 300] },
+    { "id": "cnr-09", "name": "Log Run",              "type": "n8n-nodes-base.postgres",        "position": [1220, 300], "_action": "normativa_review_monthly_clean" }
+  ],
+  "connections": {
+    "Schedule Day 1 06:00": { "main": [[{ "node": "Load Architect Email", "type": "main", "index": 0 }]] },
+    "Load Architect Email": { "main": [[{ "node": "Snapshot Before",      "type": "main", "index": 0 }]] },
+    "Snapshot Before":      { "main": [[{ "node": "Trigger Refresh",      "type": "main", "index": 0 }]] },
+    "Trigger Refresh":      { "main": [[{ "node": "Wait 90s",             "type": "main", "index": 0 }]] },
+    "Wait 90s":             { "main": [[{ "node": "Snapshot After",       "type": "main", "index": 0 }]] },
+    "Snapshot After":       { "main": [[{ "node": "Build Summary Email",  "type": "main", "index": 0 }]] },
+    "Build Summary Email":  { "main": [[{ "node": "Send Email",           "type": "main", "index": 0 }]] },
+    "Send Email":           { "main": [[{ "node": "Log Run",              "type": "main", "index": 0 }]] }
+  }
+}

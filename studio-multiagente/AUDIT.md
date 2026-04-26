@@ -6,8 +6,8 @@ Fecha: 2026-04-26
 
 | | Total |
 |---|---|
-| Workflows activos en n8n | **~138** (bloque 17 añade 2: cron_aftercare_sla_breach + util_admin_endpoints_html) |
-| JSONs locales en `workflows/` | **114+** |
+| Workflows activos en n8n | **~142** (bloque 18 añade 4: 2 dashboards overview + cron_normativa_review_monthly + cron_compliance_critical_alert) |
+| JSONs locales en `workflows/` | **118+** |
 | En n8n SIN JSON local | **~16** (rendimiento decreciente — bloques 17+ priorizan Fase 2 hooks vs sync) |
 | En local SIN n8n | **0** |
 
@@ -33,6 +33,13 @@ Fecha: 2026-04-26
 - `agent_financial_tracker.json` (stub estructural — OCR facturas)
 - `cron_post_phase_audits.json` (stub estructural — cron 30min auditorías post-fase)
 - `util_admin_llm_stats_html.json` (workflow NUEVO — dashboard de costes LLM con drill-down)
+
+**Bloque 18** (4 workflows nuevos: 2 overview dashboards + 2 crons preventivos):
+- `util_admin_pathology_overview_html.json` (workflow NUEVO `fmm3V3fWsyksUH7c`, activo — vista agregada findings por tipo, proyecto, criticos recientes)
+- `util_admin_aftercare_overview_html.json` (workflow NUEVO `V1duL8iwHBBwLCR6`, activo — incidencias open por severidad+categoria + SLA breach destacado)
+- `cron_normativa_review_monthly.json` (workflow NUEVO `l5jtvV5AqpQZ6BXt`, activo — primer dia de mes 06:00 dispara agent_normativa_refresh + email comparativo before/after)
+- `cron_compliance_critical_alert.json` (workflow NUEVO `8rg1QPw64qX3csx1`, activo — cada 6h alerta inmediata si pathology safety unresolved + aftercare urgent>24h + obra sin safety_plan + obra sin encargo_profesional)
+- admin-index actualizado con 2 dashboards nuevos.
 
 **Bloque 17** (ArquitAI sec 3 actualizado + 2 workflows nuevos + seed SQL):
 - `studio-multiagente/ArquitAI.md` actualizado: marca Fase 2 cerradas en bloques 14-16 (3.5 invoice_followup, 3.13 contract_followup + qc_handover, 3.8 qc_public_form, 3.18 pathology_review, 3.20 collab_review, 3.21 compliance_weekly + overview, 3.6 sla_breach del bloque 17)

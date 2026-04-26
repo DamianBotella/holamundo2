@@ -1,0 +1,80 @@
+{
+  "name": "cron_security_events_purge",
+  "nodes": [
+    {
+      "id": "ep-01",
+      "name": "Weekly Sun 03:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-700, 300],
+      "parameters": {
+        "rule": { "interval": [{ "field": "cronExpression", "expression": "0 3 * * 0" }] }
+      }
+    },
+    {
+      "id": "ep-02",
+      "name": "Purge Old",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [-460, 300],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH purged AS (\n  DELETE FROM security_events\n   WHERE resolved = true\n     AND resolved_at < now() - INTERVAL '365 days'\n  RETURNING id, event_type, severity\n)\nSELECT json_build_object(\n  'rows_purged', count(*),\n  'by_severity', (SELECT json_object_agg(severity, c) FROM (SELECT severity, count(*) AS c FROM purged GROUP BY severity) t)\n) AS report FROM purged;",
+        "options": {}
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } }
+    },
+    {
+      "id": "ep-03",
+      "name": "Anything?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [-220, 300],
+      "parameters": {
+        "conditions": {
+          "options": { "version": 2, "leftValue": "", "caseSensitive": true, "typeValidation": "loose" },
+          "combinator": "and",
+          "conditions": [
+            { "id": "p1", "leftValue": "={{ Number($json.report.rows_purged) }}", "rightValue": 0, "operator": { "type": "number", "operation": "gt" } }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ep-04",
+      "name": "Log Activity",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [20, 220],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (action, agent_name, details) VALUES ('security_events_purge', 'cron_security_events_purge', $1::jsonb);",
+        "options": { "queryReplacement": "={{ [ JSON.stringify($json.report) ] }}" }
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } }
+    },
+    {
+      "id": "ep-05",
+      "name": "No-op",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [20, 380],
+      "parameters": {}
+    }
+  ],
+  "connections": {
+    "Weekly Sun 03:00": { "main": [[{ "node": "Purge Old",   "type": "main", "index": 0 }]] },
+    "Purge Old":        { "main": [[{ "node": "Anything?",   "type": "main", "index": 0 }]] },
+    "Anything?":        {
+      "main": [
+        [{ "node": "Log Activity", "type": "main", "index": 0 }],
+        [{ "node": "No-op",        "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5"
+  }
+}

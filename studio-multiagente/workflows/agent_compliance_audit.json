@@ -1,0 +1,432 @@
+{
+  "name": "agent_compliance_audit",
+  "nodes": [
+    {
+      "id": "ca-01",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -700,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "audit-project",
+        "responseMode": "responseNode",
+        "authentication": "headerAuth"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "Ba643jvuElTgMawr",
+          "name": "Webhook API Key (entrante)"
+        }
+      },
+      "webhookId": "ca-trigger"
+    },
+    {
+      "id": "ca-02",
+      "name": "Validate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -460,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const body = ($('Webhook').first().json.body) || {};\nif (!body.project_id) return [{ json: { valid:false, error:'project_id obligatorio' } }];\nreturn [{ json: { valid:true, project_id: body.project_id, send_email: body.send_email !== false } }];"
+      }
+    },
+    {
+      "id": "ca-03",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -220,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "v1",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ca-04",
+      "name": "Load Architect Email",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        20,
+        220
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT value FROM system_config WHERE key = 'architect_email'",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ca-05",
+      "name": "Run Audit",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        260,
+        220
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH p AS (SELECT * FROM projects WHERE id = $1::uuid)\nSELECT json_build_object(\n  'project', json_build_object('id', p.id, 'name', p.name, 'phase', p.current_phase, 'status', p.status, 'has_handover', p.handover_date IS NOT NULL, 'area_m2', p.property_area_m2),\n  'briefing', json_build_object(\n    'exists', EXISTS(SELECT 1 FROM briefings b WHERE b.project_id = p.id),\n    'approved', EXISTS(SELECT 1 FROM briefings b WHERE b.project_id = p.id AND b.status = 'approved'),\n    'has_open_questions', COALESCE((SELECT jsonb_array_length(b.open_questions) FROM briefings b WHERE b.project_id = p.id ORDER BY b.created_at DESC LIMIT 1), 0)\n  ),\n  'design', json_build_object(\n    'exists', EXISTS(SELECT 1 FROM design_options d WHERE d.project_id = p.id),\n    'selected', EXISTS(SELECT 1 FROM design_options d WHERE d.project_id = p.id AND d.is_selected = true)\n  ),\n  'regulatory', json_build_object(\n    'tasks_total', (SELECT count(*) FROM regulatory_tasks WHERE project_id = p.id),\n    'tasks_pending', (SELECT count(*) FROM regulatory_tasks WHERE project_id = p.id AND status NOT IN ('completed','not_required'))\n  ),\n  'permits', json_build_object(\n    'in_progress', (SELECT count(*) FROM permit_applications WHERE project_id = p.id AND status NOT IN ('approved','rejected','withdrawn','expired')),\n    'approved', (SELECT count(*) FROM permit_applications WHERE project_id = p.id AND status = 'approved')\n  ),\n  'materials', json_build_object(\n    'total', (SELECT count(*) FROM materials WHERE project_id = p.id),\n    'approved', (SELECT count(*) FROM materials WHERE project_id = p.id AND status = 'approved')\n  ),\n  'cost_estimate', json_build_object(\n    'exists', EXISTS(SELECT 1 FROM cost_estimates WHERE project_id = p.id),\n    'has_breakdown', EXISTS(SELECT 1 FROM cost_estimates WHERE project_id = p.id AND breakdown IS NOT NULL AND jsonb_array_length(breakdown) > 0)\n  ),\n  'proposal', json_build_object(\n    'exists', EXISTS(SELECT 1 FROM proposals WHERE project_id = p.id),\n    'approved', EXISTS(SELECT 1 FROM proposals WHERE project_id = p.id AND status = 'approved')\n  ),\n  'contracts', json_build_object(\n    'encargo_signed', EXISTS(SELECT 1 FROM contracts WHERE project_id = p.id AND contract_type = 'encargo_profesional' AND status = 'signed'),\n    'obra_signed', EXISTS(SELECT 1 FROM contracts WHERE project_id = p.id AND contract_type = 'contrato_cliente' AND status = 'signed'),\n    'acta_replanteo', EXISTS(SELECT 1 FROM contracts WHERE project_id = p.id AND contract_type = 'acta_replanteo' AND status = 'signed'),\n    'acta_recepcion_provisional', EXISTS(SELECT 1 FROM contracts WHERE project_id = p.id AND contract_type = 'acta_recepcion_provisional' AND status = 'signed')\n  ),\n  'safety', json_build_object(\n    'plan_generated', EXISTS(SELECT 1 FROM safety_plans WHERE project_id = p.id),\n    'plan_confirmed', EXISTS(SELECT 1 FROM safety_plans WHERE project_id = p.id AND exec_status = 'confirmed')\n  ),\n  'accessibility', json_build_object('audit_done', EXISTS(SELECT 1 FROM accessibility_audits WHERE project_id = p.id)),\n  'qc', json_build_object(\n    'checks_total', (SELECT count(*) FROM qc_checks WHERE project_id = p.id),\n    'checks_complete', (SELECT count(*) FROM qc_checks WHERE project_id = p.id AND status = 'complete'),\n    'checks_blocked', (SELECT count(*) FROM qc_checks WHERE project_id = p.id AND status = 'blocked')\n  ),\n  'aftercare', json_build_object(\n    'open', (SELECT count(*) FROM aftercare_incidents WHERE project_id = p.id AND status NOT IN ('resolved','closed','cancelled')),\n    'urgent', (SELECT count(*) FROM aftercare_incidents WHERE project_id = p.id AND status NOT IN ('resolved','closed','cancelled') AND severity IN ('high','critical'))\n  ),\n  'pathology', json_build_object('findings_total', (SELECT count(*) FROM pathology_findings WHERE project_id = p.id), 'unresolved', (SELECT count(*) FROM pathology_findings WHERE project_id = p.id AND status NOT IN ('resolved','dismissed'))),\n  'energy', json_build_object('assessed', EXISTS(SELECT 1 FROM energy_assessments WHERE project_id = p.id)),\n  'home_automation', json_build_object('proposed', EXISTS(SELECT 1 FROM home_automation_proposals WHERE project_id = p.id)),\n  'gdpr', json_build_object(\n    'consent_present', EXISTS(SELECT 1 FROM consent_records cr WHERE cr.client_id = p.client_id AND cr.revoked_at IS NULL),\n    'requests_pending', (SELECT count(*) FROM gdpr_requests WHERE client_id = p.client_id AND status IN ('pending','in_review'))\n  )\n) AS audit\nFROM p;",
+        "options": {
+          "queryReplacement": "={{ [ $('Validate').first().json.project_id ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "id": "ca-06",
+      "name": "Has Project?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        500,
+        220
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "h1",
+              "leftValue": "={{ $json.audit?.project?.id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ca-07",
+      "name": "Build Scorecard",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        740,
+        140
+      ],
+      "parameters": {
+        "jsCode": "const a = $input.first().json.audit;\nconst phase = a.project.phase;\nconst PHASE_RANK = {intake:0, briefing_done:1, design_done:2, analysis_done:3, costs_done:4, trades_done:5, proposal_done:6, approved:7, planning_done:8, completed:9, archived:10};\nconst rank = PHASE_RANK[phase] !== undefined ? PHASE_RANK[phase] : 0;\n\n// Cada check tiene: id, label, severity, expected (boolean condition), recommendation, only_if_phase_at_least\nconst checks = [\n  // Briefing\n  { id:'briefing.exists', label:'Briefing existe', severity:'critical', met: a.briefing.exists, rec:'Generar briefing con agent_briefing.', applicable:true },\n  { id:'briefing.approved', label:'Briefing aprobado por arquitecto', severity:'critical', met: a.briefing.approved, rec:'Revisar y aprobar el briefing existente.', applicable: rank >= 1 },\n  { id:'briefing.no_open_questions', label:'Briefing sin preguntas abiertas pendientes', severity:'warning', met: a.briefing.has_open_questions === 0, rec:`Resolver ${a.briefing.has_open_questions} preguntas abiertas con el cliente.`, applicable: rank >= 1 },\n  // Design\n  { id:'design.selected', label:'Design option seleccionada', severity:'critical', met: a.design.selected, rec:'Generar opciones con agent_design y seleccionar una.', applicable: rank >= 1 },\n  // Cost estimate\n  { id:'costs.has_breakdown', label:'Cost estimate con breakdown', severity:'critical', met: a.cost_estimate.has_breakdown, rec:'Ejecutar agent_costs para generar breakdown detallado.', applicable: rank >= 3 },\n  // Materials\n  { id:'materials.approved', label:'Materiales aprobados', severity:'warning', met: a.materials.approved > 0, rec:'Revisar y aprobar items propuestos por agent_materials.', applicable: rank >= 3 },\n  // Regulatory\n  { id:'regulatory.no_pending_critical', label:'Sin tareas reguladoras pendientes', severity:'warning', met: a.regulatory.tasks_pending === 0, rec:`${a.regulatory.tasks_pending} tareas reguladoras sin completar.`, applicable: rank >= 2 },\n  { id:'permits.approved', label:'Al menos un permiso aprobado', severity:'critical', met: a.permits.approved > 0, rec:'Necesitas licencia o comunicacion previa antes de iniciar obra.', applicable: rank >= 6 },\n  // Proposal\n  { id:'proposal.approved', label:'Propuesta comercial aprobada', severity:'critical', met: a.proposal.approved, rec:'Generar propuesta con agent_proposal y enviar al cliente.', applicable: rank >= 5 },\n  // Contracts\n  { id:'contracts.encargo', label:'Encargo profesional firmado', severity:'critical', met: a.contracts.encargo_signed, rec:'POST /webhook/contract-generate contract_type=encargo_profesional + firma.', applicable: rank >= 6 },\n  { id:'contracts.obra', label:'Contrato de obra firmado', severity:'warning', met: a.contracts.obra_signed, rec:'Si la obra la ejecuta tercero: POST /webhook/contract-generate contract_type=contrato_cliente.', applicable: rank >= 7 },\n  { id:'contracts.acta_replanteo', label:'Acta de replanteo', severity:'warning', met: a.contracts.acta_replanteo, rec:'Marcar inicio efectivo de obra con acta_replanteo.', applicable: rank >= 7 },\n  { id:'contracts.acta_recepcion', label:'Acta recepcion provisional', severity:'critical', met: a.contracts.acta_recepcion_provisional, rec:'Cerrar obra con acta_recepcion_provisional para iniciar plazos LOE.', applicable: rank >= 8 && a.project.has_handover },\n  // Safety\n  { id:'safety.confirmed', label:'EBSS/PSS confirmado', severity:'critical', met: a.safety.plan_confirmed, rec:'Disparar agent_safety_plan y confirmarlo. RD 1627/1997 obligatorio.', applicable: rank >= 5 },\n  // Accessibility\n  { id:'accessibility.audited', label:'Auditoria accesibilidad realizada', severity:'warning', met: a.accessibility.audit_done, rec:'Disparar agent_accessibility (CTE DB-SUA).', applicable: rank >= 4 },\n  // Energy\n  { id:'energy.assessed', label:'Evaluacion energetica estimada', severity:'info', met: a.energy.assessed, rec:'POST /webhook/trigger-energy-assessor para pre-evaluar HE0/HE1.', applicable: rank >= 3 },\n  // QC\n  { id:'qc.no_blocked', label:'Ningun checklist QC blocked', severity:'warning', met: a.qc.checks_blocked === 0, rec:`${a.qc.checks_blocked} checklists bloqueados con items fail.`, applicable: rank >= 7 },\n  // Aftercare\n  { id:'aftercare.no_urgent', label:'Sin incidencias aftercare urgentes', severity:'critical', met: a.aftercare.urgent === 0, rec:`${a.aftercare.urgent} incidencias urgentes sin resolver.`, applicable: a.project.has_handover },\n  // Pathology\n  { id:'pathology.resolved', label:'Patologias detectadas resueltas o descartadas', severity:'warning', met: a.pathology.unresolved === 0, rec:`${a.pathology.unresolved} findings sin resolver.`, applicable: a.pathology.findings_total > 0 },\n  // GDPR\n  { id:'gdpr.consent', label:'Consentimiento RGPD del cliente registrado', severity:'critical', met: a.gdpr.consent_present, rec:'Insertar consent_records para el client_id.', applicable: true },\n  { id:'gdpr.no_pending_requests', label:'Sin solicitudes RGPD pendientes', severity:'warning', met: a.gdpr.requests_pending === 0, rec:`${a.gdpr.requests_pending} solicitudes RGPD pendientes (1 mes max).`, applicable: a.gdpr.requests_pending > 0 }\n];\n\nconst applicable = checks.filter(c => c.applicable);\nconst issues = applicable.filter(c => !c.met);\nconst critical = issues.filter(c => c.severity === 'critical');\nconst warnings = issues.filter(c => c.severity === 'warning');\nconst infos = issues.filter(c => c.severity === 'info');\n\nconst score = Math.round(100 * (applicable.length - issues.length) / Math.max(applicable.length, 1));\nconst grade = critical.length > 0 ? 'D' : warnings.length > 2 ? 'C' : warnings.length > 0 ? 'B' : 'A';\n\nreturn [{ json: {\n  project_id: a.project.id,\n  project_name: a.project.name,\n  current_phase: phase,\n  audit_summary: {\n    score: score,\n    grade: grade,\n    applicable_checks: applicable.length,\n    passed: applicable.length - issues.length,\n    failed: issues.length,\n    critical_count: critical.length,\n    warning_count: warnings.length,\n    info_count: infos.length\n  },\n  issues: issues.map(i => ({ id: i.id, label: i.label, severity: i.severity, recommendation: i.rec })),\n  passed: applicable.filter(c => c.met).map(c => c.id),\n  raw: a\n}}];"
+      }
+    },
+    {
+      "id": "ca-08",
+      "name": "Build Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        980,
+        140
+      ],
+      "parameters": {
+        "jsCode": "const r = $input.first().json;\nconst summary = r.audit_summary;\nconst gradeColor = { A: '#27ae60', B: '#f1c40f', C: '#e67e22', D: '#e74c3c' };\nconst sevColor = { critical: '#e74c3c', warning: '#e67e22', info: '#3498db' };\nconst issueRows = (r.issues || []).map(i => '<tr>' +\n  '<td><span style=\\\"background:' + sevColor[i.severity] + ';color:white;padding:3px 8px;border-radius:12px;font-size:11px\\\">' + i.severity.toUpperCase() + '</span></td>' +\n  '<td>' + i.label + '</td>' +\n  '<td style=\\\"font-size:12px;color:#7f8c8d\\\">' + i.recommendation + '</td>' +\n  '</tr>').join('');\nconst html = '<div style=\\\"font-family:Arial,sans-serif;max-width:720px;margin:0 auto\\\">' +\n  '<h2 style=\\\"color:#2c3e50\\\">Compliance Audit — ' + r.project_name + '</h2>' +\n  '<table style=\\\"width:100%;border-collapse:collapse;margin:16px 0\\\">' +\n  '<tr><td style=\\\"padding:8px;background:#f3f4f6\\\"><b>Score</b></td><td style=\\\"padding:8px\\\"><span style=\\\"background:' + gradeColor[summary.grade] + ';color:white;padding:6px 16px;border-radius:6px;font-size:20px;font-weight:bold\\\">' + summary.grade + '</span> &nbsp;&nbsp; ' + summary.score + ' / 100 (' + summary.passed + '/' + summary.applicable_checks + ' checks)</td></tr>' +\n  '<tr><td style=\\\"padding:8px;background:#f3f4f6\\\"><b>Fase actual</b></td><td style=\\\"padding:8px\\\">' + r.current_phase + '</td></tr>' +\n  '<tr><td style=\\\"padding:8px;background:#f3f4f6\\\"><b>Issues</b></td><td style=\\\"padding:8px\\\">' + summary.critical_count + ' critical · ' + summary.warning_count + ' warning · ' + summary.info_count + ' info</td></tr>' +\n  '</table>' +\n  (issueRows ? '<h3>Items pendientes</h3><table border=\\\"1\\\" cellpadding=\\\"6\\\" cellspacing=\\\"0\\\" style=\\\"border-collapse:collapse;font-family:sans-serif;font-size:13px\\\"><thead><tr style=\\\"background:#f3f4f6\\\"><th>Severidad</th><th>Check</th><th>Accion recomendada</th></tr></thead><tbody>' + issueRows + '</tbody></table>' : '<p style=\\\"color:#27ae60\\\">✅ Sin issues pendientes para la fase actual.</p>') +\n  '<p style=\\\"font-size:11px;color:#95a5a6\\\">Audit ID: ' + Date.now() + ' — endpoint: POST /webhook/audit-project</p>' +\n  '</div>';\nreturn [{ json: { html_body: html, project_name: r.project_name, score: summary.score, grade: summary.grade, critical_count: summary.critical_count } }];"
+      }
+    },
+    {
+      "id": "ca-09",
+      "name": "Should Email?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1220,
+        140
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "se1",
+              "leftValue": "={{ $('Validate').first().json.send_email }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ca-10",
+      "name": "Send Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1460,
+        60
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $('Load Architect Email').first().json.value }}",
+        "subject": "=Compliance Audit — {{ $json.project_name }} (grade {{ $json.grade }}, {{ $json.critical_count }} critical)",
+        "emailType": "html",
+        "message": "={{ $json.html_body }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "cIma8ntTjZvIfU3H",
+          "name": "damian2botella"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "ca-11",
+      "name": "Respond 200",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        1700,
+        140
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'audited', project_id: $('Build Scorecard').first().json.project_id, project_name: $('Build Scorecard').first().json.project_name, audit_summary: $('Build Scorecard').first().json.audit_summary, issues_count: $('Build Scorecard').first().json.issues.length, issues: $('Build Scorecard').first().json.issues}) }}",
+        "options": {
+          "responseCode": 200
+        }
+      }
+    },
+    {
+      "id": "ca-12",
+      "name": "Respond 404",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        740,
+        360
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'not_found', error:'project_id no encontrado'}) }}",
+        "options": {
+          "responseCode": 404
+        }
+      }
+    },
+    {
+      "id": "ca-13",
+      "name": "Respond 400",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        -220,
+        460
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'error', error: $json.error}) }}",
+        "options": {
+          "responseCode": 400
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate": {
+      "main": [
+        [
+          {
+            "node": "Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid?": {
+      "main": [
+        [
+          {
+            "node": "Load Architect Email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 400",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Architect Email": {
+      "main": [
+        [
+          {
+            "node": "Run Audit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Audit": {
+      "main": [
+        [
+          {
+            "node": "Has Project?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Project?": {
+      "main": [
+        [
+          {
+            "node": "Build Scorecard",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 404",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Scorecard": {
+      "main": [
+        [
+          {
+            "node": "Build Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Email": {
+      "main": [
+        [
+          {
+            "node": "Should Email?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Should Email?": {
+      "main": [
+        [
+          {
+            "node": "Send Email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 200",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Email": {
+      "main": [
+        [
+          {
+            "node": "Respond 200",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  }
+}

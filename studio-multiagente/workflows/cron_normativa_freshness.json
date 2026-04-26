@@ -1,0 +1,104 @@
+{
+  "name": "cron_normativa_freshness",
+  "nodes": [
+    {
+      "id": "nf-01",
+      "name": "Weekly Mon 09:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-700, 300],
+      "parameters": { "rule": { "interval": [{ "field": "cronExpression", "expression": "0 9 * * 1" }] } }
+    },
+    {
+      "id": "nf-02",
+      "name": "Check Freshness",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [-460, 300],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT json_build_object(\n  'total_sources', (SELECT count(*) FROM normativa_knowledge),\n  'sources_stale_90d', (SELECT count(*) FROM normativa_knowledge WHERE verified_date < now() - INTERVAL '90 days'),\n  'sources_stale_180d', (SELECT count(*) FROM normativa_knowledge WHERE verified_date < now() - INTERVAL '180 days'),\n  'oldest_verified_at', (SELECT min(verified_date) FROM normativa_knowledge),\n  'oldest_categories', (SELECT json_agg(t.* ORDER BY t.verified_date ASC) FROM (\n    SELECT category, subcategory, verified_date FROM normativa_knowledge ORDER BY verified_date ASC LIMIT 5\n  ) t)\n) AS report;",
+        "options": {}
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "alwaysOutputData": true
+    },
+    {
+      "id": "nf-03",
+      "name": "Stale?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [-220, 300],
+      "parameters": {
+        "conditions": {
+          "options": { "version": 2, "leftValue": "", "caseSensitive": true, "typeValidation": "loose" },
+          "combinator": "or",
+          "conditions": [
+            { "id": "s1", "leftValue": "={{ Number($json.report.sources_stale_180d) }}", "rightValue": 0, "operator": { "type": "number", "operation": "gt" } },
+            { "id": "s2", "leftValue": "={{ Number($json.report.sources_stale_90d) }}", "rightValue": 5, "operator": { "type": "number", "operation": "gt" } }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "nf-04",
+      "name": "Load Architect Email",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [20, 220],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT value FROM system_config WHERE key='architect_email'",
+        "options": {}
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } }
+    },
+    {
+      "id": "nf-05",
+      "name": "Send Reminder",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [260, 220],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $json.value }}",
+        "subject": "[ArquitAI] Normativa stale: hay fuentes sin refrescar >90d",
+        "emailType": "html",
+        "message": "=<div style=\"font-family:Arial;max-width:600px\"><h2 style=\"color:#e67e22\">Normativa puede haber cambiado</h2><p>El cron_normativa_freshness ha detectado fuentes en normativa_knowledge sin refrescar en 90+ dias. Recuerda: el CTE, los PGOU y normativa autonomica cambian periodicamente. Si un agente_regulatory consulta una fuente stale, su recomendacion puede estar desactualizada.</p><pre style=\"background:#f3f4f6;padding:12px;border-radius:6px;font-size:12px\">{{ JSON.stringify($('Check Freshness').first().json.report, null, 2) }}</pre><p><b>Accion sugerida</b>: ejecutar manualmente <code>agent_normativa_refresh</code> desde n8n para recargar las fuentes (cache warmer).</p></div>",
+        "options": { "appendAttribution": false }
+      },
+      "credentials": { "gmailOAuth2": { "id": "cIma8ntTjZvIfU3H", "name": "damian2botella" } },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "nf-06",
+      "name": "Log OK",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [20, 380],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (action, agent_name, details) VALUES ('normativa_freshness_ok', 'cron_normativa_freshness', $1::jsonb);",
+        "options": { "queryReplacement": "={{ [ JSON.stringify($json.report) ] }}" }
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } }
+    }
+  ],
+  "connections": {
+    "Weekly Mon 09:00":     { "main": [[{ "node": "Check Freshness",      "type": "main", "index": 0 }]] },
+    "Check Freshness":      { "main": [[{ "node": "Stale?",               "type": "main", "index": 0 }]] },
+    "Stale?":               {
+      "main": [
+        [{ "node": "Load Architect Email", "type": "main", "index": 0 }],
+        [{ "node": "Log OK",               "type": "main", "index": 0 }]
+      ]
+    },
+    "Load Architect Email": { "main": [[{ "node": "Send Reminder",        "type": "main", "index": 0 }]] }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5"
+  }
+}

@@ -1,0 +1,125 @@
+# Referencia — Workflows y funciones SQL del bloque de seguridad
+
+## Workflows activos (n8n)
+
+### Sub-workflows reusables
+
+| Nombre | ID | Tipo entrada | Output | Uso |
+|---|---|---|---|---|
+| `util_security_check` | `5LEflgQnjSvgGAYK` | Execute Sub-workflow Trigger | `{allowed, blocked_reason, rate_minute, rate_hour, patterns_detected}` | Rate limit + pattern detection + ip_blocklist + auto-ban escalado. Llamar antes del primer hit a BD. |
+| `util_hmac_verify` | `g4k5UkQgPryA9Riz` | Execute Sub-workflow Trigger | `{valid, reason, expected_preview, given_preview}` | Verificación HMAC para webhooks externos firmados. |
+
+### Endpoints API JSON
+
+| Path | Workflow | Auth | Función |
+|---|---|---|---|
+| `GET /webhook/security-dashboard` | `util_security_dashboard` (`k7sXYc50Ta1Y8NhN`) | Header X-API-Key | Snapshot completo en JSON (snapshot, recent_critical, top_ips_24h, blocklist) |
+| `GET /webhook/security-dashboard-html` | `util_security_dashboard_html` (`hhjRkb0aBnCIsHg7`) | Header X-API-Key | Vista HTML del dashboard (cards + 3 tablas) |
+
+### Endpoints públicos (con security_check integrado)
+
+| Path | Workflow | Auth | Notas |
+|---|---|---|---|
+| `POST /webhook/client-ask` | `client_ask` (`LEcfyzK2EHa8PIZ5`) | Body token | LLM concierge cliente. Cifra question/answer con `pii_encrypt()`. Rate 10/min, 60/h. |
+| `POST /webhook/gdpr-request` | `gdpr_request` (`BLSm6Tfo0mJIDuFt`) | Body token | RGPD Art. 15-22. Cifra details. Rate 5/min, 20/h. |
+| `POST /webhook/aftercare-public-submit` | `aftercare_public_submit` (`x5j2VKbz9tfQyqzl`) | Body token (+ Header Auth previo) | Postventa LOE. Rate 5/min, 30/h. |
+| `POST /webhook/contract-signed` | `contract_mark_signed` (`QK640K7iJ9dPJATR`) | Header Auth previo | Webhook DocuSign. Rate 10/min, 100/h. HMAC verify futuro. |
+
+### Endpoints públicos HTML (con security headers)
+
+| Path | Workflow | Headers añadidos |
+|---|---|---|
+| `GET /webhook/client-ask-form` | `client_ask_form` (`YlJpehVGSKGI4PgF`) | HSTS, X-Frame DENY, nosniff, referrer-policy, permissions-policy |
+| `GET /webhook/aftercare-public-form` | `aftercare_public_form` (`WHtdrr3tJpei3IM8`) | idem |
+| `GET /webhook/project-summary` | `project_summary` (`LuTpknJdwLwzUVqc`) | idem |
+
+### Honeypots
+
+| Paths trampa | Workflow | Acción |
+|---|---|---|
+| `/admin`, `/wp-admin`, `/wp-login.php`, `/.env`, `/.git/config`, `/phpmyadmin`, `/api/v1/admin`, `/console`, `POST /login` | `honeypot_trap` (`Gjsc6nxHY3KIlKj3`) | Log `unauthorized_endpoint` severity high + auto-ban 24h tras 3+/10min + 404 genérico |
+
+### Crons de seguridad
+
+| Schedule | Workflow | Función |
+|---|---|---|
+| `0 9 1 * *` (mensual día 1 09:00) | `cron_key_rotation_reminder` (`b7po76socKIE0WhZ`) | Revisa antigüedad de keys en system_config y avisa por email |
+| `30 2 * * *` (diario 02:30) | `cron_security_events_auto_resolve` (`gfWt4Uq94TUK9gch`) | Marca resolved=true events >90d (excepto critical) |
+| `0 3 * * 0` (semanal Dom 03:00) | `cron_security_events_purge` (`n702LDg8Y76oUs8k`) | DELETE events resolved >365d |
+| `30 4 * * *` (diario 04:30) | `cron_access_log_purge` (`AUwmuKSQTlIaC3W9`) | DELETE access_log >90d (preserva pii_accessed=true y denied/error) |
+| `0 4 * * *` (diario 04:00) | `cron_blocklist_cleanup` (`EiAh32GInzjAfS1S`) | DELETE ip_blocklist con blocked_until >7d expirados |
+| `0 3 * * 0` (semanal Dom 03:00) | `cron_inactive_token_cleanup` (`LmnF0ePvXEzT2ZdP`) | Revoca tokens inactivos |
+| `0 4 * * 0` (semanal Dom 04:00) | `cron_security_pentest_lite` (`9drH5gGPV9hweKp2`) | 14 tests E2E de regresión |
+| `30 8 * * 1` (semanal Lun 08:30) | `cron_security_dashboard_alert` (`YSQHEhh0IRI93k7C`) | Email semanal con KPIs y eventos |
+
+## Funciones SQL (PostgreSQL)
+
+### Cifrado PII
+
+| Función | Args | Returns | Uso |
+|---|---|---|---|
+| `pii_encrypt(text)` | texto plano | bytea | Cifra con `pgp_sym_encrypt` usando clave en `system_config.encryption_key` |
+| `pii_decrypt(bytea)` | dato cifrado | text | Descifra con la misma clave |
+
+### Rate limit + IP block
+
+| Función | Args | Returns | Uso |
+|---|---|---|---|
+| `check_rate_limit(ip, endpoint, max_per_minute, max_per_hour)` | text, text, int, int | tabla(allowed, reason, current_minute, current_hour) | Atomic rate check por (ip, endpoint) en ventanas móviles. Inserta hit en `rate_limits`. |
+| `is_ip_blocked(ip)` | text | boolean | TRUE si la IP está en `ip_blocklist` con `blocked_until > now()` |
+| `ban_ip(ip, duration, reason, evidence_event_id)` | text, interval, text, uuid | uuid | UPSERT en `ip_blocklist`: si ya existe, extiende `blocked_until` y appendea evidencia |
+
+### Eventos de seguridad
+
+| Función | Args | Returns | Uso |
+|---|---|---|---|
+| `raise_security_event(type, severity, ip, endpoint, resource_type, resource_id, description, details)` | varios | uuid | Inserta en `security_events`. 16 event_types válidos (ver enum). |
+| `log_access(...)` | varios | uuid | Inserta en `access_log` |
+
+### Multi-tenant
+
+| Función | Args | Returns | Uso |
+|---|---|---|---|
+| `current_tenant_id()` | — | uuid | Lee `app.current_tenant` del session config — listo para policies RLS futuras |
+
+### Triggers automáticos
+
+| Trigger | Tabla | Acción |
+|---|---|---|
+| `clients_sync_pii_enc` | clients | BEFORE INSERT/UPDATE → setea email_enc, phone_enc, notes_enc |
+| `briefings_sync_pii_enc` | briefings | BEFORE INSERT/UPDATE → setea client_needs_enc |
+| `gdpr_requests_touch` | gdpr_requests | BEFORE UPDATE → setea updated_at |
+
+(Triggers de sync para client_conversations y gdpr_requests fueron eliminados en migration 034 — los workflows escriben `_enc` directamente con `pii_encrypt()`.)
+
+## Tablas relevantes
+
+| Tabla | Propósito | Retención |
+|---|---|---|
+| `access_log` | Auditoría de cada request | 90d (excepto pii_accessed=true y denied/error que perpetuo) |
+| `security_events` | Incidencias de seguridad clasificadas | resolved >365d → purge; unresolved infinito |
+| `rate_limits` | Sliding window counters | (managed por la función) |
+| `ip_blocklist` | IPs bannadas temporalmente | 7d post-expiry → cleanup |
+| `tenants` | Multi-tenant (1 tenant actual) | infinito |
+| `system_config` | Config + secrets (encryption_key, webhook_api_key, etc.) | infinito |
+
+## Vistas
+
+| Vista | Función |
+|---|---|
+| `security_dashboard` | Snapshot agregado (counts, IPs únicos, eventos, tokens, GDPR, consents) |
+| `gdpr_client_data_view` | Export RGPD Art. 15/20 — usa `pii_decrypt()` para todo |
+
+## Migraciones aplicadas (orden)
+
+| # | Archivo | Resumen |
+|---|---|---|
+| 008 | `008_security_block2.sql` | pgcrypto + pii_encrypt/pii_decrypt + check_rate_limit |
+| 009 | `009_pii_encryption_columns.sql` | Columnas _enc en clients y briefings + triggers |
+| 027 | `027_gdpr_requests.sql` | Tabla gdpr_requests + vista inicial |
+| 029 | `029_security_hardening.sql` | access_log + security_events + raise_security_event + view security_dashboard |
+| 030 | `030_rls_template.sql` | Tabla tenants + columnas tenant_id + current_tenant_id() |
+| 031 | `031_pii_encryption_phase2.sql` | _enc en client_conversations y gdpr_requests |
+| 032 | `032_gdpr_view_uses_enc.sql` | gdpr_client_data_view → pii_decrypt(_enc) |
+| 033 | `033_ip_blocklist.sql` | Tabla ip_blocklist + is_ip_blocked() + ban_ip() |
+| 034 | `034_drop_pii_plain_columns.sql` | DROP COLUMN question, answer, details (PII en plain eliminada) |

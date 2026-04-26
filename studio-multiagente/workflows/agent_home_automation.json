@@ -1,0 +1,534 @@
+{
+  "name": "agent_home_automation",
+  "nodes": [
+    {
+      "id": "ha-01",
+      "name": "Receive Project",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        -700,
+        300
+      ],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    },
+    {
+      "id": "ha-02",
+      "name": "Manual Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -700,
+        500
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "trigger-home-automation",
+        "responseMode": "responseNode",
+        "authentication": "headerAuth"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "Ba643jvuElTgMawr",
+          "name": "Webhook API Key (entrante)"
+        }
+      },
+      "webhookId": "ha-trigger"
+    },
+    {
+      "id": "ha-03",
+      "name": "Normalize Input",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -460,
+        400
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "n1",
+              "name": "project_id",
+              "value": "={{ $json.project_id || $json.body?.project_id || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "n2",
+              "name": "level",
+              "value": "={{ $json.level || $json.body?.level || 'medio' }}",
+              "type": "string"
+            },
+            {
+              "id": "n3",
+              "name": "ecosystem_pref",
+              "value": "={{ $json.ecosystem_pref || $json.body?.ecosystem_pref || 'auto' }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ha-04",
+      "name": "Load Architect Email",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -220,
+        400
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT value FROM system_config WHERE key = 'architect_email'",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ha-05",
+      "name": "Load Project Data",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        20,
+        400
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT json_build_object(\n  'project_id', p.id,\n  'project_name', p.name,\n  'project_type', p.project_type,\n  'property_type', p.property_type,\n  'property_area_m2', p.property_area_m2,\n  'budget_target', p.budget_target,\n  'design_option', (SELECT json_build_object('title', d.title, 'description', d.description, 'rooms_layout', d.rooms_layout, 'technical_notes', d.technical_notes) FROM design_options d WHERE d.project_id = p.id AND d.is_selected = true LIMIT 1),\n  'briefing', (SELECT json_build_object('summary', b.summary, 'objectives', b.objectives, 'rooms_affected', b.rooms_affected, 'style_preferences', b.style_preferences) FROM briefings b WHERE b.project_id = p.id ORDER BY b.created_at DESC LIMIT 1),\n  'next_version', COALESCE((SELECT max(version) FROM home_automation_proposals WHERE project_id = p.id), 0) + 1\n) AS data\nFROM projects p WHERE p.id = $1::uuid;",
+        "options": {
+          "queryReplacement": "={{ [ $('Normalize Input').first().json.project_id ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "id": "ha-06",
+      "name": "Has Project?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        260,
+        400
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "h1",
+              "leftValue": "={{ $json.data?.project_id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ha-07",
+      "name": "Load Agent Prompt",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        500,
+        320
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT content, model_recommended, temperature FROM agent_prompts WHERE agent_name='agent_home_automation' AND prompt_type='system' AND is_active=true ORDER BY version DESC LIMIT 1;",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ha-08",
+      "name": "Prepare LLM Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        740,
+        320
+      ],
+      "parameters": {
+        "jsCode": "const promptRow = $input.first().json;\nconst project = $('Load Project Data').first().json.data;\nconst input = $('Normalize Input').first().json;\nconst design = project.design_option || {};\nconst briefing = project.briefing || {};\n\nconst prompt_user = `Proyecto: ${project.project_name}\nTipo: ${project.project_type} (${project.property_type})\nSuperficie: ${project.property_area_m2} m2\nBudget total: ${project.budget_target || '?'} EUR\n\nNivel domotica solicitado: ${input.level}\nEcosistema preferido: ${input.ecosystem_pref}\n\nDESIGN:\n${design.title || '-'}\n${design.description || '-'}\nNotas tecnicas: ${design.technical_notes || '-'}\n\nBRIEFING:\n${briefing.summary || '-'}\nObjetivos: ${JSON.stringify(briefing.objectives || [])}\nEstancias afectadas: ${JSON.stringify(briefing.rooms_affected || [])}\nEstilo cliente: ${JSON.stringify(briefing.style_preferences || {})}\n\nGenera la propuesta de domotica en JSON segun el schema. Responde SOLO el JSON, sin texto adicional.`;\n\nreturn [{ json: {\n  agent_name: 'agent_home_automation',\n  prompt_system: promptRow.content,\n  prompt_user: prompt_user,\n  model: promptRow.model_recommended || 'gpt-4o',\n  temperature: promptRow.temperature !== null ? Number(promptRow.temperature) : 0.3,\n  project_id: project.project_id,\n  next_version: project.next_version,\n  level: input.level,\n  ecosystem_pref: input.ecosystem_pref\n}}];"
+      }
+    },
+    {
+      "id": "ha-09",
+      "name": "Call LLM",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        980,
+        320
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "JoKqGZ8pDzhJohV2",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ha-10",
+      "name": "Parse Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1220,
+        320
+      ],
+      "parameters": {
+        "jsCode": "const llm = $input.first().json;\nlet text = llm.text || llm.content || '';\ntext = text.replace(/^```(?:json)?\\s*/i,'').replace(/```\\s*$/i,'').trim();\nlet parsed;\ntry { parsed = JSON.parse(text); } catch(e) {\n  const m = text.match(/\\{[\\s\\S]*\\}/);\n  if (m) { try { parsed = JSON.parse(m[0]); } catch(_) {} }\n}\nif (!parsed) {\n  parsed = {\n    ecosystem: 'no_recommendation',\n    level: 'basico',\n    devices_recommended: [],\n    preinstall_requirements: [],\n    estimated_cost_devices_eur: null,\n    estimated_cost_install_eur: null,\n    estimated_total_eur: null,\n    rationale: 'LLM no devolvio JSON valido. Texto: ' + text.substring(0,200),\n    warnings: ['parse_failure']\n  };\n}\nconst num = v => v===null||v===undefined||v===''?null:Number(v);\nreturn [{ json: {\n  ecosystem: parsed.ecosystem || 'no_recommendation',\n  level: parsed.level || 'basico',\n  devices_recommended: Array.isArray(parsed.devices_recommended) ? parsed.devices_recommended : [],\n  preinstall_requirements: Array.isArray(parsed.preinstall_requirements) ? parsed.preinstall_requirements : [],\n  estimated_cost_devices_eur: num(parsed.estimated_cost_devices_eur),\n  estimated_cost_install_eur: num(parsed.estimated_cost_install_eur),\n  estimated_total_eur: num(parsed.estimated_total_eur),\n  rationale: parsed.rationale || '',\n  warnings: Array.isArray(parsed.warnings) ? parsed.warnings : [],\n  llm_model: llm.model || 'gpt-4o',\n  llm_tokens_in: llm.tokens_in || null,\n  llm_tokens_out: llm.tokens_out || null,\n  llm_cost_usd: llm.cost_estimated || null\n}}];"
+      }
+    },
+    {
+      "id": "ha-11",
+      "name": "Insert Proposal",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1460,
+        320
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO home_automation_proposals (\n  project_id, version, ecosystem, level, devices_recommended, preinstall_requirements,\n  estimated_cost_devices_eur, estimated_cost_install_eur, estimated_total_eur,\n  rationale, warnings, llm_model, llm_tokens_in, llm_tokens_out, llm_cost_usd\n) VALUES (\n  $1::uuid, $2::int, $3, $4, $5::jsonb, $6::jsonb,\n  $7::numeric, $8::numeric, $9::numeric,\n  $10, $11::jsonb, $12, $13::int, $14::int, $15::numeric\n) RETURNING id, version, ecosystem, level, estimated_total_eur;",
+        "options": {
+          "queryReplacement": "={{ [\n  $('Prepare LLM Payload').first().json.project_id,\n  $('Prepare LLM Payload').first().json.next_version,\n  $json.ecosystem,\n  $json.level,\n  JSON.stringify($json.devices_recommended),\n  JSON.stringify($json.preinstall_requirements),\n  $json.estimated_cost_devices_eur,\n  $json.estimated_cost_install_eur,\n  $json.estimated_total_eur,\n  $json.rationale,\n  JSON.stringify($json.warnings || []),\n  $json.llm_model,\n  $json.llm_tokens_in,\n  $json.llm_tokens_out,\n  $json.llm_cost_usd\n] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ha-12",
+      "name": "Build Notification",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1700,
+        320
+      ],
+      "parameters": {
+        "jsCode": "const inserted = $input.first().json;\nconst raw = $('Parse Response').first().json;\nconst project = $('Load Project Data').first().json.data;\nconst devices = (raw.devices_recommended || []).map(d => '<tr><td>' + (d.room||'?') + '</td><td>' + (d.device_type||'?') + '</td><td>' + (d.name||'?') + (d.notes ? '<br><small style=\\\"color:#7f8c8d\\\">' + d.notes + '</small>' : '') + '</td><td>' + (d.qty||1) + ' x ' + (d.unit_price_eur||'?') + ' = <b>' + (d.total_eur||'?') + ' EUR</b></td></tr>').join('');\nconst preinstall = (raw.preinstall_requirements || []).map(r => '<li>' + (r.critical ? '<b style=\\\"color:#e74c3c\\\">[CRITICO]</b> ' : '') + (r.room ? '<b>' + r.room + '</b>: ' : '') + r.description + '</li>').join('');\nconst warns = (raw.warnings || []).map(w => '<li>' + w + '</li>').join('');\nconst html = `<div style=\\\"font-family:Arial,sans-serif;max-width:720px;margin:0 auto\\\">\n<h2 style=\\\"color:#2c3e50\\\">Propuesta de domotica generada</h2>\n<h3 style=\\\"color:#7f8c8d\\\">${project.project_name}</h3>\n<table style=\\\"width:100%;border-collapse:collapse;margin:16px 0\\\">\n  <tr><td style=\\\"padding:6px;background:#f3f4f6\\\"><b>Ecosistema</b></td><td style=\\\"padding:6px\\\">${raw.ecosystem}</td></tr>\n  <tr><td style=\\\"padding:6px;background:#f3f4f6\\\"><b>Nivel</b></td><td style=\\\"padding:6px\\\">${raw.level}</td></tr>\n  <tr><td style=\\\"padding:6px;background:#f3f4f6\\\"><b>Dispositivos</b></td><td style=\\\"padding:6px\\\">${raw.estimated_cost_devices_eur || '?'} EUR</td></tr>\n  <tr><td style=\\\"padding:6px;background:#f3f4f6\\\"><b>Instalacion</b></td><td style=\\\"padding:6px\\\">${raw.estimated_cost_install_eur || '?'} EUR</td></tr>\n  <tr><td style=\\\"padding:6px;background:#f3f4f6\\\"><b>TOTAL</b></td><td style=\\\"padding:6px\\\"><b>${raw.estimated_total_eur || '?'} EUR</b></td></tr>\n</table>\n<p><b>Justificacion:</b> ${raw.rationale}</p>\n<h3>Dispositivos recomendados</h3>\n<table border=\\\"1\\\" cellpadding=\\\"6\\\" cellspacing=\\\"0\\\" style=\\\"border-collapse:collapse;font-size:13px\\\"><thead><tr style=\\\"background:#f3f4f6\\\"><th>Estancia</th><th>Tipo</th><th>Modelo</th><th>Coste</th></tr></thead><tbody>${devices}</tbody></table>\n<h3 style=\\\"color:#e67e22\\\">Preinstalacion EN OBRA</h3>\n<ul>${preinstall}</ul>\n${warns ? '<p style=\\\"background:#fff8e1;padding:10px;border-left:4px solid #fece00\\\"><b>Avisos:</b><ul>' + warns + '</ul></p>' : ''}\n<p style=\\\"font-size:11px;color:#95a5a6\\\">Proposal ID: ${inserted.id}, version ${inserted.version}.</p>\n</div>`;\nreturn [{ json: { html_body: html, project_name: project.project_name, ecosystem: raw.ecosystem, total: raw.estimated_total_eur } }];"
+      }
+    },
+    {
+      "id": "ha-13",
+      "name": "Send Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1940,
+        320
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $('Load Architect Email').first().json.value }}",
+        "subject": "=ArquitAI — Propuesta domotica {{ $json.project_name }} ({{ $json.ecosystem }} — {{ $json.total }} EUR)",
+        "emailType": "html",
+        "message": "={{ $json.html_body }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "cIma8ntTjZvIfU3H",
+          "name": "damian2botella"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "ha-14",
+      "name": "Return Success",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2180,
+        320
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "rs1",
+              "name": "status",
+              "value": "completed",
+              "type": "string"
+            },
+            {
+              "id": "rs2",
+              "name": "proposal_id",
+              "value": "={{ $('Insert Proposal').first().json.id }}",
+              "type": "string"
+            },
+            {
+              "id": "rs3",
+              "name": "ecosystem",
+              "value": "={{ $('Insert Proposal').first().json.ecosystem }}",
+              "type": "string"
+            },
+            {
+              "id": "rs4",
+              "name": "estimated_total_eur",
+              "value": "={{ $('Insert Proposal').first().json.estimated_total_eur }}",
+              "type": "number"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ha-15",
+      "name": "Webhook Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        2420,
+        320
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status: $json.status, proposal_id: $json.proposal_id, ecosystem: $json.ecosystem, estimated_total_eur: $json.estimated_total_eur}) }}",
+        "options": {
+          "responseCode": 200
+        }
+      }
+    },
+    {
+      "id": "ha-16",
+      "name": "Webhook 404",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        500,
+        500
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'not_found', error:'project_id no encontrado'}) }}",
+        "options": {
+          "responseCode": 404
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Receive Project": {
+      "main": [
+        [
+          {
+            "node": "Normalize Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Webhook": {
+      "main": [
+        [
+          {
+            "node": "Normalize Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Input": {
+      "main": [
+        [
+          {
+            "node": "Load Architect Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Architect Email": {
+      "main": [
+        [
+          {
+            "node": "Load Project Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Project Data": {
+      "main": [
+        [
+          {
+            "node": "Has Project?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Project?": {
+      "main": [
+        [
+          {
+            "node": "Load Agent Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Webhook 404",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Agent Prompt": {
+      "main": [
+        [
+          {
+            "node": "Prepare LLM Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare LLM Payload": {
+      "main": [
+        [
+          {
+            "node": "Call LLM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call LLM": {
+      "main": [
+        [
+          {
+            "node": "Parse Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Response": {
+      "main": [
+        [
+          {
+            "node": "Insert Proposal",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Proposal": {
+      "main": [
+        [
+          {
+            "node": "Build Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Notification": {
+      "main": [
+        [
+          {
+            "node": "Send Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Email": {
+      "main": [
+        [
+          {
+            "node": "Return Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Return Success": {
+      "main": [
+        [
+          {
+            "node": "Webhook Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  }
+}

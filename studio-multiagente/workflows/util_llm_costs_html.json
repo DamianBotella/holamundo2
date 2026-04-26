@@ -1,0 +1,75 @@
+{
+  "name": "util_llm_costs_html",
+  "nodes": [
+    {
+      "id": "lc-01",
+      "name": "Webhook GET",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-700, 300],
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "llm-costs-html",
+        "responseMode": "responseNode",
+        "authentication": "headerAuth"
+      },
+      "credentials": { "httpHeaderAuth": { "id": "Ba643jvuElTgMawr", "name": "Webhook API Key (entrante)" } },
+      "webhookId": "lc-trigger"
+    },
+    {
+      "id": "lc-02",
+      "name": "Load Costs",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [-460, 300],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT json_build_object(\n  'totals', (SELECT json_build_object(\n    'last_24h_usd',  COALESCE(round(sum(cost_usd) FILTER (WHERE occurred_at > now() - INTERVAL '24 hours')::numeric, 4), 0),\n    'last_7d_usd',   COALESCE(round(sum(cost_usd) FILTER (WHERE occurred_at > now() - INTERVAL '7 days')::numeric, 4), 0),\n    'last_30d_usd',  COALESCE(round(sum(cost_usd) FILTER (WHERE occurred_at > now() - INTERVAL '30 days')::numeric, 4), 0),\n    'calls_24h',     count(*) FILTER (WHERE occurred_at > now() - INTERVAL '24 hours'),\n    'calls_7d',      count(*) FILTER (WHERE occurred_at > now() - INTERVAL '7 days'),\n    'errors_24h',    count(*) FILTER (WHERE occurred_at > now() - INTERVAL '24 hours' AND status <> 'ok'),\n    'avg_latency_24h', COALESCE(round(avg(latency_ms) FILTER (WHERE occurred_at > now() - INTERVAL '24 hours')::numeric, 0), 0)\n  ) FROM llm_calls),\n  'by_agent', (SELECT json_agg(t.* ORDER BY t.cost_usd_total DESC NULLS LAST) FROM llm_costs_summary t),\n  'by_project_30d', (SELECT json_agg(t.* ORDER BY t.cost_usd_total DESC NULLS LAST) FROM (\n    SELECT\n      coalesce(p.name, '(sin proyecto)') AS project_name,\n      coalesce(p.id::text, 'null') AS project_id,\n      count(*) AS calls,\n      round(sum(cost_usd)::numeric, 4) AS cost_usd_total\n    FROM llm_calls l\n    LEFT JOIN projects p ON p.id = l.project_id\n    WHERE l.occurred_at > now() - INTERVAL '30 days'\n    GROUP BY p.id, p.name\n    LIMIT 15\n  ) t),\n  'by_model_30d', (SELECT json_agg(t.* ORDER BY t.cost_usd_total DESC NULLS LAST) FROM (\n    SELECT model, count(*) AS calls, round(sum(cost_usd)::numeric, 4) AS cost_usd_total\n    FROM llm_calls\n    WHERE occurred_at > now() - INTERVAL '30 days'\n    GROUP BY model\n  ) t),\n  'recent_errors', (SELECT json_agg(t.*) FROM (\n    SELECT occurred_at, agent_name, project_id, model, status, LEFT(error_message, 100) AS error_preview\n    FROM llm_calls\n    WHERE status <> 'ok' AND occurred_at > now() - INTERVAL '7 days'\n    ORDER BY occurred_at DESC LIMIT 15\n  ) t)\n) AS report;",
+        "options": {}
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } }
+    },
+    {
+      "id": "lc-03",
+      "name": "Build HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-220, 300],
+      "parameters": {
+        "jsCode": "const r = $input.first().json.report || {};\nconst t = r.totals || {};\nconst byAgent = r.by_agent || [];\nconst byProject = r.by_project_30d || [];\nconst byModel = r.by_model_30d || [];\nconst errs = r.recent_errors || [];\nconst card = (label, value, unit, color) => '<div style=\"background:'+(color||'#f9fafb')+';padding:14px;border-radius:8px;flex:1;min-width:140px\"><div style=\"font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:.5px\">'+label+'</div><div style=\"font-size:24px;font-weight:bold;color:#1f2937;margin-top:6px\">'+(value!=null?value:'-')+(unit?'<span style=\"font-size:13px;color:#6b7280;font-weight:normal\"> '+unit+'</span>':'')+'</div></div>';\nconst row = (cells) => '<tr>'+cells.map(c=>'<td style=\"padding:8px;border-bottom:1px solid #e5e7eb;font-size:13px\">'+c+'</td>').join('')+'</tr>';\nconst fmt = (n) => Number(n||0).toLocaleString('es-ES', {maximumFractionDigits: 4});\nconst agentRows = byAgent.length>0 ? byAgent.map(a=>row([\n  '<b>'+a.agent_name+'</b>',\n  String(a.calls_total),\n  '<span style=\"color:'+(a.calls_error>0?'#dc2626':'#10b981')+'\">'+a.calls_error+'</span>',\n  fmt(a.cost_usd_total)+' USD',\n  fmt(a.cost_usd_avg)+' USD',\n  String(a.latency_ms_avg)+' ms',\n  String(a.tokens_in_total + a.tokens_out_total)\n])).join('') : row(['<i>Sin datos en 30d</i>','','','','','','']);\nconst projectRows = byProject.length>0 ? byProject.map(p=>row([\n  '<b>'+p.project_name+'</b>',\n  String(p.calls),\n  fmt(p.cost_usd_total)+' USD'\n])).join('') : row(['<i>Sin datos en 30d</i>','','']);\nconst modelRows = byModel.length>0 ? byModel.map(m=>row([\n  '<code>'+m.model+'</code>', String(m.calls), fmt(m.cost_usd_total)+' USD'\n])).join('') : row(['<i>Sin datos en 30d</i>','','']);\nconst errRows = errs.length>0 ? errs.map(e=>row([\n  new Date(e.occurred_at).toISOString().slice(0,16).replace('T',' '),\n  e.agent_name, e.model, '<code>'+e.status+'</code>', e.error_preview||'-'\n])).join('') : row(['<i style=\"color:#10b981\">Sin errores en 7d</i>','','','','']);\nconst html = '<!DOCTYPE html><html lang=\"es\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>ArquitAI LLM Costs</title>' +\n'<style>body{font-family:-apple-system,Arial,sans-serif;max-width:1100px;margin:24px auto;padding:16px;color:#1f2937;background:#f3f4f6}h1{color:#0f172a;margin:0 0 8px}h2{color:#374151;font-size:16px;margin:24px 0 8px}.cards{display:flex;gap:12px;flex-wrap:wrap;margin:16px 0}table{width:100%;border-collapse:collapse;background:white;border-radius:8px;overflow:hidden}thead{background:#1f2937;color:white}thead th{padding:10px 8px;text-align:left;font-size:12px}.meta{color:#64748b;font-size:13px}</style>' +\n'</head><body>' +\n'<h1>ArquitAI LLM Costs <a href=\"javascript:location.reload()\" style=\"background:#2563eb;color:white;padding:4px 12px;border-radius:4px;text-decoration:none;font-size:13px;margin-left:8px\">Refrescar</a></h1>' +\n'<div class=\"meta\">Snapshot ' + new Date().toLocaleString('es-ES') + '</div>' +\n'<h2>Coste agregado</h2>' +\n'<div class=\"cards\">' +\n  card('Coste 24h', fmt(t.last_24h_usd), 'USD') +\n  card('Coste 7d', fmt(t.last_7d_usd), 'USD') +\n  card('Coste 30d', fmt(t.last_30d_usd), 'USD') +\n  card('Calls 24h', t.calls_24h||0) +\n  card('Errores 24h', t.errors_24h||0, null, (t.errors_24h||0)>0?'#fee2e2':null) +\n  card('Latencia avg', t.avg_latency_24h||0, 'ms') +\n'</div>' +\n'<h2>Por agente (30d)</h2>' +\n'<table><thead><tr><th>Agente</th><th>Calls</th><th>Errors</th><th>Coste total</th><th>Coste avg</th><th>Latencia avg</th><th>Tokens</th></tr></thead><tbody>'+agentRows+'</tbody></table>' +\n'<h2>Por proyecto (30d, top 15)</h2>' +\n'<table><thead><tr><th>Proyecto</th><th>Calls</th><th>Coste</th></tr></thead><tbody>'+projectRows+'</tbody></table>' +\n'<h2>Por modelo (30d)</h2>' +\n'<table><thead><tr><th>Modelo</th><th>Calls</th><th>Coste</th></tr></thead><tbody>'+modelRows+'</tbody></table>' +\n'<h2>Errores recientes (7d)</h2>' +\n'<table><thead><tr><th>Cuando</th><th>Agente</th><th>Modelo</th><th>Status</th><th>Error</th></tr></thead><tbody>'+errRows+'</tbody></table>' +\n'<p style=\"color:#94a3b8;font-size:11px;margin-top:32px;text-align:center\">Datos de la tabla llm_calls (migration 035). Vista llm_costs_summary disponible en BD.</p>' +\n'</body></html>';\nreturn [{ json: { html: html } }];"
+      }
+    },
+    {
+      "id": "lc-04",
+      "name": "Respond HTML",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [20, 300],
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.html }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              { "name": "Content-Type", "value": "text/html; charset=utf-8" },
+              { "name": "Strict-Transport-Security", "value": "max-age=31536000; includeSubDomains" },
+              { "name": "X-Content-Type-Options", "value": "nosniff" },
+              { "name": "X-Frame-Options", "value": "DENY" },
+              { "name": "Cache-Control", "value": "no-store" }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook GET": { "main": [[{ "node": "Load Costs",   "type": "main", "index": 0 }]] },
+    "Load Costs":  { "main": [[{ "node": "Build HTML",   "type": "main", "index": 0 }]] },
+    "Build HTML":  { "main": [[{ "node": "Respond HTML", "type": "main", "index": 0 }]] }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5"
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "name": "cron_aftercare_sla_breach",
+  "_n8n_id": "U5hvcNLQGOrbyQ6J",
+  "_purpose": "Fase 2 de 3.6 (postventa LOE). Cron diario 08:30. Detecta aftercare_incidents en status assigned/in_progress que llevan más días asignados del SLA por severidad: urgent=2d, high=5d, medium=14d, low=30d. El colaborador o gremio responsable no esta cumpliendo el plazo. Email digest agrupado al architect_email para escalar (status='escalated') o reasignar. Aplica leccion bloque 12: ambas ramas escriben action='aftercare_sla_clean' (status warning|success).",
+  "_triggers": "cron 30 8 * * * (diario 08:30)",
+  "_audited_by": "cron_workflow_audit (action='aftercare_sla_clean', INTERVAL 26h)",
+  "_sla_table": "urgent=2d, high=5d, medium=14d, low=30d (desde assigned_at)",
+  "nodes": [
+    { "id": "casb-01", "name": "Schedule 08:30 Daily", "type": "n8n-nodes-base.scheduleTrigger", "position": [-700, 300], "_cron": "30 8 * * *" },
+    { "id": "casb-02", "name": "Load Architect Email", "type": "n8n-nodes-base.postgres",        "position": [-460, 300] },
+    { "id": "casb-03", "name": "Find SLA Breaches",    "type": "n8n-nodes-base.postgres",        "position": [-220, 300], "_query_summary": "WITH sla_breaches AS (SELECT incidents en assigned/in_progress + days_since_assigned + sla_days CASE severity), filtra days_since > sla_days" },
+    { "id": "casb-04", "name": "Has Breaches?",        "type": "n8n-nodes-base.if",              "position": [20, 300], "_check": "total_breaches > 0 (typeValidation: loose)" },
+    { "id": "casb-05", "name": "Build Email",          "type": "n8n-nodes-base.code",            "position": [260, 160] },
+    { "id": "casb-06", "name": "Send Email",           "type": "n8n-nodes-base.gmail",           "position": [500, 160] },
+    { "id": "casb-07", "name": "Log Issues Found",     "type": "n8n-nodes-base.postgres",        "position": [740, 160], "_action": "aftercare_sla_clean (status=warning, summary 'ran_with_issues')" },
+    { "id": "casb-08", "name": "Log Clean",            "type": "n8n-nodes-base.postgres",        "position": [260, 440], "_action": "aftercare_sla_clean (status=success)" }
+  ],
+  "connections": {
+    "Schedule 08:30 Daily": { "main": [[{ "node": "Load Architect Email", "type": "main", "index": 0 }]] },
+    "Load Architect Email": { "main": [[{ "node": "Find SLA Breaches",    "type": "main", "index": 0 }]] },
+    "Find SLA Breaches":    { "main": [[{ "node": "Has Breaches?",        "type": "main", "index": 0 }]] },
+    "Has Breaches?":        {
+      "main": [
+        [{ "node": "Build Email", "type": "main", "index": 0 }],
+        [{ "node": "Log Clean",   "type": "main", "index": 0 }]
+      ]
+    },
+    "Build Email":          { "main": [[{ "node": "Send Email",           "type": "main", "index": 0 }]] },
+    "Send Email":           { "main": [[{ "node": "Log Issues Found",     "type": "main", "index": 0 }]] }
+  }
+}

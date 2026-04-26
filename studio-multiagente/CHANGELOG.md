@@ -2,7 +2,16 @@
 
 Histórico cronológico de hitos del sistema. Generado a partir de git log.
 
-## 2026-04-26 — Bloques 7-16: Fase 2 hooks compliance/pathology + dashboard overview
+## 2026-04-26 — Bloques 7-17: Fase 2 hooks completa + seed supplier_catalog + endpoints catalog
+
+### Bloque 17 (5 puntos): plan 5h
+- `ArquitAI.md` sec 3 actualizado masivamente: marca como ✅ Fase 2 cerradas las features cubiertas por bloques 14-16 (3.5/3.6/3.8/3.13/3.18/3.20/3.21). Cada Pendiente fase 2 reescrito con lo construido y lo que aún queda real.
+- Migración 041_supplier_catalog_seed.sql: 22 items genéricos de proveedores españoles habituales (Porcelanosa, Roca, Geberit, Tres, Grohe, IKEA, Siemens, Bosch, Cosentino, Daikin, Saunier Duval, etc.) en gama media. `source_type='seed_generico'` permite a Damián insertar luego items reales con `source_type='catalog'` que tendrán prioridad. Activa agent_materials desde el primer ejecución sin esperar.
+- `cron_aftercare_sla_breach` (id `U5hvcNLQGOrbyQ6J`, activo): Fase 2 de 3.6. Cron diario 08:30 detecta incidentes assigned/in_progress que sobrepasan SLA por severidad (urgent=2d, high=5d, medium=14d, low=30d). Email digest para escalar/reasignar. Vigilado con INTERVAL 26h.
+- `util_admin_endpoints_html` (id `BLrbGTcoGeEZIhyu`, activo): GET `/webhook/admin-endpoints`. Catálogo navegable de TODOS los endpoints en 5 grupos (Dashboards admin, JSON, Agentes POST, Públicos, Crons) con botón "copiar curl" ready-to-paste para cada uno.
+- admin-index actualizado con link al nuevo dashboard. AUDIT.md (huérfanos sin cambio, +2 nuevos), CHANGELOG, referencia_workflows.
+
+
 
 ### Bloque 16 (5 puntos): plan 5h
 - `cron_compliance_audit_weekly` (id `tTZaWj86DPW0TNRt`, activo): Fase 2 de 3.21. Cron domingos 08:00 hace HTTP loop sobre proyectos activos llamando a agent_compliance_audit con send_email=false; agrega scorecards y envia digest si has_alerts. Vigilado con INTERVAL 8 days.

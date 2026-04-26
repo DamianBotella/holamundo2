@@ -1,0 +1,17 @@
+{
+  "name": "util_admin_endpoints_html",
+  "_n8n_id": "BLrbGTcoGeEZIhyu",
+  "_purpose": "Pagina HTML exhaustiva con TODOS los endpoints/crons del sistema (5 grupos: Dashboards admin, JSON endpoints, Agentes POST, Endpoints publicos, Crons). Cada fila tiene method+path+descripcion + boton 'copiar curl' que pega un curl ready-to-paste con KEY como placeholder a sustituir.",
+  "_triggers": "GET /webhook/admin-endpoints (header x-api-key)",
+  "_complementa_a": "util_admin_help_html (FAQ generico) y util_admin_index_html (landing). Este es el catalogo completo navegable.",
+  "_self_referential": "Incluye su propio endpoint en la lista (admin-endpoints).",
+  "nodes": [
+    { "id": "ae-01", "name": "Webhook GET",   "type": "n8n-nodes-base.webhook",          "position": [-500, 300] },
+    { "id": "ae-02", "name": "Build HTML",    "type": "n8n-nodes-base.code",             "position": [-260, 300], "_groups": "5 (Dashboards/JSON/Agentes/Publicos/Crons)" },
+    { "id": "ae-03", "name": "Respond HTML",  "type": "n8n-nodes-base.respondToWebhook", "position": [-20, 300] }
+  ],
+  "connections": {
+    "Webhook GET":  { "main": [[{ "node": "Build HTML",   "type": "main", "index": 0 }]] },
+    "Build HTML":   { "main": [[{ "node": "Respond HTML", "type": "main", "index": 0 }]] }
+  }
+}

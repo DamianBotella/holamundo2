@@ -6,9 +6,9 @@ Fecha: 2026-04-26
 
 | | Total |
 |---|---|
-| Workflows activos en n8n | **~136** (bloque 16 añade 3: cron_compliance_audit_weekly + cron_pathology_review + util_admin_compliance_overview_html) |
-| JSONs locales en `workflows/` | **112+** |
-| En n8n SIN JSON local | **~16** (era 44 — bloque 16 no sincroniza más huérfanos, los 3 son nuevos) |
+| Workflows activos en n8n | **~138** (bloque 17 añade 2: cron_aftercare_sla_breach + util_admin_endpoints_html) |
+| JSONs locales en `workflows/` | **114+** |
+| En n8n SIN JSON local | **~16** (rendimiento decreciente — bloques 17+ priorizan Fase 2 hooks vs sync) |
 | En local SIN n8n | **0** |
 
 ## Sincronizados en bloque 7-12
@@ -33,6 +33,13 @@ Fecha: 2026-04-26
 - `agent_financial_tracker.json` (stub estructural — OCR facturas)
 - `cron_post_phase_audits.json` (stub estructural — cron 30min auditorías post-fase)
 - `util_admin_llm_stats_html.json` (workflow NUEVO — dashboard de costes LLM con drill-down)
+
+**Bloque 17** (ArquitAI sec 3 actualizado + 2 workflows nuevos + seed SQL):
+- `studio-multiagente/ArquitAI.md` actualizado: marca Fase 2 cerradas en bloques 14-16 (3.5 invoice_followup, 3.13 contract_followup + qc_handover, 3.8 qc_public_form, 3.18 pathology_review, 3.20 collab_review, 3.21 compliance_weekly + overview, 3.6 sla_breach del bloque 17)
+- `studio-multiagente/schemas/migrations/041_supplier_catalog_seed.sql` — 22 items genéricos de proveedores españoles habituales (Roca, Porcelanosa, Marazzi, Daikin, etc) con `source_type='seed_generico'`. Activa agent_materials hasta que Damián aporte items reales con `source_type='catalog'` (que tendrán prioridad).
+- `cron_aftercare_sla_breach.json` (workflow NUEVO `U5hvcNLQGOrbyQ6J`, activo — Fase 2 de 3.6: SLA por severidad incidentes asignados sin resolver)
+- `util_admin_endpoints_html.json` (workflow NUEVO `BLrbGTcoGeEZIhyu`, activo — catálogo completo de endpoints + curl ready-to-paste)
+- admin-index actualizado con link al nuevo endpoints page.
 
 **Bloque 16** (Fase 2 hooks: 3 workflows nuevos):
 - `cron_compliance_audit_weekly.json` (workflow NUEVO `tTZaWj86DPW0TNRt`, activo — domingos 08:00 corre audit por cada proyecto activo via HTTP loop a agent_compliance_audit, agrega scorecards y manda digest si grade < B o critical>0)

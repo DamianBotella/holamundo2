@@ -1,0 +1,76 @@
+{
+  "name": "util_dashboard_summary_html",
+  "nodes": [
+    {
+      "id": "dh-01",
+      "name": "Webhook GET",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-700, 300],
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "dashboard-html",
+        "responseMode": "responseNode",
+        "authentication": "headerAuth"
+      },
+      "credentials": { "httpHeaderAuth": { "id": "Ba643jvuElTgMawr", "name": "Webhook API Key (entrante)" } },
+      "webhookId": "dhh-trigger"
+    },
+    {
+      "id": "dh-02",
+      "name": "Load Dashboard",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [-460, 300],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT json_build_object(\n  'projects', json_build_object(\n    'total_active', (SELECT count(*) FROM projects WHERE status='active' AND current_phase NOT IN ('completed','archived')),\n    'by_phase', (SELECT json_object_agg(current_phase, n) FROM (SELECT current_phase, count(*) AS n FROM projects WHERE status='active' AND current_phase NOT IN ('completed','archived') GROUP BY current_phase) t),\n    'completed_30d', (SELECT count(*) FROM projects WHERE current_phase='completed' AND completed_at > now() - INTERVAL '30 days'),\n    'oldest_active_days', (SELECT EXTRACT(DAY FROM now() - min(updated_at))::int FROM projects WHERE status='active' AND current_phase NOT IN ('completed','archived'))\n  ),\n  'pending_actions', json_build_object(\n    'consultations', (SELECT count(*) FROM consultation_queue WHERE status='pending'),\n    'invoices_pending', (SELECT count(*) FROM invoices WHERE status='pending'),\n    'collab_overdue', (SELECT count(*) FROM collab_assignments WHERE status NOT IN ('approved','closed','cancelled','rejected') AND deadline IS NOT NULL AND deadline < now()::date),\n    'collab_pending_review', (SELECT count(*) FROM collab_assignments WHERE status='delivered' AND delivered_at < now() - INTERVAL '3 days'),\n    'contracts_expiring_7d', (SELECT count(*) FROM contracts WHERE status IN ('sent','ready_to_sign','draft') AND expires_at BETWEEN now() AND now() + INTERVAL '7 days'),\n    'aftercare_urgent', (SELECT count(*) FROM aftercare_incidents WHERE status NOT IN ('resolved','closed','cancelled') AND severity IN ('high','critical')),\n    'qc_blocked', (SELECT count(*) FROM qc_checks WHERE status='blocked')\n  ),\n  'finance', json_build_object(\n    'paid_30d_eur', COALESCE((SELECT round(sum(total_amount)::numeric, 2) FROM invoices WHERE status='paid' AND paid_at > now() - INTERVAL '30 days'), 0),\n    'pending_count', (SELECT count(*) FROM invoices WHERE status='pending')\n  ),\n  'concierge', json_build_object(\n    'questions_30d', (SELECT count(*) FROM client_conversations WHERE asked_at > now() - INTERVAL '30 days'),\n    'cost_usd_30d', COALESCE((SELECT round(sum(llm_cost_usd)::numeric, 2) FROM client_conversations WHERE asked_at > now() - INTERVAL '30 days'), 0),\n    'escalation_pct', (SELECT round(100.0 * count(*) FILTER (WHERE escalated) / NULLIF(count(*),0), 1) FROM client_conversations WHERE asked_at > now() - INTERVAL '30 days')\n  ),\n  'errors_24h', (SELECT count(*) FROM activity_log WHERE action='workflow_error' AND created_at > now() - INTERVAL '24 hours'),\n  'recent_projects', (SELECT json_agg(t.*) FROM (\n    SELECT p.id, p.name, p.current_phase, p.budget_target, p.updated_at, c.name AS client_name\n      FROM projects p LEFT JOIN clients c ON c.id = p.client_id\n     WHERE p.status='active' AND p.current_phase NOT IN ('completed','archived')\n     ORDER BY p.updated_at DESC LIMIT 10\n  ) t)\n) AS report;",
+        "options": {}
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } }
+    },
+    {
+      "id": "dh-03",
+      "name": "Build HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-220, 300],
+      "parameters": {
+        "jsCode": "const r = $input.first().json.report || {};\nconst p = r.projects || {};\nconst pa = r.pending_actions || {};\nconst f = r.finance || {};\nconst cc = r.concierge || {};\nconst byPhase = p.by_phase || {};\nconst recent = r.recent_projects || [];\nconst card = (label, value, unit, color) => '<div style=\"background:'+(color||'#f9fafb')+';padding:14px;border-radius:8px;flex:1;min-width:140px\"><div style=\"font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:.5px\">'+label+'</div><div style=\"font-size:26px;font-weight:bold;color:#1f2937;margin-top:6px\">'+(value!=null?value:'-')+(unit?'<span style=\"font-size:14px;color:#6b7280;font-weight:normal\"> '+unit+'</span>':'')+'</div></div>';\nconst row = (cells) => '<tr>'+cells.map(c=>'<td style=\"padding:8px;border-bottom:1px solid #e5e7eb;font-size:13px\">'+c+'</td>').join('')+'</tr>';\nconst phases = Object.entries(byPhase).map(([k,v])=>'<span style=\"display:inline-block;background:#e0e7ff;color:#3730a3;padding:3px 10px;border-radius:12px;font-size:12px;margin:2px\">'+k+': <b>'+v+'</b></span>').join('') || '<i style=\"color:#6b7280\">sin proyectos activos</i>';\nconst recentRows = recent.length>0 ? recent.map(p=>row([\n  '<b>'+p.name+'</b>',\n  p.client_name||'-',\n  '<code>'+p.current_phase+'</code>',\n  p.budget_target ? Number(p.budget_target).toLocaleString('es-ES')+' EUR' : '-',\n  new Date(p.updated_at).toISOString().slice(0,10)\n])).join('') : row(['<i>Sin proyectos activos</i>','','','','']);\nconst urgent = pa.aftercare_urgent || 0;\nconst overdue = pa.collab_overdue || 0;\nconst pendingTotal = (pa.consultations||0)+(pa.invoices_pending||0)+(pa.collab_pending_review||0)+(pa.contracts_expiring_7d||0)+overdue+urgent;\nconst html = '<!DOCTYPE html><html lang=\"es\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>ArquitAI Dashboard</title>' +\n'<style>body{font-family:-apple-system,Arial,sans-serif;max-width:1100px;margin:24px auto;padding:16px;color:#1f2937;background:#f3f4f6}h1{color:#0f172a;margin:0 0 8px}h2{color:#374151;font-size:16px;margin:24px 0 8px}.cards{display:flex;gap:12px;flex-wrap:wrap;margin:16px 0}table{width:100%;border-collapse:collapse;background:white;border-radius:8px;overflow:hidden}thead{background:#1f2937;color:white}thead th{padding:10px 8px;text-align:left;font-size:12px}.meta{color:#64748b;font-size:13px}.refresh{display:inline-block;background:#2563eb;color:white;padding:6px 12px;border-radius:4px;text-decoration:none;font-size:13px;margin-left:8px}</style>' +\n'</head><body>' +\n'<h1>ArquitAI Dashboard <a class=\"refresh\" href=\"javascript:location.reload()\">Refrescar</a></h1>' +\n'<div class=\"meta\">Snapshot ' + new Date().toLocaleString('es-ES') + ' — estudio Damian Martinez</div>' +\n'<h2>Pulso del estudio</h2>' +\n'<div class=\"cards\">' +\n  card('Proyectos activos', p.total_active||0) +\n  card('Acciones pendientes', pendingTotal, null, pendingTotal>5?'#fef3c7':null) +\n  card('Aftercare urgentes', urgent, null, urgent>0?'#fee2e2':null) +\n  card('Colab overdue', overdue, null, overdue>0?'#fee2e2':null) +\n  card('Cobrado 30d', Number(f.paid_30d_eur||0).toLocaleString('es-ES'), 'EUR') +\n  card('Errores 24h', r.errors_24h||0, null, (r.errors_24h||0)>0?'#fee2e2':null) +\n'</div>' +\n'<h2>Proyectos por fase</h2>' +\n'<div style=\"background:white;padding:14px;border-radius:8px\">'+phases+'<div class=\"meta\" style=\"margin-top:8px\">Mas antiguo activo: '+(p.oldest_active_days||0)+' dias — Completados ultimos 30d: '+(p.completed_30d||0)+'</div></div>' +\n'<h2>Cola de acciones que requieren al arquitecto</h2>' +\n'<div class=\"cards\">' +\n  card('Consultas LLM', pa.consultations||0) +\n  card('Facturas pendientes', pa.invoices_pending||0) +\n  card('Colab review pending', pa.collab_pending_review||0) +\n  card('Contratos expiran 7d', pa.contracts_expiring_7d||0) +\n  card('QC blocked', pa.qc_blocked||0) +\n'</div>' +\n'<h2>Concierge cliente (LLM 30d)</h2>' +\n'<div class=\"cards\">' +\n  card('Preguntas', cc.questions_30d||0) +\n  card('Coste', cc.cost_usd_30d||0, 'USD') +\n  card('Escalacion', cc.escalation_pct||0, '%') +\n'</div>' +\n'<h2>Top 10 proyectos activos (recientes)</h2>' +\n'<table><thead><tr><th>Proyecto</th><th>Cliente</th><th>Fase</th><th>Budget</th><th>Update</th></tr></thead><tbody>'+recentRows+'</tbody></table>' +\n'<p style=\"color:#94a3b8;font-size:11px;margin-top:32px;text-align:center\">JSON crudo: <code>/webhook/dashboard-summary</code> con header X-API-Key. Security dashboard: <code>/webhook/security-dashboard-html</code></p>' +\n'</body></html>';\nreturn [{ json: { html: html } }];"
+      }
+    },
+    {
+      "id": "dh-04",
+      "name": "Respond HTML",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [20, 300],
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.html }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              { "name": "Content-Type", "value": "text/html; charset=utf-8" },
+              { "name": "Strict-Transport-Security", "value": "max-age=31536000; includeSubDomains" },
+              { "name": "X-Content-Type-Options", "value": "nosniff" },
+              { "name": "X-Frame-Options", "value": "DENY" },
+              { "name": "Referrer-Policy", "value": "strict-origin-when-cross-origin" },
+              { "name": "Cache-Control", "value": "no-store" }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook GET":    { "main": [[{ "node": "Load Dashboard", "type": "main", "index": 0 }]] },
+    "Load Dashboard": { "main": [[{ "node": "Build HTML",     "type": "main", "index": 0 }]] },
+    "Build HTML":     { "main": [[{ "node": "Respond HTML",   "type": "main", "index": 0 }]] }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5"
+  }
+}

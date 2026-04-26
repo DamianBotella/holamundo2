@@ -51,6 +51,9 @@
 | `0 3 * * 0` (semanal Dom 03:00) | `cron_inactive_token_cleanup` (`LmnF0ePvXEzT2ZdP`) | Revoca tokens inactivos |
 | `0 4 * * 0` (semanal Dom 04:00) | `cron_security_pentest_lite` (`9drH5gGPV9hweKp2`) | 14 tests E2E de regresión |
 | `30 8 * * 1` (semanal Lun 08:30) | `cron_security_dashboard_alert` (`YSQHEhh0IRI93k7C`) | Email semanal con KPIs y eventos |
+| `0 3 * * 0` (semanal Dom 03:00) | `cron_security_events_purge` (`n702LDg8Y76oUs8k`) | DELETE events resolved >365d |
+| `30 4 * * *` (diario 04:30) | `cron_access_log_purge` (`AUwmuKSQTlIaC3W9`) | DELETE access_log >90d (preserva PII y errores) |
+| `0 6 * * *` (diario 06:00) | `cron_health_check` (`ztTrZupYJiQmkNGW`) | Verifica funciones SQL + tablas + roundtrip pii. Email crítico si falla |
 
 ## Funciones SQL (PostgreSQL)
 

@@ -1,0 +1,33 @@
+{
+  "name": "cron_health_score_snapshot",
+  "nodes": [
+    {
+      "id": "hs-01",
+      "name": "Daily 06:30",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-700, 300],
+      "parameters": { "rule": { "interval": [{ "field": "cronExpression", "expression": "30 6 * * *" }] } }
+    },
+    {
+      "id": "hs-02",
+      "name": "Snapshot Score",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [-460, 300],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO health_score_history (\n  score, color, critical_unresolved, ips_blocked, workflow_errors_24h,\n  stuck_executions_1h, hours_since_last_backup, health_check_ran_24h,\n  clients_without_consent, gdpr_pending\n)\nSELECT\n  score, color, critical_unresolved, ips_blocked, workflow_errors_24h,\n  stuck_executions_1h, hours_since_last_backup, health_check_ran_24h,\n  clients_without_consent, gdpr_pending\nFROM system_health_score\nRETURNING id, score, color, snapshot_at;",
+        "options": {}
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } }
+    }
+  ],
+  "connections": {
+    "Daily 06:30":   { "main": [[{ "node": "Snapshot Score", "type": "main", "index": 0 }]] }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5"
+  }
+}

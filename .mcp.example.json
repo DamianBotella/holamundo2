@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "n8n": {
+      "command": "n8n-mcp",
+      "args": [],
+      "env": {
+        "N8N_API_URL": "https://<TU_INSTANCIA_N8N>",
+        "N8N_API_KEY": "<TU_N8N_API_KEY>"
+      }
+    }
+  }
+}

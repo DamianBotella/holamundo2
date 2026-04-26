@@ -98,6 +98,38 @@ Detalle completo: `knowledge/seguridad/hardening_fase2.md`.
 
 Listado completo + IDs: `knowledge/seguridad/referencia_workflows.md`.
 
+## Setup en un PC nuevo (clonado fresco)
+
+1. **Clone**:
+   ```bash
+   git clone https://github.com/DamianBotella/holamundo2.git
+   cd holamundo2
+   ```
+
+2. **Recrear `.mcp.json`** (excluido del repo por contener credenciales):
+   ```bash
+   cp .mcp.example.json .mcp.json
+   # Edita .mcp.json y reemplaza:
+   #   <TU_INSTANCIA_N8N>     -> https://n8n-n8n.zzeluw.easypanel.host
+   #   <TU_N8N_API_KEY>       -> tu API key de n8n (Settings -> n8n API)
+   ```
+
+3. **Restaurar memoria de Claude** (snapshot en `studio-multiagente/.claude-memory-snapshot/`):
+   - Windows: ver instrucciones en `studio-multiagente/.claude-memory-snapshot/README.md`
+   - macOS/Linux: idem
+   - El snapshot contiene `MEMORY.md` + 6 archivos temáticos (project_context, project_state, feedbacks, etc.).
+
+4. **Abrir Claude Code en el proyecto**:
+   - VSCode: abrir la carpeta del repo, Claude Code carga automáticamente `CLAUDE.md` + el `.mcp.json` con sus credenciales.
+   - El servidor n8n-mcp se levanta automáticamente con el comando `n8n-mcp` (instalar globalmente con `npm install -g n8n-mcp` si no está).
+
+5. **Verificar conexión a n8n**:
+   ```javascript
+   // En el chat de Claude:
+   mcp__n8n__n8n_health_check
+   ```
+   Debe responder `{ status: "ok" }`.
+
 ## Quickstart para una nueva sesión
 
 1. Abrir admin index en navegador → ver KPIs.

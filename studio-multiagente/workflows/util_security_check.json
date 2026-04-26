@@ -167,6 +167,20 @@
       }
     },
     {
+      "id": "us-08",
+      "name": "Maybe Escalate Ban",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [620, 220],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH recent AS (\n  SELECT count(*) AS hits\n    FROM security_events\n   WHERE source_ip = $1\n     AND event_type IN ('sql_injection_attempt','xss_attempt','prompt_injection','suspicious_pattern','rate_limit_hit')\n     AND occurred_at > now() - INTERVAL '10 minutes'\n)\nSELECT\n  hits,\n  CASE WHEN hits >= 5\n       THEN ban_ip($1, INTERVAL '24 hours', 'auto_ban_pattern_5plus_hits_10min', $2::uuid)\n       ELSE NULL\n  END AS ban_id,\n  CASE WHEN hits >= 5\n       THEN raise_security_event(\n         'data_breach_suspected'::text,\n         'critical'::text,\n         $1, $3::text, 'pattern_escalation'::text, NULL::uuid,\n         'IP ' || $1 || ' auto-banned 24h after ' || hits || ' pattern hits in 10min',\n         jsonb_build_object('ban_evidence_event', $2, 'window_minutes', 10, 'endpoint', $3)\n       )\n       ELSE NULL\n  END AS critical_event_id\n  FROM recent;",
+        "options": { "queryReplacement": "={{ [ $('Detect Patterns').first().json.source_ip, $json.event_id, $('Detect Patterns').first().json.endpoint ] }}" }
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "alwaysOutputData": true
+    },
+    {
       "id": "us-07",
       "name": "Return Result",
       "type": "n8n-nodes-base.set",
@@ -278,6 +292,17 @@
       ]
     },
     "Raise Security Event": {
+      "main": [
+        [
+          {
+            "node": "Maybe Escalate Ban",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Maybe Escalate Ban": {
       "main": [
         [
           {

@@ -1,0 +1,41 @@
+{
+  "name": "agent_planner",
+  "_n8n_id": "lSUfNw61YfbERI8n",
+  "_note": "Stub sincronizado 2026-04-26. Estructura de nodos + conexiones, sin parameters detallados. Para version completa: mcp__n8n__n8n_get_workflow id=lSUfNw61YfbERI8n mode=full",
+  "_purpose": "Genera plan de obra (cronograma, milestones, dependencias). Cubre fase 'planning_done' del orquestador. Tras approved -> agent_planner -> planning_done.",
+  "nodes": [
+    { "id": "ap-01", "name": "Receive Project",      "type": "n8n-nodes-base.executeWorkflowTrigger", "position": [0, 300] },
+    { "id": "ap-02", "name": "Load Project Data",    "type": "n8n-nodes-base.postgres",               "position": [250, 300] },
+    { "id": "ap-03", "name": "Preflight Check",      "type": "n8n-nodes-base.code",                   "position": [500, 300] },
+    { "id": "ap-04", "name": "Check Pass?",          "type": "n8n-nodes-base.if",                     "position": [750, 300] },
+    { "id": "ap-05", "name": "Create Execution",     "type": "n8n-nodes-base.postgres",               "position": [1000, 150] },
+    { "id": "ap-load-prompt", "name": "Load Planner Prompt", "type": "n8n-nodes-base.postgres",       "position": [1125, 0] },
+    { "id": "ap-06", "name": "Build Plan Prompt",    "type": "n8n-nodes-base.code",                   "position": [1250, 150] },
+    { "id": "ap-07", "name": "Call LLM",             "type": "n8n-nodes-base.executeWorkflow",        "position": [1500, 150] },
+    { "id": "ap-08", "name": "Parse Plan Response",  "type": "n8n-nodes-base.code",                   "position": [1750, 150] },
+    { "id": "ap-09", "name": "Save Draft Plan",      "type": "n8n-nodes-base.postgres",               "position": [2000, 150] },
+    { "id": "ap-10", "name": "Complete Execution",   "type": "n8n-nodes-base.postgres",               "position": [2250, 150] },
+    { "id": "ap-11", "name": "Write Intelligence",   "type": "n8n-nodes-base.postgres",               "position": [2500, 150] },
+    { "id": "ap-12", "name": "Return Success",       "type": "n8n-nodes-base.set",                    "position": [2750, 150] },
+    { "id": "ap-13", "name": "Return Preflight Fail","type": "n8n-nodes-base.set",                    "position": [1000, 450] }
+  ],
+  "connections": {
+    "Receive Project":     { "main": [[{ "node": "Load Project Data",   "type": "main", "index": 0 }]] },
+    "Load Project Data":   { "main": [[{ "node": "Preflight Check",     "type": "main", "index": 0 }]] },
+    "Preflight Check":     { "main": [[{ "node": "Check Pass?",         "type": "main", "index": 0 }]] },
+    "Check Pass?":         {
+      "main": [
+        [{ "node": "Create Execution",      "type": "main", "index": 0 }],
+        [{ "node": "Return Preflight Fail", "type": "main", "index": 0 }]
+      ]
+    },
+    "Create Execution":    { "main": [[{ "node": "Load Planner Prompt", "type": "main", "index": 0 }]] },
+    "Load Planner Prompt": { "main": [[{ "node": "Build Plan Prompt",   "type": "main", "index": 0 }]] },
+    "Build Plan Prompt":   { "main": [[{ "node": "Call LLM",            "type": "main", "index": 0 }]] },
+    "Call LLM":            { "main": [[{ "node": "Parse Plan Response", "type": "main", "index": 0 }]] },
+    "Parse Plan Response": { "main": [[{ "node": "Save Draft Plan",     "type": "main", "index": 0 }]] },
+    "Save Draft Plan":     { "main": [[{ "node": "Complete Execution", "type": "main", "index": 0 }]] },
+    "Complete Execution":  { "main": [[{ "node": "Write Intelligence",  "type": "main", "index": 0 }]] },
+    "Write Intelligence":  { "main": [[{ "node": "Return Success",      "type": "main", "index": 0 }]] }
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "name": "util_normativa_fetch",
+  "_n8n_id": "4a03tQ7Q5nmtBpnI",
+  "_note": "Stub sincronizado 2026-04-26. Para version completa: mcp__n8n__n8n_get_workflow id=4a03tQ7Q5nmtBpnI mode=full",
+  "_purpose": "Fetcha normativa oficial en tiempo real via Jina AI Reader (https://r.jina.ai/{url}). Loop con SplitInBatches sobre normativa_knowledge sources, con fallback a cache si fetch falla. Devuelve JSON con {confidence: high/medium/low, citation_source, content}.",
+  "_invoked_by": "agent_regulatory (cuando necesita verificar CTE, PGOU, ordenanzas)",
+  "_loop_pattern": "SplitInBatches → Fetch → IF fetch OK → Use Live | Fallback Cache → Aggregate Back → SplitInBatches (continue)",
+  "nodes": [
+    { "id": "unf-0001", "name": "Receive Input",          "type": "n8n-nodes-base.executeWorkflowTrigger", "position": [250, 300] },
+    { "id": "unf-0002", "name": "Load Relevant Sources",  "type": "n8n-nodes-base.postgres",               "position": [500, 300] },
+    { "id": "unf-0003", "name": "Split In Batches",       "type": "n8n-nodes-base.splitInBatches",         "position": [750, 300] },
+    { "id": "unf-0004", "name": "Fetch Official Content", "type": "n8n-nodes-base.httpRequest",            "position": [1000, 300] },
+    { "id": "unf-0005", "name": "Check Fetch OK",         "type": "n8n-nodes-base.if",                     "position": [1250, 300] },
+    { "id": "unf-0006", "name": "Use Live Content",       "type": "n8n-nodes-base.code",                   "position": [1500, 160] },
+    { "id": "unf-0007", "name": "Fallback To Cache",      "type": "n8n-nodes-base.postgres",               "position": [1500, 440] },
+    { "id": "unf-0008", "name": "Format Fallback",        "type": "n8n-nodes-base.code",                   "position": [1750, 440] },
+    { "id": "unf-0009", "name": "Aggregate Back",         "type": "n8n-nodes-base.code",                   "position": [1750, 160] },
+    { "id": "unf-0010", "name": "Build Normativa Context","type": "n8n-nodes-base.code",                   "position": [750, 500] },
+    { "id": "unf-0011", "name": "Return Result",          "type": "n8n-nodes-base.set",                    "position": [1000, 500] }
+  ],
+  "connections": {
+    "Receive Input":           { "main": [[{ "node": "Load Relevant Sources", "type": "main", "index": 0 }]] },
+    "Load Relevant Sources":   { "main": [[{ "node": "Split In Batches",      "type": "main", "index": 0 }]] },
+    "Split In Batches":        {
+      "main": [
+        [{ "node": "Fetch Official Content",   "type": "main", "index": 0 }],
+        [{ "node": "Build Normativa Context",  "type": "main", "index": 0 }]
+      ]
+    },
+    "Fetch Official Content":  { "main": [[{ "node": "Check Fetch OK",        "type": "main", "index": 0 }]] },
+    "Check Fetch OK":          {
+      "main": [
+        [{ "node": "Use Live Content",  "type": "main", "index": 0 }],
+        [{ "node": "Fallback To Cache", "type": "main", "index": 0 }]
+      ]
+    },
+    "Use Live Content":        { "main": [[{ "node": "Aggregate Back",        "type": "main", "index": 0 }]] },
+    "Fallback To Cache":       { "main": [[{ "node": "Format Fallback",       "type": "main", "index": 0 }]] },
+    "Format Fallback":         { "main": [[{ "node": "Aggregate Back",        "type": "main", "index": 0 }]] },
+    "Aggregate Back":          { "main": [[{ "node": "Split In Batches",      "type": "main", "index": 0 }]] },
+    "Build Normativa Context": { "main": [[{ "node": "Return Result",         "type": "main", "index": 0 }]] }
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "name": "agent_memory",
+  "_n8n_id": "gLxmy7M0UmC7Yzye",
+  "_note": "Stub sincronizado 2026-04-26. Para version completa: mcp__n8n__n8n_get_workflow id=gLxmy7M0UmC7Yzye mode=full",
+  "_purpose": "Aprendizaje cross-proyectos. Tras un proyecto completado, extrae 'memoria' (lecciones, patrones, decisiones) y la guarda con embedding pgvector para retrieval similar en futuros proyectos. Llamado desde main_orchestrator en fase 'completed'.",
+  "nodes": [
+    { "id": "am-01", "name": "Receive Project",       "type": "n8n-nodes-base.executeWorkflowTrigger", "position": [0, 300] },
+    { "id": "am-02", "name": "Load All Project Data", "type": "n8n-nodes-base.postgres",               "position": [250, 300] },
+    { "id": "am-load-prompt", "name": "Load Memory Prompt", "type": "n8n-nodes-base.postgres",        "position": [400, 150] },
+    { "id": "am-03", "name": "Build Memory Prompt",   "type": "n8n-nodes-base.code",                   "position": [500, 300] },
+    { "id": "am-04", "name": "Call LLM",              "type": "n8n-nodes-base.executeWorkflow",        "position": [750, 300] },
+    { "id": "am-05", "name": "Parse Memory Response", "type": "n8n-nodes-base.code",                   "position": [1000, 300] },
+    { "id": "am-06", "name": "Save Memory Case",      "type": "n8n-nodes-base.postgres",               "position": [1250, 300] },
+    { "id": "am-build-emb", "name": "Build Embedding Text", "type": "n8n-nodes-base.code",            "position": [1375, 450] },
+    { "id": "am-gen-emb",   "name": "Generate Embedding",   "type": "n8n-nodes-base.executeWorkflow", "position": [1625, 450] },
+    { "id": "am-save-emb",  "name": "Save Embedding",       "type": "n8n-nodes-base.postgres",        "position": [1875, 450] },
+    { "id": "am-07", "name": "Write Intelligence",    "type": "n8n-nodes-base.postgres",               "position": [1500, 300] },
+    { "id": "am-08", "name": "Return Success",        "type": "n8n-nodes-base.set",                    "position": [1750, 300] }
+  ],
+  "connections": {
+    "Receive Project":       { "main": [[{ "node": "Load All Project Data","type": "main", "index": 0 }]] },
+    "Load All Project Data": { "main": [[{ "node": "Load Memory Prompt",   "type": "main", "index": 0 }]] },
+    "Load Memory Prompt":    { "main": [[{ "node": "Build Memory Prompt",  "type": "main", "index": 0 }]] },
+    "Build Memory Prompt":   { "main": [[{ "node": "Call LLM",             "type": "main", "index": 0 }]] },
+    "Call LLM":              { "main": [[{ "node": "Parse Memory Response","type": "main", "index": 0 }]] },
+    "Parse Memory Response": { "main": [[{ "node": "Save Memory Case",     "type": "main", "index": 0 }]] },
+    "Save Memory Case":      { "main": [[{ "node": "Build Embedding Text", "type": "main", "index": 0 }]] },
+    "Build Embedding Text":  { "main": [[{ "node": "Generate Embedding",   "type": "main", "index": 0 }]] },
+    "Generate Embedding":    { "main": [[{ "node": "Save Embedding",       "type": "main", "index": 0 }]] },
+    "Save Embedding":        { "main": [[{ "node": "Write Intelligence",   "type": "main", "index": 0 }]] },
+    "Write Intelligence":    { "main": [[{ "node": "Return Success",       "type": "main", "index": 0 }]] }
+  }
+}

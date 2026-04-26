@@ -1,0 +1,35 @@
+{
+  "name": "cron_external_backup",
+  "_n8n_id": "Hv8RlkxGhCL6g0FQ",
+  "_note": "Stub sincronizado 2026-04-26. Para version completa: mcp__n8n__n8n_get_workflow id=Hv8RlkxGhCL6g0FQ mode=full",
+  "_purpose": "Backup semanal de la BD a Google Drive. Genera snapshot JSON, lo sube cifrado y registra en system_backups con status. cron_backup_verify (diario) alerta si este cron falla o no corre >7d.",
+  "_triggers": {
+    "Schedule Weekly": "domingos cron",
+    "Manual Trigger": "POST /webhook/trigger-external-backup con X-API-Key (para test on-demand)"
+  },
+  "nodes": [
+    { "id": "ceb-01", "name": "Schedule Weekly",      "type": "n8n-nodes-base.scheduleTrigger", "position": [-700, 300] },
+    { "id": "ceb-02", "name": "Manual Trigger",       "type": "n8n-nodes-base.webhook",         "position": [-700, 500] },
+    { "id": "dd9298b1-15cf-4419-b236-cbb5fbc66def", "name": "Load Architect Email", "type": "n8n-nodes-base.postgres", "position": [-580, 400] },
+    { "id": "ceb-03", "name": "Build Backup Snapshot","type": "n8n-nodes-base.postgres",        "position": [-460, 400] },
+    { "id": "ceb-04", "name": "Build Filename + Buffer","type": "n8n-nodes-base.code",          "position": [-220, 400] },
+    { "id": "ceb-05", "name": "Upload to Drive",      "type": "n8n-nodes-base.googleDrive",     "position": [20, 400] },
+    { "id": "ceb-06", "name": "Log Backup Success",   "type": "n8n-nodes-base.postgres",        "position": [260, 320] },
+    { "id": "ceb-07", "name": "Log Backup Failure",   "type": "n8n-nodes-base.postgres",        "position": [260, 480] },
+    { "id": "ceb-08", "name": "Notify Damian",        "type": "n8n-nodes-base.gmail",           "position": [520, 400] }
+  ],
+  "connections": {
+    "Schedule Weekly":         { "main": [[{ "node": "Load Architect Email",   "type": "main", "index": 0 }]] },
+    "Manual Trigger":          { "main": [[{ "node": "Load Architect Email",   "type": "main", "index": 0 }]] },
+    "Load Architect Email":    { "main": [[{ "node": "Build Backup Snapshot",  "type": "main", "index": 0 }]] },
+    "Build Backup Snapshot":   { "main": [[{ "node": "Build Filename + Buffer","type": "main", "index": 0 }]] },
+    "Build Filename + Buffer": { "main": [[{ "node": "Upload to Drive",        "type": "main", "index": 0 }]] },
+    "Upload to Drive":         {
+      "main": [
+        [{ "node": "Log Backup Success", "type": "main", "index": 0 }],
+        [{ "node": "Log Backup Failure", "type": "main", "index": 0 }]
+      ]
+    },
+    "Log Backup Success":      { "main": [[{ "node": "Notify Damian",          "type": "main", "index": 0 }]] }
+  }
+}

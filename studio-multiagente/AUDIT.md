@@ -6,10 +6,20 @@ Fecha: 2026-04-26
 
 | | Total |
 |---|---|
-| Workflows activos en n8n | **119** |
-| JSONs locales en `workflows/` | **75** |
-| En n8n SIN JSON local | **44** |
+| Workflows activos en n8n | **~125** |
+| JSONs locales en `workflows/` | **80+** |
+| En n8n SIN JSON local | **~40** (era 44, sincronizados 4 críticos en bloque 8 + agent_proposal en bloque 7) |
 | En local SIN n8n | **0** |
+
+## Sincronizados en bloque 7-8
+
+- `agent_proposal.json` (bloque 7, 2fd83bb) — versión simplificada con queries SQL completas, jsCode embedded omitido
+- `agent_planner.json` (bloque 8, stub estructural)
+- `agent_memory.json` (bloque 8, stub estructural)
+- `cron_external_backup.json` (bloque 8, stub estructural)
+- `util_normativa_fetch.json` (bloque 8, stub estructural)
+
+> **Stub estructural** = `_n8n_id` + `_purpose` + nodes (id+name+type+position) + connections completas + settings. Sin `parameters` detallados (jsCode, SQL queries largos, HTML emails). Para versión completa: `mcp__n8n__n8n_get_workflow id=<n8n_id> mode=full`.
 
 ## 44 workflows sin JSON local
 

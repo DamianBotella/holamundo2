@@ -1,0 +1,73 @@
+{
+  "name": "util_admin_audit_workflows_html",
+  "nodes": [
+    {
+      "id": "wf-01",
+      "name": "Webhook GET",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-700, 300],
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "admin-workflows",
+        "responseMode": "responseNode",
+        "authentication": "headerAuth"
+      },
+      "credentials": { "httpHeaderAuth": { "id": "Ba643jvuElTgMawr", "name": "Webhook API Key (entrante)" } },
+      "webhookId": "wf-trigger"
+    },
+    {
+      "id": "wf-02",
+      "name": "Audit",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [-460, 300],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH expected AS (\n  SELECT * FROM (VALUES\n    ('cron_health_check', INTERVAL '26 hours', 'health_check_ok'),\n    ('cron_blocklist_cleanup', INTERVAL '26 hours', 'blocklist_cleanup'),\n    ('cron_data_integrity', INTERVAL '26 hours', 'data_integrity_ok'),\n    ('cron_security_events_auto_resolve', INTERVAL '26 hours', 'security_events_auto_resolve'),\n    ('cron_access_log_purge', INTERVAL '26 hours', 'access_log_purge'),\n    ('cron_db_size_check', INTERVAL '26 hours', 'db_size_snapshot_ok'),\n    ('cron_backup_verify', INTERVAL '26 hours', 'backup_verify_ok'),\n    ('cron_stuck_executions', INTERVAL '90 minutes', 'stuck_executions_marked'),\n    ('cron_security_events_purge', INTERVAL '8 days', 'security_events_purge'),\n    ('cron_vacuum_analyze', INTERVAL '8 days', 'vacuum_analyze'),\n    ('cron_health_score_snapshot', INTERVAL '26 hours', NULL),\n    ('cron_workflow_audit', INTERVAL '26 hours', 'workflow_audit_ok'),\n    ('cron_normativa_freshness', INTERVAL '8 days', 'normativa_freshness_ok'),\n    ('cron_business_weekly_email', INTERVAL '8 days', NULL)\n  ) AS t(workflow_name, max_silence, action_name)\n)\nSELECT json_agg(t.* ORDER BY t.workflow_name) AS workflows FROM (\n  SELECT e.workflow_name, e.max_silence::text AS max_silence,\n    CASE WHEN e.action_name IS NULL THEN NULL ELSE (SELECT max(created_at) FROM activity_log WHERE action = e.action_name) END AS last_run_at,\n    CASE WHEN e.action_name IS NULL THEN NULL ELSE EXTRACT(EPOCH FROM (now() - (SELECT max(created_at) FROM activity_log WHERE action = e.action_name)))/3600 END AS hours_ago,\n    CASE\n      WHEN e.action_name IS NULL THEN 'no_log_action'\n      WHEN (SELECT max(created_at) FROM activity_log WHERE action = e.action_name) IS NULL THEN 'never_run'\n      WHEN (SELECT max(created_at) FROM activity_log WHERE action = e.action_name) < now() - e.max_silence THEN 'stale'\n      ELSE 'ok'\n    END AS status\n  FROM expected e\n) t;",
+        "options": {}
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } }
+    },
+    {
+      "id": "wf-03",
+      "name": "Build HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-220, 300],
+      "parameters": {
+        "jsCode": "const wfs = $input.first().json.workflows || [];\nconst statusBadge = s => {\n  if (s === 'ok') return '<span style=\"background:#10b981;color:white;padding:1px 8px;border-radius:3px;font-size:10px\">OK</span>';\n  if (s === 'never_run') return '<span style=\"background:#3b82f6;color:white;padding:1px 8px;border-radius:3px;font-size:10px\">NEVER</span>';\n  if (s === 'no_log_action') return '<span style=\"background:#6b7280;color:white;padding:1px 8px;border-radius:3px;font-size:10px\">NO_TRACK</span>';\n  return '<span style=\"background:#dc2626;color:white;padding:1px 8px;border-radius:3px;font-size:10px\">STALE</span>';\n};\nconst row = (cells) => '<tr>'+cells.map(c=>'<td style=\"padding:8px;border-bottom:1px solid #eee;font-size:12px\">'+c+'</td>').join('')+'</tr>';\nconst stale = wfs.filter(w => w.status === 'stale' || w.status === 'never_run');\nconst rows = wfs.map(w => row([\n  '<b>'+w.workflow_name+'</b>',\n  statusBadge(w.status),\n  w.last_run_at ? new Date(w.last_run_at).toISOString().slice(0,16).replace('T',' ') : '-',\n  w.hours_ago ? Math.round(Number(w.hours_ago)*10)/10+' h' : '-',\n  '<code>'+w.max_silence+'</code>'\n]));\nconst html = '<!DOCTYPE html><html lang=\"es\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>Workflows audit</title>' +\n'<style>body{font-family:-apple-system,Arial,sans-serif;max-width:1100px;margin:24px auto;padding:16px;color:#1f2937;background:#f3f4f6}h1{color:#0f172a;margin:0 0 4px}.meta{color:#64748b;font-size:13px}table{width:100%;background:white;border-collapse:collapse;border-radius:8px;overflow:hidden}thead{background:#1f2937;color:white}thead th{padding:10px 8px;text-align:left;font-size:12px}.alert{background:#fee2e2;color:#991b1b;padding:12px;border-radius:6px;margin:12px 0}</style>' +\n'</head><body>' +\n'<a href=\"/webhook/admin-index\" style=\"color:#2563eb;font-size:13px;text-decoration:none\">← Admin index</a>' +\n'<h1>Workflows audit</h1>' +\n'<div class=\"meta\">Manifest de 14 crons criticos. STALE = sin actividad en su ventana esperada. NEVER = nunca corrio. NO_TRACK = no loggea (mejorar).</div>' +\n(stale.length > 0 ? '<div class=\"alert\"><b>'+stale.length+' workflow(s) sin actividad reciente</b> — revisa si fueron desactivados.</div>' : '<div style=\"background:#d1fae5;color:#065f46;padding:12px;border-radius:6px;margin:12px 0\"><b>Todos los crons activos</b></div>') +\n'<table><thead><tr><th>Workflow</th><th>Status</th><th>Ultimo run</th><th>Hace</th><th>Max silence</th></tr></thead><tbody>'+rows.join('')+'</tbody></table>' +\n'<p style=\"color:#94a3b8;font-size:11px;margin-top:32px;text-align:center\">cron_workflow_audit hace este mismo check diario 07:30 y emite security_event si stale > 0.</p>' +\n'</body></html>';\nreturn [{ json: { html } }];"
+      }
+    },
+    {
+      "id": "wf-04",
+      "name": "Respond HTML",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [20, 300],
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.html }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              { "name": "Content-Type", "value": "text/html; charset=utf-8" },
+              { "name": "X-Frame-Options", "value": "DENY" },
+              { "name": "Cache-Control", "value": "no-store" }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook GET":  { "main": [[{ "node": "Audit",        "type": "main", "index": 0 }]] },
+    "Audit":        { "main": [[{ "node": "Build HTML",   "type": "main", "index": 0 }]] },
+    "Build HTML":   { "main": [[{ "node": "Respond HTML", "type": "main", "index": 0 }]] }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5"
+  }
+}

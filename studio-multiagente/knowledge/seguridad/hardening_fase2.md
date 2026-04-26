@@ -71,6 +71,27 @@ Snapshot al activar:
 - ✅ 0 stale tokens, 0 expiring soon.
 - ✅ 0 GDPR requests pending/near deadline.
 
+### Resolución (2026-04-26)
+
+Tras inspección, los 23 clientes eran **residuo de tests E2E** (`cliente.test@example.com` con sufijos v1-v5, `cliente.intake.v3@example.com`, etc.). Ninguno era real.
+
+**Cleanup ejecutado** (transacción única, vía `migration_008_TEMP` ad-hoc, ya borrado):
+- 22 clients test borrados (se conserva `60bbd8c6-cc30-480e-bea5-5cc26813480e` Maria Garcia Lopez como sandbox).
+- 26 projects + cascada (briefings, design_options, regulatory_tasks, safety_plans, project_intelligence, cost_estimates, proposals, trade_requests, permit_applications, invoices, anomalies_detected, consultation_queue, client_access_tokens, client_conversations, gdpr_requests, documents, access_log, materials, material_items, energy_assessments, agent_executions, approvals, activity_log).
+- Cascada dinámica: la transacción usa `information_schema` para descubrir todas las FKs hacia `projects` y `clients` y borrar en bucle, evitando enumerar tablas a mano (robusto frente a nuevas migraciones).
+- Consent backfill manual para sandbox: `INSERT INTO consent_records (client_id, consent_type, granted, granted_at, source) VALUES (sandbox, 'data_processing', true, now(), 'architect_intake')`.
+
+**Estado post-cleanup confirmado**:
+- `clients_remaining`: 1 (Maria Garcia, sandbox)
+- `projects_remaining`: 1
+- `consent_records_active`: 1
+- `clients_without_consent`: **0** ✅
+- Dashboard limpio.
+
+### Lección aprendida
+
+El CHECK constraint `consent_records_source_check` solo permite: `'architect_intake'|'client_signed_form'|'phone_recorded'|'email_confirmation'|'other'`. Para backfills manuales usar `'architect_intake'` o `'other'`.
+
 ## Cómo usar `util_security_check` desde otros workflows
 
 ```javascript

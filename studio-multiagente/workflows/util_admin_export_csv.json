@@ -1,0 +1,119 @@
+{
+  "name": "util_admin_export_csv",
+  "nodes": [
+    {
+      "id": "ec-01",
+      "name": "Webhook GET",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-700, 300],
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "admin-export",
+        "responseMode": "responseNode",
+        "authentication": "headerAuth"
+      },
+      "credentials": { "httpHeaderAuth": { "id": "Ba643jvuElTgMawr", "name": "Webhook API Key (entrante)" } },
+      "webhookId": "ec-trigger"
+    },
+    {
+      "id": "ec-02",
+      "name": "Pick Dataset",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-460, 300],
+      "parameters": {
+        "jsCode": "const q = ($input.first().json.query) || {};\nconst dataset = (q.dataset || 'projects').toLowerCase();\nconst valid = ['projects','invoices','tokens','aftercare','contracts','llm_calls'];\nif (!valid.includes(dataset)) return [{json:{valid:false,error:'dataset debe ser uno de: '+valid.join(', ')}}];\nreturn [{json:{valid:true,dataset}}];"
+      }
+    },
+    {
+      "id": "ec-03",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [-220, 300],
+      "parameters": {
+        "conditions": {
+          "options": { "version": 2, "leftValue": "", "caseSensitive": true, "typeValidation": "loose" },
+          "combinator": "and",
+          "conditions": [
+            { "id": "v1", "leftValue": "={{ $json.valid }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true", "singleValue": true } }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ec-04",
+      "name": "Load Data",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [20, 220],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT CASE $1 WHEN 'projects' THEN (SELECT json_agg(t.*) FROM (SELECT id, name, project_type, property_type, property_area_m2, location_city, current_phase, budget_target, status, started_at, completed_at, created_at FROM projects ORDER BY created_at DESC) t) WHEN 'invoices' THEN (SELECT json_agg(t.*) FROM (SELECT id, project_id, supplier_name, invoice_date, total_amount, status, paid_at, created_at FROM invoices ORDER BY created_at DESC) t) WHEN 'tokens' THEN (SELECT json_agg(t.*) FROM (SELECT id, project_id, client_id, purpose, expires_at, last_used_at, revoked_at, created_at FROM client_access_tokens ORDER BY created_at DESC) t) WHEN 'aftercare' THEN (SELECT json_agg(t.*) FROM (SELECT id, project_id, severity, status, category, reported_at, resolved_at, assigned_to FROM aftercare_incidents ORDER BY reported_at DESC) t) WHEN 'contracts' THEN (SELECT json_agg(t.*) FROM (SELECT id, project_id, contract_type, status, signed_at, expires_at, created_at FROM contracts ORDER BY created_at DESC) t) WHEN 'llm_calls' THEN (SELECT json_agg(t.*) FROM (SELECT occurred_at, agent_name, project_id, model, tokens_in, tokens_out, cost_usd, latency_ms, status FROM llm_calls WHERE occurred_at > now() - INTERVAL '30 days' ORDER BY occurred_at DESC) t) END AS rows;",
+        "options": { "queryReplacement": "={{ [ $json.dataset ] }}" }
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } }
+    },
+    {
+      "id": "ec-05",
+      "name": "Build CSV",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [260, 220],
+      "parameters": {
+        "jsCode": "const rows = $input.first().json.rows || [];\nconst dataset = $('Pick Dataset').first().json.dataset;\nif (rows.length === 0) return [{json:{csv:'dataset:'+dataset+',rows:0\\n',filename:dataset+'_empty_'+new Date().toISOString().slice(0,10)+'.csv'}}];\nconst headers = Object.keys(rows[0]);\nconst esc = v => { if (v===null||v===undefined) return ''; const s=String(v); return /[\",\\n]/.test(s) ? '\"'+s.replace(/\"/g,'\"\"')+'\"' : s; };\nconst lines=[headers.join(',')];\nfor (const r of rows) lines.push(headers.map(h=>esc(r[h])).join(','));\nreturn [{json:{csv:lines.join('\\n'),filename:dataset+'_'+new Date().toISOString().slice(0,10)+'.csv',rows_count:rows.length}}];"
+      }
+    },
+    {
+      "id": "ec-99",
+      "name": "Respond CSV",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [500, 220],
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.csv }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              { "name": "Content-Type", "value": "text/csv; charset=utf-8" },
+              { "name": "Content-Disposition", "value": "=attachment; filename=\"{{ $json.filename }}\"" },
+              { "name": "Cache-Control", "value": "no-store" }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "ec-07",
+      "name": "Respond Bad",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [20, 420],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({error: $json.error}) }}",
+        "options": { "responseCode": 400 }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook GET":  { "main": [[{ "node": "Pick Dataset", "type": "main", "index": 0 }]] },
+    "Pick Dataset": { "main": [[{ "node": "Valid?",       "type": "main", "index": 0 }]] },
+    "Valid?":       {
+      "main": [
+        [{ "node": "Load Data",   "type": "main", "index": 0 }],
+        [{ "node": "Respond Bad", "type": "main", "index": 0 }]
+      ]
+    },
+    "Load Data":   { "main": [[{ "node": "Build CSV",   "type": "main", "index": 0 }]] },
+    "Build CSV":   { "main": [[{ "node": "Respond CSV", "type": "main", "index": 0 }]] }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5"
+  }
+}

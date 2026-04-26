@@ -33,6 +33,8 @@
 | `GET /webhook/admin-notes-list?project_id=<uuid>` | `util_admin_notes_list` (`yL2a8zawMoQrZtRH`) | Header X-API-Key | Listar notas del estudio (filtra por proyecto si se pasa). Cierra ciclo notes. |
 | `GET /webhook/admin-llm-stats` | `util_admin_llm_stats_html` (`QlGwyyV9S4AuVtln`) | Header X-API-Key | Dashboard HTML de costes LLM 24h/7d/30d, por agente y modelo, banner si hay `unknown_agent` en 24h |
 | `GET /webhook/admin-pipeline-metrics` | `util_admin_pipeline_metrics_html` (`Zw6iaYTwznmgkeuL`) | Header X-API-Key | Dashboard ejecutivo: distribución por fase con barras, totales, agentes 7d, proyectos estancados >14d, recientes completados |
+| `GET /webhook/admin-trades-summary` | `util_admin_trades_summary_html` (`1CHP5KuDWNGqWvi9`) | Header X-API-Key | Dashboard agregado por gremio: response/accept rate, top 15 suppliers, solicitudes sin respuesta >14d |
+| `GET /webhook/qc-form?qc_id=<uuid>` | `qc_public_form` (`Pqod9AyvG0opCrLU`) | Header X-API-Key | Form HTML responsive móvil para marcar pass/fail/skip + comentario en items del qc_check (autosave via fetch al qc-complete existente) |
 
 ### Endpoints públicos (con security_check integrado)
 
@@ -83,6 +85,7 @@
 | `0 8 * * 1` (semanal Lun 08:00) | `cron_business_weekly_email` (`J09y2O7LWrWoTn4B`) | Digest semanal del estudio (KPIs business + score) |
 | `0 11 * * *` (diario 11:00) | `cron_proposal_response_followup` (`YHTfBfLeaSFD7Vma`) | Email a Damián si propuestas sin respuesta cliente >7d |
 | `30 9 * * *` (diario 09:30) | `cron_unknown_agent_alert` (`3fNPnWuFjjcA7pBG`) | Vigila regresión del bug A2: alerta crítica si hay llm_calls con `agent_name IN ('unknown_agent','unknown','')` en últimas 24h |
+| `0 10 * * *` (diario 10:00) | `cron_collab_review` (`sJpNiWYCIlCvqB5i`) | Vigila colaboradores: deadline vencido + delivered>7d sin approved + invited>5d sin respuesta |
 
 ## Funciones SQL (PostgreSQL)
 

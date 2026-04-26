@@ -1,0 +1,63 @@
+{
+  "name": "agent_normativa_refresh",
+  "_n8n_id": "0Cyeaa85uLS7c8EE",
+  "_note": "Stub sincronizado 2026-04-26 (bloque 14). Para version completa: mcp__n8n__n8n_get_workflow id=0Cyeaa85uLS7c8EE mode=full",
+  "_purpose": "Cache warmer manual de normativa: webhook que recorre normativa_knowledge.sources y para cada uno fetcha contenido oficial via Jina Reader, lo procesa con LLM (extrae rules), calcula content_hash djb2 y lo compara con el anterior. Si hay cambios, marca regulatory_tasks de proyectos activos como requires_review. Email de resumen al final con sources changed + tasks marcados.",
+  "_triggers": "POST /webhook/normativa-refresh (manual, X-API-Key)",
+  "_loop_pattern": "SplitInBatches output[1] = procesar source -> Fetch -> LLM -> Parse Rules -> Compute Hash -> Read Previous Hash -> Attach Old Hash -> Delete Old Records -> Insert Knowledge Row (con content_hash) -> Aggregate Back -> SplitInBatches | output[0] = todos terminados -> Collect Changes -> Any Changes? -> Mark Tasks Requires Review -> Build Summary Email -> Send Summary Email",
+  "_change_detection": "djb2 hash sobre el content de cada normativa_knowledge row. Si hash != prev_hash y prev_hash IS NOT NULL -> changed. Marca regulatory_tasks WHERE status IN ('detected','confirmed') AND project_id en proyectos activos.",
+  "_persists_to": "normativa_knowledge (con content_hash), regulatory_tasks.status (cambia a requires_review en cascada)",
+  "nodes": [
+    { "id": "nr-0001", "name": "Webhook",                     "type": "n8n-nodes-base.webhook",          "position": [250, 300] },
+    { "id": "nr-0002", "name": "Respond Started",             "type": "n8n-nodes-base.respondToWebhook", "position": [500, 300] },
+    { "id": "296fad47-253f-442a-ba69-d4237fa529bb", "name": "Load Architect Email", "type": "n8n-nodes-base.postgres", "position": [600, 300] },
+    { "id": "nr-0003", "name": "Load Sources",                "type": "n8n-nodes-base.postgres",         "position": [750, 300] },
+    { "id": "nr-0004", "name": "Split In Batches",            "type": "n8n-nodes-base.splitInBatches",   "position": [1000, 300] },
+    { "id": "nr-0005", "name": "Fetch Content",               "type": "n8n-nodes-base.httpRequest",      "position": [1250, 300] },
+    { "id": "nr-0006", "name": "Prepare LLM Prompt",          "type": "n8n-nodes-base.code",             "position": [1500, 300] },
+    { "id": "nr-0007", "name": "Call LLM",                    "type": "n8n-nodes-base.executeWorkflow",  "position": [1750, 300] },
+    { "id": "nr-0008", "name": "Parse Rules",                 "type": "n8n-nodes-base.code",             "position": [2000, 300] },
+    { "id": "nr-0014", "name": "Compute New Hash",            "type": "n8n-nodes-base.code",             "position": [2250, 300] },
+    { "id": "nr-0015", "name": "Read Previous Hash",          "type": "n8n-nodes-base.postgres",         "position": [2500, 300] },
+    { "id": "nr-0016", "name": "Attach Old Hash",             "type": "n8n-nodes-base.code",             "position": [2750, 300] },
+    { "id": "nr-0009", "name": "Delete Old Records",          "type": "n8n-nodes-base.postgres",         "position": [3000, 300] },
+    { "id": "nr-0010", "name": "Insert Knowledge Row",        "type": "n8n-nodes-base.postgres",         "position": [3250, 300] },
+    { "id": "nr-0011", "name": "Aggregate Back",              "type": "n8n-nodes-base.code",             "position": [3500, 300] },
+    { "id": "nr-0012", "name": "Collect Changes",             "type": "n8n-nodes-base.code",             "position": [1000, 500] },
+    { "id": "nr-0017", "name": "Any Changes?",                "type": "n8n-nodes-base.if",               "position": [1250, 500] },
+    { "id": "nr-0018", "name": "Mark Tasks Requires Review",  "type": "n8n-nodes-base.postgres",         "position": [1500, 400] },
+    { "id": "nr-0019", "name": "Build Summary Email",         "type": "n8n-nodes-base.code",             "position": [1750, 500] },
+    { "id": "nr-0013", "name": "Send Summary Email",          "type": "n8n-nodes-base.gmail",            "position": [2000, 500] }
+  ],
+  "connections": {
+    "Webhook":                    { "main": [[{ "node": "Respond Started",            "type": "main", "index": 0 }]] },
+    "Respond Started":            { "main": [[{ "node": "Load Architect Email",       "type": "main", "index": 0 }]] },
+    "Load Architect Email":       { "main": [[{ "node": "Load Sources",               "type": "main", "index": 0 }]] },
+    "Load Sources":               { "main": [[{ "node": "Split In Batches",           "type": "main", "index": 0 }]] },
+    "Split In Batches":           {
+      "main": [
+        [{ "node": "Fetch Content",   "type": "main", "index": 0 }],
+        [{ "node": "Collect Changes", "type": "main", "index": 0 }]
+      ]
+    },
+    "Fetch Content":              { "main": [[{ "node": "Prepare LLM Prompt",         "type": "main", "index": 0 }]] },
+    "Prepare LLM Prompt":         { "main": [[{ "node": "Call LLM",                   "type": "main", "index": 0 }]] },
+    "Call LLM":                   { "main": [[{ "node": "Parse Rules",                "type": "main", "index": 0 }]] },
+    "Parse Rules":                { "main": [[{ "node": "Compute New Hash",           "type": "main", "index": 0 }]] },
+    "Compute New Hash":           { "main": [[{ "node": "Read Previous Hash",         "type": "main", "index": 0 }]] },
+    "Read Previous Hash":         { "main": [[{ "node": "Attach Old Hash",            "type": "main", "index": 0 }]] },
+    "Attach Old Hash":            { "main": [[{ "node": "Delete Old Records",         "type": "main", "index": 0 }]] },
+    "Delete Old Records":         { "main": [[{ "node": "Insert Knowledge Row",       "type": "main", "index": 0 }]] },
+    "Insert Knowledge Row":       { "main": [[{ "node": "Aggregate Back",             "type": "main", "index": 0 }]] },
+    "Aggregate Back":             { "main": [[{ "node": "Split In Batches",           "type": "main", "index": 0 }]] },
+    "Collect Changes":            { "main": [[{ "node": "Any Changes?",               "type": "main", "index": 0 }]] },
+    "Any Changes?":               {
+      "main": [
+        [{ "node": "Mark Tasks Requires Review", "type": "main", "index": 0 }],
+        [{ "node": "Build Summary Email",        "type": "main", "index": 0 }]
+      ]
+    },
+    "Mark Tasks Requires Review": { "main": [[{ "node": "Build Summary Email",        "type": "main", "index": 0 }]] },
+    "Build Summary Email":        { "main": [[{ "node": "Send Summary Email",         "type": "main", "index": 0 }]] }
+  }
+}

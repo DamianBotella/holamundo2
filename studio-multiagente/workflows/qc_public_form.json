@@ -1,0 +1,20 @@
+{
+  "name": "qc_public_form",
+  "_n8n_id": "Pqod9AyvG0opCrLU",
+  "_purpose": "Form HTML responsive para que durante la visita a obra el arquitecto marque pass/fail/skip + comentario por cada item del qc_check, con autosave. GET /webhook/qc-form?qc_id=<uuid> con header x-api-key carga la checklist y devuelve un HTML mobile-first con tarjetas por item; cada cambio (boton clickado o textarea editado) dispara un POST AJAX al endpoint qc-complete (workflow JTPN78VZtz8i0ZwB existente).",
+  "_triggers": "GET /webhook/qc-form?qc_id=<uuid> (header x-api-key)",
+  "_companion": "qc_complete (JTPN78VZtz8i0ZwB) recibe los POST individuales por item",
+  "_design": "Mobile-first. Cada item: 3 botones grandes (OK/FALLA/NO_APLICA) + textarea + indicador estado actual + feedback de guardado. JS hace fetch al qc-complete con x-api-key (el navegador no expone header del request original, asi que el primer uso prompt() pide la API key una vez por sesion).",
+  "_security": "headerAuth con credential 'Webhook API Key (entrante)'. El form sirve solo si el header esta. Para guardar el JS reusa la API key (prompt una vez).",
+  "nodes": [
+    { "id": "qpf-01", "name": "Webhook GET",     "type": "n8n-nodes-base.webhook",          "position": [-700, 300] },
+    { "id": "qpf-02", "name": "Load QC Check",   "type": "n8n-nodes-base.postgres",         "position": [-460, 300], "_query_summary": "SELECT qc + project info por qc_id" },
+    { "id": "qpf-03", "name": "Build Form HTML", "type": "n8n-nodes-base.code",             "position": [-220, 300] },
+    { "id": "qpf-04", "name": "Respond HTML",    "type": "n8n-nodes-base.respondToWebhook", "position": [20, 300] }
+  ],
+  "connections": {
+    "Webhook GET":     { "main": [[{ "node": "Load QC Check",   "type": "main", "index": 0 }]] },
+    "Load QC Check":   { "main": [[{ "node": "Build Form HTML", "type": "main", "index": 0 }]] },
+    "Build Form HTML": { "main": [[{ "node": "Respond HTML",    "type": "main", "index": 0 }]] }
+  }
+}

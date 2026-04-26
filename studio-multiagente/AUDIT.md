@@ -6,9 +6,9 @@ Fecha: 2026-04-26
 
 | | Total |
 |---|---|
-| Workflows activos en n8n | **~128** (suma 1 más: util_admin_pipeline_metrics_html) |
-| JSONs locales en `workflows/` | **94+** |
-| En n8n SIN JSON local | **~28** (era 44, sincronizados 16 entre bloques 7-13) |
+| Workflows activos en n8n | **~131** (bloque 14 añade 3: cron_collab_review + qc_public_form + util_admin_trades_summary_html) |
+| JSONs locales en `workflows/` | **102+** |
+| En n8n SIN JSON local | **~21** (era 44, sincronizados 21 entre bloques 7-14) |
 | En local SIN n8n | **0** |
 
 ## Sincronizados en bloque 7-12
@@ -34,6 +34,16 @@ Fecha: 2026-04-26
 - `cron_post_phase_audits.json` (stub estructural — cron 30min auditorías post-fase)
 - `util_admin_llm_stats_html.json` (workflow NUEVO — dashboard de costes LLM con drill-down)
 
+**Bloque 14** (5 huérfanos + 3 workflows nuevos):
+- `cron_collab_review.json` (workflow NUEVO `sJpNiWYCIlCvqB5i` — cron 10:00 alerta deadline vencido + delivered>7d sin approved + invited>5d sin respuesta)
+- `qc_public_form.json` (workflow NUEVO `Pqod9AyvG0opCrLU` — form HTML responsive móvil para QC durante visita a obra)
+- `util_admin_trades_summary_html.json` (workflow NUEVO `1CHP5KuDWNGqWvi9` — dashboard agregado por gremio)
+- `agent_normativa_refresh.json` (stub — cache warmer normativa con djb2 hash detection)
+- `cron_anomaly_detect.json` (stub — cron 06:00 con 8 heurísticas SQL)
+- `cron_aftercare_review.json` (stub — cron 09:30 incidencias postventa pending)
+- `backup_decrypt.json` (stub — webhook puntual para descifrar backups del Drive)
+- `aftercare_public_form.json` (stub — endpoint público postventa con token cliente)
+
 **Bloque 13** (5 huérfanos sincronizados + 1 nuevo workflow + doc patrón stub):
 - `util_admin_pipeline_metrics_html.json` (workflow NUEVO — dashboard ejecutivo: cards 24h/7d/30d, distribucion de fases, agentes 7d, estancados, completados)
 - `agent_compliance_audit.json` (stub estructural — auditoría compliance, scorecard /100)
@@ -45,7 +55,7 @@ Fecha: 2026-04-26
 
 > **Stub estructural** = `_n8n_id` + `_purpose` + nodes (id+name+type+position) + connections completas + settings. Sin `parameters` detallados (jsCode, SQL queries largos, HTML emails). Para versión completa: `mcp__n8n__n8n_get_workflow id=<n8n_id> mode=full`.
 
-## ~28 workflows aún sin JSON local (era 44)
+## ~21 workflows aún sin JSON local (era 44)
 
 Estos son workflows que existen y están activos en n8n, pero no tienen su JSON sincronizado en `workflows/`. Razón típica: son piezas heredadas de sesiones anteriores donde el patrón "todo en JSON local" todavía no se aplicaba sistemáticamente.
 

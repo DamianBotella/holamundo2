@@ -1,0 +1,35 @@
+{
+  "name": "cron_aftercare_review",
+  "_n8n_id": "hcXJyJB8hqevVxW2",
+  "_note": "Stub sincronizado 2026-04-26 (bloque 14). Para version completa: mcp__n8n__n8n_get_workflow id=hcXJyJB8hqevVxW2 mode=full",
+  "_purpose": "Cron diario 09:30 + Manual Trigger. Find Pending consulta aftercare_issues con status='pending' o sin resolver, calcula urgency_score (severity + dias sin resolver + LOE period), si hay >=1 envia email al arquitecto con tabla priorizada.",
+  "_triggers": {
+    "Schedule Daily 9am": "cron 30 9 * * *",
+    "Manual Trigger": "POST /webhook/trigger-aftercare-review"
+  },
+  "nodes": [
+    { "id": "ac-01", "name": "Schedule Daily 9am", "type": "n8n-nodes-base.scheduleTrigger", "position": [-700, 300] },
+    { "id": "ac-02", "name": "Manual Trigger",     "type": "n8n-nodes-base.webhook",         "position": [-700, 500] },
+    { "id": "faec5fbf-8b1f-42ad-a5c8-b5d05c17e8fb", "name": "Load Architect Email", "type": "n8n-nodes-base.postgres", "position": [-580, 400] },
+    { "id": "ac-03", "name": "Find Pending",       "type": "n8n-nodes-base.postgres",        "position": [-460, 400] },
+    { "id": "ac-04", "name": "Has Pending?",       "type": "n8n-nodes-base.if",              "position": [-220, 400] },
+    { "id": "ac-05", "name": "Build Email",        "type": "n8n-nodes-base.code",            "position": [20, 320] },
+    { "id": "ac-06", "name": "Send Email",         "type": "n8n-nodes-base.gmail",           "position": [260, 320] },
+    { "id": "ac-07", "name": "Log",                "type": "n8n-nodes-base.postgres",        "position": [500, 320] },
+    { "id": "ac-08", "name": "No Pending",         "type": "n8n-nodes-base.noOp",            "position": [20, 480] }
+  ],
+  "connections": {
+    "Schedule Daily 9am":   { "main": [[{ "node": "Load Architect Email", "type": "main", "index": 0 }]] },
+    "Manual Trigger":       { "main": [[{ "node": "Load Architect Email", "type": "main", "index": 0 }]] },
+    "Load Architect Email": { "main": [[{ "node": "Find Pending",         "type": "main", "index": 0 }]] },
+    "Find Pending":         { "main": [[{ "node": "Has Pending?",         "type": "main", "index": 0 }]] },
+    "Has Pending?":         {
+      "main": [
+        [{ "node": "Build Email", "type": "main", "index": 0 }],
+        [{ "node": "No Pending",  "type": "main", "index": 0 }]
+      ]
+    },
+    "Build Email":          { "main": [[{ "node": "Send Email",           "type": "main", "index": 0 }]] },
+    "Send Email":           { "main": [[{ "node": "Log",                  "type": "main", "index": 0 }]] }
+  }
+}

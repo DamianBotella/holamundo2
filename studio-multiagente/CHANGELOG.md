@@ -2,7 +2,16 @@
 
 Histórico cronológico de hitos del sistema. Generado a partir de git log.
 
-## 2026-04-26 — Bloques 7-13: sync huérfanos + audits + meta-vigilancia LLM
+## 2026-04-26 — Bloques 7-14: sync huérfanos + audits + meta-vigilancia LLM + fase 2 collabs/QC
+
+### Bloque 14 (5 puntos): plan 5h
+- `cron_collab_review` (id `sJpNiWYCIlCvqB5i`, activo): Fase 2 de 3.20. Cron 10:00 alerta deadline vencido, delivered>7d sin aprobar, invited>5d sin respuesta. Email HTML agrupado. Aplicada lección bloque 12: ambas ramas escriben action='collab_review_clean' (status warning|success). Añadido a `cron_workflow_audit` (INTERVAL 26h).
+- `qc_public_form` (id `Pqod9AyvG0opCrLU`, activo): GET `/webhook/qc-form?qc_id=<uuid>` con header x-api-key. Form HTML responsive mobile-first con tarjetas por item (3 botones grandes pass/fail/skip + textarea + indicador estado). Autosave via fetch al endpoint qc-complete existente. La API key se prompt() una vez por sesión (el browser no expone headers del request original).
+- `util_admin_trades_summary_html` (id `1CHP5KuDWNGqWvi9`, activo): GET `/webhook/admin-trades-summary`. 6 cards de totales, tabla por gremio (response rate, accept rate, stale, avg amount, suppliers únicos), top 15 suppliers, solicitudes sin respuesta >14d coloreadas.
+- 5 stubs huérfanos sincronizados: `agent_normativa_refresh`, `cron_anomaly_detect`, `cron_aftercare_review`, `backup_decrypt`, `aftercare_public_form`.
+- AUDIT.md huérfanos 28→21. CHANGELOG + referencia_workflows actualizados (3 endpoints nuevos + 1 cron nuevo).
+
+
 
 ### Bloque 13 (5 puntos): plan 5h
 - `util_admin_pipeline_metrics_html` (id `Zw6iaYTwznmgkeuL`, activo): GET `/webhook/admin-pipeline-metrics`. Dashboard ejecutivo con 4 cards (total, activos, completados, tiempo medio), distribución de fases con barras visuales, actividad de agentes 7d, proyectos estancados >14d, últimos completados.

@@ -1,0 +1,41 @@
+{
+  "name": "cron_anomaly_detect",
+  "_n8n_id": "RHrP8BowouYVCKjz",
+  "_note": "Stub sincronizado 2026-04-26 (bloque 14). Para version completa: mcp__n8n__n8n_get_workflow id=RHrP8BowouYVCKjz mode=full",
+  "_purpose": "Cron diario 06:00 + Manual Trigger. Detect Anomalies ejecuta funcion SQL con 8 heuristicas en CTEs encadenados (factura > 2x mediana del gremio, OCR low confidence, IVA inusual, presupuesto >40%, aftercare/permits stale, site_report regression, quote sin respuesta 14d). Devuelve filas insertadas en anomalies_detected con UNIQUE para idempotencia (no duplica). Si hay nuevas, email tabla coloreada por severity al arquitecto.",
+  "_triggers": {
+    "Schedule Daily 6am": "cron 0 6 * * *",
+    "Manual Trigger": "POST /webhook/trigger-anomaly-detect (test)"
+  },
+  "_persists_to": "anomalies_detected (UNIQUE constraint para no duplicar)",
+  "_companion_workflow": "anomaly_review (lk6KnCGUdwWlKD7i): para marcar reviewed/accepted/dismissed/escalated (no sincronizado todavia)",
+  "nodes": [
+    { "id": "ad-01", "name": "Schedule Daily 6am", "type": "n8n-nodes-base.scheduleTrigger", "position": [-700, 300] },
+    { "id": "ad-02", "name": "Manual Trigger",     "type": "n8n-nodes-base.webhook",         "position": [-700, 500] },
+    { "id": "1f8cee22-779d-497e-9fd4-525257458265", "name": "Load Architect Email", "type": "n8n-nodes-base.postgres", "position": [-580, 400] },
+    { "id": "ad-03", "name": "Detect Anomalies",   "type": "n8n-nodes-base.postgres",        "position": [-460, 400] },
+    { "id": "ad-04", "name": "Has New?",           "type": "n8n-nodes-base.if",              "position": [-220, 400] },
+    { "id": "ad-05", "name": "Load New Anomalies", "type": "n8n-nodes-base.postgres",        "position": [20, 320] },
+    { "id": "ad-06", "name": "Build Email",        "type": "n8n-nodes-base.code",            "position": [240, 320] },
+    { "id": "ad-07", "name": "Send Email",         "type": "n8n-nodes-base.gmail",           "position": [460, 320] },
+    { "id": "ad-08", "name": "Mark Sent",          "type": "n8n-nodes-base.postgres",        "position": [680, 320] },
+    { "id": "ad-09", "name": "Log",                "type": "n8n-nodes-base.postgres",        "position": [900, 320] },
+    { "id": "ad-10", "name": "No New",             "type": "n8n-nodes-base.noOp",            "position": [20, 480] }
+  ],
+  "connections": {
+    "Schedule Daily 6am":   { "main": [[{ "node": "Load Architect Email", "type": "main", "index": 0 }]] },
+    "Manual Trigger":       { "main": [[{ "node": "Load Architect Email", "type": "main", "index": 0 }]] },
+    "Load Architect Email": { "main": [[{ "node": "Detect Anomalies",     "type": "main", "index": 0 }]] },
+    "Detect Anomalies":     { "main": [[{ "node": "Has New?",             "type": "main", "index": 0 }]] },
+    "Has New?":             {
+      "main": [
+        [{ "node": "Load New Anomalies", "type": "main", "index": 0 }],
+        [{ "node": "No New",             "type": "main", "index": 0 }]
+      ]
+    },
+    "Load New Anomalies":   { "main": [[{ "node": "Build Email",          "type": "main", "index": 0 }]] },
+    "Build Email":          { "main": [[{ "node": "Send Email",           "type": "main", "index": 0 }]] },
+    "Send Email":           { "main": [[{ "node": "Mark Sent",            "type": "main", "index": 0 }]] },
+    "Mark Sent":            { "main": [[{ "node": "Log",                  "type": "main", "index": 0 }]] }
+  }
+}

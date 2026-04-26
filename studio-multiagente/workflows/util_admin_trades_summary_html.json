@@ -1,0 +1,19 @@
+{
+  "name": "util_admin_trades_summary_html",
+  "_n8n_id": "1CHP5KuDWNGqWvi9",
+  "_purpose": "Dashboard HTML agregado de gremios. GET /webhook/admin-trades-summary con header x-api-key. Cards de totales (total/30d/pending/quoted/accepted/rejected). Tabla por gremio (response rate, accept rate, stale, avg amount, suppliers unicos). Tabla top 15 suppliers (quotes, accepted, last contact). Tabla solicitudes sin respuesta >14d coloreadas por urgencia.",
+  "_triggers": "GET /webhook/admin-trades-summary (header x-api-key)",
+  "_data_source": "tabla trade_quotes (migration 013)",
+  "_complementa_a": "util_admin_pipeline_html (kanban) y util_admin_pipeline_metrics_html (proyectos por fase) — este es agregado por gremio.",
+  "nodes": [
+    { "id": "ats-01", "name": "Webhook GET",        "type": "n8n-nodes-base.webhook",          "position": [-700, 300] },
+    { "id": "ats-02", "name": "Load Trades Stats",  "type": "n8n-nodes-base.postgres",         "position": [-460, 300], "_query_summary": "json_build_object con totals (counts por status), by_trade (group by trade_type con response/accept/stale rates), top_suppliers (15 con mas quotes), stale_pending (requested >14d)" },
+    { "id": "ats-03", "name": "Build HTML",         "type": "n8n-nodes-base.code",             "position": [-220, 300] },
+    { "id": "ats-04", "name": "Respond HTML",       "type": "n8n-nodes-base.respondToWebhook", "position": [20, 300] }
+  ],
+  "connections": {
+    "Webhook GET":       { "main": [[{ "node": "Load Trades Stats", "type": "main", "index": 0 }]] },
+    "Load Trades Stats": { "main": [[{ "node": "Build HTML",        "type": "main", "index": 0 }]] },
+    "Build HTML":        { "main": [[{ "node": "Respond HTML",      "type": "main", "index": 0 }]] }
+  }
+}

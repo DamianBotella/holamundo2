@@ -1,0 +1,38 @@
+{
+  "name": "backup_decrypt",
+  "_n8n_id": "gLWmekA1t6ljFptw",
+  "_note": "Stub sincronizado 2026-04-26 (bloque 14). Para version completa: mcp__n8n__n8n_get_workflow id=gLWmekA1t6ljFptw mode=full",
+  "_purpose": "Webhook puntual para descifrar y devolver un backup del Drive. POST /webhook/backup-decrypt {file_id, passphrase}; descarga el binary del Drive (archivo cifrado generado por cron_external_backup); Decrypt SQL ejecuta pgcrypto.pgp_sym_decrypt con la passphrase; devuelve el SQL original. Util para restauracion manual o auditoria de backups historicos.",
+  "_triggers": "POST /webhook/backup-decrypt (X-API-Key + body con file_id y passphrase)",
+  "_security": "passphrase NUNCA se almacena. Solo se usa in-flight. Si la pierdes el backup queda inutilizable -> guarda copia segura.",
+  "_chain_inverse": "cron_external_backup (Hv8RlkxGhCL6g0FQ) genera el backup cifrado; backup_decrypt es la operacion inversa.",
+  "nodes": [
+    { "id": "bd-01",      "name": "Webhook",             "type": "n8n-nodes-base.webhook",          "position": [-700, 300] },
+    { "id": "bd-02",      "name": "Validate",            "type": "n8n-nodes-base.code",             "position": [-460, 300] },
+    { "id": "bd-03",      "name": "Valid?",              "type": "n8n-nodes-base.if",               "position": [-220, 300] },
+    { "id": "bd-04",      "name": "Download from Drive", "type": "n8n-nodes-base.googleDrive",      "position": [20, 220] },
+    { "id": "bd-extract", "name": "Extract Binary",      "type": "n8n-nodes-base.code",             "position": [200, 220] },
+    { "id": "bd-05",      "name": "Decrypt SQL",         "type": "n8n-nodes-base.postgres",         "position": [240, 220] },
+    { "id": "bd-06",      "name": "Respond OK",          "type": "n8n-nodes-base.respondToWebhook", "position": [460, 220] },
+    { "id": "bd-07",      "name": "Drive Error",         "type": "n8n-nodes-base.respondToWebhook", "position": [240, 380] },
+    { "id": "bd-08",      "name": "Respond 400",         "type": "n8n-nodes-base.respondToWebhook", "position": [20, 460] }
+  ],
+  "connections": {
+    "Webhook":             { "main": [[{ "node": "Validate",            "type": "main", "index": 0 }]] },
+    "Validate":            { "main": [[{ "node": "Valid?",              "type": "main", "index": 0 }]] },
+    "Valid?":              {
+      "main": [
+        [{ "node": "Download from Drive", "type": "main", "index": 0 }],
+        [{ "node": "Respond 400",         "type": "main", "index": 0 }]
+      ]
+    },
+    "Download from Drive": {
+      "main": [
+        [{ "node": "Extract Binary", "type": "main", "index": 0 }],
+        [{ "node": "Drive Error",    "type": "main", "index": 0 }]
+      ]
+    },
+    "Extract Binary":      { "main": [[{ "node": "Decrypt SQL",         "type": "main", "index": 0 }]] },
+    "Decrypt SQL":         { "main": [[{ "node": "Respond OK",          "type": "main", "index": 0 }]] }
+  }
+}

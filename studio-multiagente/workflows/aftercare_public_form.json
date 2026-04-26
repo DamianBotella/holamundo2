@@ -1,0 +1,28 @@
+{
+  "name": "aftercare_public_form",
+  "_n8n_id": "WHtdrr3tJpei3IM8",
+  "_note": "Stub sincronizado 2026-04-26 (bloque 14). Para version completa: mcp__n8n__n8n_get_workflow id=WHtdrr3tJpei3IM8 mode=full",
+  "_purpose": "Endpoint publico HTML para que clientes reporten incidencias postventa (LOE). GET /webhook/aftercare-public-form?token=<token> -> valida client_access_tokens (purpose='aftercare'), si valido devuelve form HTML responsive con campos descripcion + foto + categoria; si no valido, pagina de error neutra. El form submitea via POST a aftercare_public_submit (workflow distinto x5j2VKbz9tfQyqzl).",
+  "_triggers": "GET /webhook/aftercare-public-form?token=<token>",
+  "_security": "Token validado en BD (table client_access_tokens, purpose='aftercare', not revoked, not expired). Page incluye HSTS + X-Frame DENY + nosniff + referrer-policy + permissions-policy headers (security_headers).",
+  "_chain": "GET aftercare_public_form -> render form -> submit via POST aftercare_public_submit -> creates aftercare_issue + Vision LLM classifies",
+  "nodes": [
+    { "id": "fm-01", "name": "Webhook GET",       "type": "n8n-nodes-base.webhook",          "position": [-700, 300] },
+    { "id": "fm-02", "name": "Validate Token",    "type": "n8n-nodes-base.postgres",         "position": [-460, 300] },
+    { "id": "fm-03", "name": "Token Valid?",      "type": "n8n-nodes-base.if",               "position": [-220, 300] },
+    { "id": "fm-04", "name": "Build Form HTML",   "type": "n8n-nodes-base.code",             "position": [20, 220] },
+    { "id": "fm-05", "name": "Respond OK",        "type": "n8n-nodes-base.respondToWebhook", "position": [240, 220] },
+    { "id": "fm-06", "name": "Respond Invalid",   "type": "n8n-nodes-base.respondToWebhook", "position": [20, 420] }
+  ],
+  "connections": {
+    "Webhook GET":     { "main": [[{ "node": "Validate Token",  "type": "main", "index": 0 }]] },
+    "Validate Token":  { "main": [[{ "node": "Token Valid?",    "type": "main", "index": 0 }]] },
+    "Token Valid?":    {
+      "main": [
+        [{ "node": "Build Form HTML", "type": "main", "index": 0 }],
+        [{ "node": "Respond Invalid", "type": "main", "index": 0 }]
+      ]
+    },
+    "Build Form HTML": { "main": [[{ "node": "Respond OK",      "type": "main", "index": 0 }]] }
+  }
+}

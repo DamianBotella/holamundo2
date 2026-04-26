@@ -1,0 +1,83 @@
+{
+  "name": "cron_workflow_audit",
+  "nodes": [
+    {
+      "id": "wa-01",
+      "name": "Daily 07:30",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-700, 300],
+      "parameters": { "rule": { "interval": [{ "field": "cronExpression", "expression": "30 7 * * *" }] } }
+    },
+    {
+      "id": "wa-02",
+      "name": "Audit Crons",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [-460, 300],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH expected AS (\n  SELECT * FROM (VALUES\n    ('cron_health_check', INTERVAL '26 hours', 'health_check_ok'),\n    ('cron_blocklist_cleanup', INTERVAL '26 hours', 'blocklist_cleanup'),\n    ('cron_data_integrity', INTERVAL '26 hours', 'data_integrity_ok'),\n    ('cron_security_events_auto_resolve', INTERVAL '26 hours', 'security_events_auto_resolve'),\n    ('cron_access_log_purge', INTERVAL '26 hours', 'access_log_purge'),\n    ('cron_db_size_check', INTERVAL '26 hours', 'db_size_snapshot_ok'),\n    ('cron_backup_verify', INTERVAL '26 hours', 'backup_verify_ok'),\n    ('cron_stuck_executions', INTERVAL '90 minutes', 'stuck_executions_marked'),\n    ('cron_security_events_purge', INTERVAL '8 days', 'security_events_purge'),\n    ('cron_vacuum_analyze', INTERVAL '8 days', 'vacuum_analyze')\n  ) AS t(workflow_name, max_silence, action_name)\n),\nlast_runs AS (\n  SELECT e.workflow_name, e.max_silence, e.action_name,\n         (SELECT max(created_at) FROM activity_log WHERE action = e.action_name) AS last_run_at\n    FROM expected e\n)\nSELECT json_build_object(\n  'audited_count', count(*),\n  'stale_count', count(*) FILTER (WHERE last_run_at IS NULL OR last_run_at < now() - max_silence),\n  'stale_workflows', (SELECT json_agg(t.*) FROM (SELECT workflow_name, last_run_at, max_silence::text FROM last_runs WHERE last_run_at IS NULL OR last_run_at < now() - max_silence) t),\n  'all_runs', (SELECT json_agg(t.* ORDER BY t.workflow_name) FROM (SELECT workflow_name, last_run_at, EXTRACT(EPOCH FROM (now() - last_run_at))/3600 AS hours_ago FROM last_runs) t)\n) AS report FROM last_runs;",
+        "options": {}
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } }
+    },
+    {
+      "id": "wa-03",
+      "name": "Has Stale?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [-220, 300],
+      "parameters": {
+        "conditions": {
+          "options": { "version": 2, "leftValue": "", "caseSensitive": true, "typeValidation": "loose" },
+          "combinator": "and",
+          "conditions": [
+            { "id": "s1", "leftValue": "={{ Number($json.report.stale_count) }}", "rightValue": 0, "operator": { "type": "number", "operation": "gt" } }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "wa-04",
+      "name": "Raise Event",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [20, 220],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT raise_security_event(\n  'unusual_access_pattern'::text,\n  'high'::text,\n  'cron'::text, '/cron_workflow_audit'::text, 'workflow_audit'::text, NULL::uuid,\n  $1::int || ' workflows criticos sin actividad reciente. Probablemente desactivados o fallando silenciosamente.',\n  $2::jsonb\n) AS event_id;",
+        "options": { "queryReplacement": "={{ [ $json.report.stale_count, JSON.stringify($json.report.stale_workflows) ] }}" }
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } }
+    },
+    {
+      "id": "wa-05",
+      "name": "Log OK",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [20, 380],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (action, agent_name, details) VALUES ('workflow_audit_ok', 'cron_workflow_audit', $1::jsonb);",
+        "options": { "queryReplacement": "={{ [ JSON.stringify($json.report) ] }}" }
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } }
+    }
+  ],
+  "connections": {
+    "Daily 07:30":  { "main": [[{ "node": "Audit Crons", "type": "main", "index": 0 }]] },
+    "Audit Crons":  { "main": [[{ "node": "Has Stale?",  "type": "main", "index": 0 }]] },
+    "Has Stale?":   {
+      "main": [
+        [{ "node": "Raise Event", "type": "main", "index": 0 }],
+        [{ "node": "Log OK",      "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5"
+  }
+}

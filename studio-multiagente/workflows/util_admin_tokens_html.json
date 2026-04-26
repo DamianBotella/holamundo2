@@ -1,0 +1,73 @@
+{
+  "name": "util_admin_tokens_html",
+  "nodes": [
+    {
+      "id": "tk-01",
+      "name": "Webhook GET",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-700, 300],
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "admin-tokens",
+        "responseMode": "responseNode",
+        "authentication": "headerAuth"
+      },
+      "credentials": { "httpHeaderAuth": { "id": "Ba643jvuElTgMawr", "name": "Webhook API Key (entrante)" } },
+      "webhookId": "tk-trigger"
+    },
+    {
+      "id": "tk-02",
+      "name": "Load Tokens",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [-460, 300],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT json_build_object(\n  'totals', json_build_object(\n    'active', (SELECT count(*) FROM client_access_tokens WHERE revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())),\n    'revoked', (SELECT count(*) FROM client_access_tokens WHERE revoked_at IS NOT NULL),\n    'expired', (SELECT count(*) FROM client_access_tokens WHERE revoked_at IS NULL AND expires_at IS NOT NULL AND expires_at <= now()),\n    'never_used', (SELECT count(*) FROM client_access_tokens WHERE revoked_at IS NULL AND last_used_at IS NULL),\n    'expiring_7d', (SELECT count(*) FROM client_access_tokens WHERE revoked_at IS NULL AND expires_at BETWEEN now() AND now() + INTERVAL '7 days')\n  ),\n  'by_purpose', (SELECT json_object_agg(purpose, n) FROM (SELECT purpose, count(*) AS n FROM client_access_tokens WHERE revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now()) GROUP BY purpose) t),\n  'recent', (SELECT json_agg(t.* ORDER BY t.created_at DESC) FROM (\n    SELECT cat.id, cat.purpose, cat.expires_at, cat.last_used_at, cat.revoked_at, cat.created_at,\n           p.name AS project_name, c.name AS client_name\n      FROM client_access_tokens cat\n      LEFT JOIN projects p ON p.id = cat.project_id\n      LEFT JOIN clients  c ON c.id = cat.client_id\n     ORDER BY cat.created_at DESC\n     LIMIT 30\n  ) t)\n) AS report;",
+        "options": {}
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } }
+    },
+    {
+      "id": "tk-03",
+      "name": "Build HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-220, 300],
+      "parameters": {
+        "jsCode": "const r = $input.first().json.report || {};\nconst t = r.totals || {};\nconst byPurpose = r.by_purpose || {};\nconst recent = r.recent || [];\nconst card = (label, value, color) => '<div style=\"background:'+(color||'#f9fafb')+';padding:12px;border-radius:6px;flex:1;min-width:130px\"><div style=\"font-size:10px;color:#6b7280;text-transform:uppercase\">'+label+'</div><div style=\"font-size:22px;font-weight:bold;color:#1f2937;margin-top:4px\">'+(value!=null?value:'-')+'</div></div>';\nconst row = (cells) => '<tr>'+cells.map(c=>'<td style=\"padding:6px 8px;border-bottom:1px solid #eee;font-size:12px\">'+c+'</td>').join('')+'</tr>';\nconst stateOf = tk => {\n  if (tk.revoked_at) return '<span style=\"background:#6b7280;color:white;padding:1px 6px;border-radius:3px;font-size:10px\">REVOKED</span>';\n  if (tk.expires_at && new Date(tk.expires_at) < new Date()) return '<span style=\"background:#ea580c;color:white;padding:1px 6px;border-radius:3px;font-size:10px\">EXPIRED</span>';\n  if (!tk.last_used_at) return '<span style=\"background:#3b82f6;color:white;padding:1px 6px;border-radius:3px;font-size:10px\">UNUSED</span>';\n  return '<span style=\"background:#10b981;color:white;padding:1px 6px;border-radius:3px;font-size:10px\">ACTIVE</span>';\n};\nconst recentRows = recent.length>0 ? recent.map(tk=>row([\n  stateOf(tk),\n  '<code>'+tk.purpose+'</code>',\n  tk.project_name||'-',\n  tk.client_name||'-',\n  tk.expires_at ? new Date(tk.expires_at).toISOString().slice(0,10) : '-',\n  tk.last_used_at ? new Date(tk.last_used_at).toISOString().slice(0,16).replace('T',' ') : '<i style=\"color:#9ca3af\">nunca</i>',\n  new Date(tk.created_at).toISOString().slice(0,10)\n])).join('') : row(['<i>Sin tokens</i>','','','','','','']);\nconst purposeChips = Object.entries(byPurpose).map(([k,v])=>'<span style=\"background:#e0e7ff;color:#3730a3;padding:3px 10px;border-radius:12px;font-size:12px;margin:2px;display:inline-block\">'+k+': <b>'+v+'</b></span>').join('') || '<i style=\"color:#6b7280\">sin tokens activos</i>';\nconst html = '<!DOCTYPE html><html lang=\"es\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>ArquitAI Tokens</title>' +\n'<style>body{font-family:-apple-system,Arial,sans-serif;max-width:1100px;margin:24px auto;padding:16px;color:#1f2937;background:#f3f4f6}h1{color:#0f172a;margin:0 0 4px}h2{color:#374151;font-size:15px;margin:20px 0 8px}.cards{display:flex;gap:10px;flex-wrap:wrap;margin:12px 0}table{width:100%;background:white;border-collapse:collapse}thead{background:#1f2937;color:white}thead th{padding:8px;text-align:left;font-size:11px}.meta{color:#64748b;font-size:13px}</style>' +\n'</head><body>' +\n'<a href=\"/webhook/admin-index\" style=\"color:#2563eb;font-size:13px;text-decoration:none\">← Admin index</a>' +\n'<h1>Tokens de cliente</h1>' +\n'<div class=\"meta\">' + new Date().toLocaleString('es-ES') + ' — ATENCION: vista solo lectura. Para crear/revocar usa client_token_create / client_token_revoke.</div>' +\n'<div class=\"cards\">' +\n  card('Activos', t.active||0, '#f0fdf4') +\n  card('Revocados', t.revoked||0) +\n  card('Expirados', t.expired||0, (t.expired||0)>0?'#fef3c7':null) +\n  card('Nunca usados', t.never_used||0) +\n  card('Expiran 7d', t.expiring_7d||0, (t.expiring_7d||0)>0?'#fef3c7':null) +\n'</div>' +\n'<h2>Activos por purpose</h2>' +\n'<div style=\"background:white;padding:12px;border-radius:6px\">'+purposeChips+'</div>' +\n'<h2>Tokens recientes (top 30)</h2>' +\n'<table><thead><tr><th>Estado</th><th>Purpose</th><th>Proyecto</th><th>Cliente</th><th>Expira</th><th>Ultimo uso</th><th>Creado</th></tr></thead><tbody>'+recentRows+'</tbody></table>' +\n'<p style=\"color:#94a3b8;font-size:11px;margin-top:32px;text-align:center\">Vista read-only. Datos de la tabla client_access_tokens.</p>' +\n'</body></html>';\nreturn [{ json: { html } }];"
+      }
+    },
+    {
+      "id": "tk-04",
+      "name": "Respond HTML",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [20, 300],
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.html }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              { "name": "Content-Type", "value": "text/html; charset=utf-8" },
+              { "name": "X-Frame-Options", "value": "DENY" },
+              { "name": "Cache-Control", "value": "no-store" }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook GET": { "main": [[{ "node": "Load Tokens", "type": "main", "index": 0 }]] },
+    "Load Tokens": { "main": [[{ "node": "Build HTML",  "type": "main", "index": 0 }]] },
+    "Build HTML":  { "main": [[{ "node": "Respond HTML", "type": "main", "index": 0 }]] }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5"
+  }
+}

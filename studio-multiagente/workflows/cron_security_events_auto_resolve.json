@@ -1,0 +1,80 @@
+{
+  "name": "cron_security_events_auto_resolve",
+  "nodes": [
+    {
+      "id": "ar-01",
+      "name": "Daily 02:30",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-700, 300],
+      "parameters": {
+        "rule": { "interval": [{ "field": "cronExpression", "expression": "30 2 * * *" }] }
+      }
+    },
+    {
+      "id": "ar-02",
+      "name": "Auto-Resolve",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [-460, 300],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH res AS (\n  UPDATE security_events\n     SET resolved          = true,\n         resolved_at       = now(),\n         resolved_by       = 'cron_auto_resolve',\n         resolution_notes  = 'Auto-resuelto por antiguedad (>90 dias). Si era critico real ya habria sido tratado manualmente.'\n   WHERE resolved = false\n     AND occurred_at < now() - INTERVAL '90 days'\n     AND severity IN ('info','low','medium','high')\n  RETURNING id, event_type, severity\n)\nSELECT json_build_object(\n  'rows_resolved', count(*),\n  'by_severity',   (SELECT json_object_agg(severity, c) FROM (SELECT severity, count(*) AS c FROM res GROUP BY severity) t),\n  'by_event_type', (SELECT json_object_agg(event_type, c) FROM (SELECT event_type, count(*) AS c FROM res GROUP BY event_type) t)\n) AS report FROM res;",
+        "options": {}
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } }
+    },
+    {
+      "id": "ar-03",
+      "name": "Anything Resolved?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [-220, 300],
+      "parameters": {
+        "conditions": {
+          "options": { "version": 2, "leftValue": "", "caseSensitive": true, "typeValidation": "loose" },
+          "combinator": "and",
+          "conditions": [
+            { "id": "r1", "leftValue": "={{ Number($json.report.rows_resolved) }}", "rightValue": 0, "operator": { "type": "number", "operation": "gt" } }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ar-04",
+      "name": "Log Activity",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [20, 220],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (action, agent_name, details) VALUES ('security_events_auto_resolve', 'cron_security_events_auto_resolve', $1::jsonb);",
+        "options": { "queryReplacement": "={{ [ JSON.stringify($json.report) ] }}" }
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } }
+    },
+    {
+      "id": "ar-05",
+      "name": "No-op",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [20, 380],
+      "parameters": {}
+    }
+  ],
+  "connections": {
+    "Daily 02:30":         { "main": [[{ "node": "Auto-Resolve",        "type": "main", "index": 0 }]] },
+    "Auto-Resolve":        { "main": [[{ "node": "Anything Resolved?",  "type": "main", "index": 0 }]] },
+    "Anything Resolved?":  {
+      "main": [
+        [{ "node": "Log Activity", "type": "main", "index": 0 }],
+        [{ "node": "No-op",        "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5"
+  }
+}

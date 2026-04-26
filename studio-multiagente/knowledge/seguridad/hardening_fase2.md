@@ -7,6 +7,10 @@ Sec 3.14 ArquitAI passing de "parcial" a "completo MVP" con esta sesión.
 **Migraciones aplicadas**:
 - `029_security_hardening.sql`: tablas `access_log`, `security_events`, `rate_limits` + funciones `check_rate_limit()`, `log_access()`, `raise_security_event()` + vista `security_dashboard`.
 - `030_rls_template.sql`: tabla `tenants` (1 tenant Damian) + columnas `tenant_id` en projects/clients/collaborators + función `current_tenant_id()` lista para activar RLS.
+- `031_pii_encryption_phase2.sql`: columnas `_enc bytea` paralelas + triggers BEFORE INSERT/UPDATE en `client_conversations` y `gdpr_requests`.
+- `032_gdpr_view_uses_enc.sql`: vista `gdpr_client_data_view` lee `pii_decrypt(_enc)` + sección nueva `gdpr_requests`.
+- `033_ip_blocklist.sql`: tabla `ip_blocklist` + funciones `is_ip_blocked(ip)` / `ban_ip(ip, duration, reason, evidence_event_id)`.
+- `034_drop_pii_plain_columns.sql`: DROP triggers de sync + DROP COLUMN question, answer, details (PII en plain ya no existe físicamente).
 
 **Workflows nuevos** (todos activos):
 
@@ -14,9 +18,15 @@ Sec 3.14 ArquitAI passing de "parcial" a "completo MVP" con esta sesión.
 |---|---|---|---|
 | `util_security_check` | `5LEflgQnjSvgGAYK` | sub-workflow | invocable desde otros |
 | `cron_inactive_token_cleanup` | `LmnF0ePvXEzT2ZdP` | cron | diario 03:30 |
-| `cron_security_pentest_lite` | `9drH5gGPV9hweKp2` | cron | semanal Dom 04:00 |
+| `cron_security_pentest_lite` | `9drH5gGPV9hweKp2` | cron | semanal Dom 04:00 (14 tests) |
 | `cron_security_dashboard_alert` | `YSQHEhh0IRI93k7C` | cron | semanal Lun 08:30 |
-| `util_security_dashboard` | `k7sXYc50Ta1Y8NhN` | API endpoint | `GET /webhook/security-dashboard` |
+| `cron_security_events_auto_resolve` | `gfWt4Uq94TUK9gch` | cron | diario 02:30 (events >90d → resolved) |
+| `cron_blocklist_cleanup` | `EiAh32GInzjAfS1S` | cron | diario 04:00 (ip_blocklist >7d → delete) |
+| `cron_key_rotation_reminder` | `b7po76socKIE0WhZ` | cron | mensual día 1 09:00 |
+| `util_security_dashboard` | `k7sXYc50Ta1Y8NhN` | API JSON | `GET /webhook/security-dashboard` |
+| `util_security_dashboard_html` | `hhjRkb0aBnCIsHg7` | API HTML | `GET /webhook/security-dashboard-html` |
+| `util_hmac_verify` | `g4k5UkQgPryA9Riz` | sub-workflow | HMAC verify para webhooks externos |
+| `honeypot_trap` | `Gjsc6nxHY3KIlKj3` | webhooks | 9 paths trampa + auto-ban 24h tras 3+/10min |
 
 ## Capas implementadas
 

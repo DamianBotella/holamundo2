@@ -1,0 +1,266 @@
+{
+  "name": "cron_security_dashboard_alert",
+  "nodes": [
+    {
+      "id": "sd-01",
+      "name": "Schedule Lunes 08:30",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -700,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks",
+              "weeksInterval": 1,
+              "triggerAtDay": [
+                1
+              ],
+              "triggerAtHour": 8,
+              "triggerAtMinute": 30
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "sd-02",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -700,
+        500
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "trigger-security-dashboard",
+        "responseMode": "lastNode",
+        "authentication": "headerAuth"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "Ba643jvuElTgMawr",
+          "name": "Webhook API Key (entrante)"
+        }
+      },
+      "webhookId": "sd-manual"
+    },
+    {
+      "id": "sd-03",
+      "name": "Load Architect Email",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -460,
+        400
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT value FROM system_config WHERE key = 'architect_email'",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "sd-04",
+      "name": "Load Dashboard",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -220,
+        400
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT row_to_json(s) AS dashboard FROM security_dashboard s;\n",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "sd-05",
+      "name": "Load Recent Events",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        20,
+        400
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT json_agg(t.* ORDER BY t.occurred_at DESC) AS events FROM (\n  SELECT event_type, severity, source_ip, endpoint, description, occurred_at\n    FROM security_events\n   WHERE occurred_at > now() - INTERVAL '7 days'\n   ORDER BY CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END, occurred_at DESC\n   LIMIT 30\n) t;",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "id": "sd-06",
+      "name": "Build Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        400
+      ],
+      "parameters": {
+        "jsCode": "const dash = $('Load Dashboard').first().json.dashboard;\nconst events = $input.first().json.events || [];\nconst sevColor = { critical: '#e74c3c', high: '#e67e22', medium: '#f1c40f', low: '#3498db', info: '#7f8c8d' };\nconst eventRows = events.map(e => '<tr>' +\n  '<td><span style=\\\"background:' + (sevColor[e.severity] || '#95a5a6') + ';color:white;padding:3px 8px;border-radius:12px;font-size:11px\\\">' + (e.severity || '?').toUpperCase() + '</span></td>' +\n  '<td>' + e.event_type + '</td>' +\n  '<td>' + (e.endpoint || '—') + '</td>' +\n  '<td style=\\\"font-size:11px\\\">' + (e.source_ip || '—') + '</td>' +\n  '<td style=\\\"font-size:11px\\\">' + (e.description || '—') + '</td>' +\n  '<td style=\\\"font-size:10px;color:#7f8c8d\\\">' + (e.occurred_at ? e.occurred_at.substring(0,16) : '') + '</td>' +\n  '</tr>').join('');\nconst kpi = (label, val, danger) => '<tr><td style=\\\"padding:6px 12px\\\">' + label + '</td><td style=\\\"padding:6px 12px;text-align:right' + (danger ? ';background:#ffe0e0' : '') + '\\\"><b>' + (val !== null && val !== undefined ? val : '-') + '</b></td></tr>';\nconst html = `<div style=\\\"font-family:Arial,sans-serif;max-width:760px;margin:0 auto\\\">\n<h2 style=\\\"color:#2c3e50\\\">Security Dashboard — ArquitAI</h2>\n<p style=\\\"color:#7f8c8d\\\">Resumen semanal de eventos y estado de seguridad. Generado: ${new Date().toLocaleString('es-ES', {timeZone:'Europe/Madrid'})}</p>\n\n<h3>KPIs estado actual</h3>\n<table style=\\\"border-collapse:collapse;width:100%\\\">\n${kpi('Critical events sin resolver', dash.critical_unresolved, dash.critical_unresolved > 0)}\n${kpi('Medium events sin resolver', dash.medium_unresolved, dash.medium_unresolved > 5)}\n${kpi('Eventos ult. 24h', dash.events_last_24h)}\n${kpi('Auth failures 24h', dash.auth_failures_24h, dash.auth_failures_24h > 5)}\n${kpi('Rate limit hits 24h', dash.rate_limit_hits_24h, dash.rate_limit_hits_24h > 0)}\n${kpi('Injection attempts 24h', dash.injection_attempts_24h, dash.injection_attempts_24h > 0)}\n${kpi('Accesos denegados 24h', dash.denied_24h)}\n${kpi('IPs unicas 24h', dash.unique_ips_24h)}\n</table>\n\n<h3>Tokens y consents</h3>\n<table style=\\\"border-collapse:collapse;width:100%\\\">\n${kpi('Tokens activos', dash.active_tokens)}\n${kpi('Tokens stale (>60d sin uso)', dash.stale_tokens, dash.stale_tokens > 0)}\n${kpi('Tokens expiran en 7d', dash.expiring_soon, dash.expiring_soon > 0)}\n${kpi('Consents activos', dash.active_consents)}\n${kpi('Clientes sin consent registrado', dash.clients_without_consent, dash.clients_without_consent > 0)}\n</table>\n\n<h3>RGPD</h3>\n<table style=\\\"border-collapse:collapse;width:100%\\\">\n${kpi('Solicitudes pendientes', dash.gdpr_pending, dash.gdpr_pending > 0)}\n${kpi('Cerca de deadline 1 mes', dash.gdpr_near_deadline, dash.gdpr_near_deadline > 0)}\n</table>\n\n<h3>Higiene</h3>\n<table style=\\\"border-collapse:collapse;width:100%\\\">\n${kpi('Ultima rotacion de clave', dash.last_key_rotation || 'nunca')}\n${kpi('Ultimo pen-test', dash.last_pen_test || 'nunca')}\n</table>\n\n${eventRows ? `<h3>Eventos recientes 7d</h3><table border=\\\"1\\\" cellpadding=\\\"5\\\" style=\\\"border-collapse:collapse;font-size:12px;width:100%\\\"><thead><tr style=\\\"background:#f3f4f6\\\"><th>Sev</th><th>Tipo</th><th>Endpoint</th><th>IP</th><th>Descripcion</th><th>Cuando</th></tr></thead><tbody>${eventRows}</tbody></table>` : '<p style=\\\"color:#27ae60\\\">✅ Sin eventos de seguridad en la ultima semana.</p>'}\n\n<p style=\\\"font-size:11px;color:#95a5a6;margin-top:24px\\\">Endpoint API equivalente: <code>SELECT * FROM security_dashboard;</code></p>\n</div>`;\nconst totalAlerts = (dash.critical_unresolved || 0) + (dash.injection_attempts_24h || 0) + (dash.gdpr_near_deadline || 0) + (dash.stale_tokens || 0);\nreturn [{ json: { html_body: html, subject: 'ArquitAI Security — KPIs semanales' + (totalAlerts > 0 ? ' (' + totalAlerts + ' alertas)' : '') } }];"
+      }
+    },
+    {
+      "id": "sd-07",
+      "name": "Send Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        500,
+        400
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $('Load Architect Email').first().json.value }}",
+        "subject": "={{ $json.subject }}",
+        "emailType": "html",
+        "message": "={{ $json.html_body }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "cIma8ntTjZvIfU3H",
+          "name": "damian2botella"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "sd-08",
+      "name": "Log",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        740,
+        400
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, status, output_summary)\nVALUES (NULL, 'cron_security_dashboard_alert', 'send_security_kpis', 'success', $1)\nRETURNING id;",
+        "options": {
+          "queryReplacement": "={{ [ ('subject=' + $json.subject) ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Schedule Lunes 08:30": {
+      "main": [
+        [
+          {
+            "node": "Load Architect Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Load Architect Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Architect Email": {
+      "main": [
+        [
+          {
+            "node": "Load Dashboard",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Dashboard": {
+      "main": [
+        [
+          {
+            "node": "Load Recent Events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Recent Events": {
+      "main": [
+        [
+          {
+            "node": "Build Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Email": {
+      "main": [
+        [
+          {
+            "node": "Send Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Email": {
+      "main": [
+        [
+          {
+            "node": "Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  }
+}

@@ -1,0 +1,298 @@
+{
+  "name": "util_security_check",
+  "nodes": [
+    {
+      "id": "us-01",
+      "name": "Receive Request",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        -700,
+        300
+      ],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    },
+    {
+      "id": "us-02",
+      "name": "Defaults",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -460,
+        300
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "d1",
+              "name": "source_ip",
+              "value": "={{ $json.source_ip || 'unknown' }}",
+              "type": "string"
+            },
+            {
+              "id": "d2",
+              "name": "endpoint",
+              "value": "={{ $json.endpoint || 'unknown' }}",
+              "type": "string"
+            },
+            {
+              "id": "d3",
+              "name": "user_agent",
+              "value": "={{ $json.user_agent || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "d4",
+              "name": "max_per_minute",
+              "value": "={{ $json.max_per_minute || 30 }}",
+              "type": "number"
+            },
+            {
+              "id": "d5",
+              "name": "max_per_hour",
+              "value": "={{ $json.max_per_hour || 200 }}",
+              "type": "number"
+            },
+            {
+              "id": "d6",
+              "name": "agent_name",
+              "value": "={{ $json.agent_name || 'unknown' }}",
+              "type": "string"
+            },
+            {
+              "id": "d7",
+              "name": "payload_text",
+              "value": "={{ $json.payload_text || '' }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "us-03",
+      "name": "Rate Limit",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -220,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM check_rate_limit($1, $2, $3::int, $4::int);",
+        "options": {
+          "queryReplacement": "={{ [ $json.source_ip, $json.endpoint, $json.max_per_minute, $json.max_per_hour ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "us-04",
+      "name": "Detect Patterns",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        20,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const rate = $input.first().json;\nconst ctx = $('Defaults').first().json;\nconst payload = (ctx.payload_text || '').toString();\n\n// Patterns conocidos\nconst patterns = {\n  sql_injection: /\\b(UNION\\s+SELECT|DROP\\s+TABLE|--\\s*$|;\\s*DELETE|INSERT\\s+INTO\\s+pg_|';\\s*--|0x[0-9a-f]+|sleep\\s*\\(|pg_sleep)/i,\n  xss: /<script[\\s>]|javascript:|onerror\\s*=|onload\\s*=|<iframe[\\s>]|alert\\s*\\(/i,\n  path_traversal: /\\.\\.[\\\\/]|%2e%2e|\\/etc\\/passwd|\\\\\\\\\\.\\\\\\.[\\\\\\/]/i,\n  prompt_injection: /\\b(ignore\\s+(all\\s+)?(previous|above|prior)\\s+instructions?|disregard\\s+(all\\s+)?(previous|above)|forget\\s+everything|new\\s+instructions:|you\\s+are\\s+now|jailbreak|developer\\s+mode|reveal\\s+(your|the)\\s+(system\\s+)?prompt|override\\s+safety)\\b/i,\n  ssrf: /\\b(127\\.0\\.0\\.1|localhost|169\\.254|0\\.0\\.0\\.0|file:\\/\\/|gopher:\\/\\/)\\b/i,\n  command_injection: /(\\|\\s*[a-z]+|;\\s*(rm|cat|ls|wget|curl|nc|bash|sh)\\b|\\$\\([^)]+\\)|`[^`]+`)/i\n};\n\nconst detected = [];\nfor (const [name, re] of Object.entries(patterns)) {\n  if (re.test(payload)) detected.push(name);\n}\n\nconst rateOk = rate.allowed === true || rate.allowed === 't' || rate.allowed === 'true';\nconst allowed = rateOk && detected.length === 0;\n\nreturn [{ json: {\n  allowed: allowed,\n  rate_allowed: rateOk,\n  rate_reason: rate.reason,\n  current_minute: rate.current_minute,\n  current_hour: rate.current_hour,\n  patterns_detected: detected,\n  blocked_reason: !rateOk ? rate.reason : (detected.length > 0 ? 'pattern:' + detected.join(',') : null),\n  source_ip: ctx.source_ip,\n  endpoint: ctx.endpoint,\n  user_agent: ctx.user_agent,\n  agent_name: ctx.agent_name\n}}];"
+      }
+    },
+    {
+      "id": "us-05",
+      "name": "Should Raise Event?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        260,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "se1",
+              "leftValue": "={{ $json.allowed }}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "false",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "us-06",
+      "name": "Raise Security Event",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        500,
+        220
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT raise_security_event(\n  CASE\n    WHEN $1::text LIKE 'pattern:%sql_injection%' THEN 'sql_injection_attempt'\n    WHEN $1::text LIKE 'pattern:%xss%' THEN 'xss_attempt'\n    WHEN $1::text LIKE 'pattern:%prompt_injection%' THEN 'prompt_injection'\n    WHEN $1::text IN ('minute_exceeded','hour_exceeded') THEN 'rate_limit_hit'\n    ELSE 'suspicious_pattern'\n  END,\n  CASE\n    WHEN $1::text LIKE 'pattern:%sql_injection%' OR $1::text LIKE 'pattern:%path_traversal%' OR $1::text LIKE 'pattern:%command_injection%' THEN 'critical'\n    WHEN $1::text LIKE 'pattern:%xss%' OR $1::text LIKE 'pattern:%ssrf%' THEN 'high'\n    WHEN $1::text LIKE 'pattern:%prompt_injection%' THEN 'medium'\n    WHEN $1::text = 'minute_exceeded' THEN 'medium'\n    ELSE 'low'\n  END,\n  $2, $3, 'endpoint', NULL,\n  'Security check failed: ' || $1,\n  jsonb_build_object('user_agent', $4, 'agent_name', $5, 'minute', $6, 'hour', $7)\n) AS event_id;",
+        "options": {
+          "queryReplacement": "={{ [ ($json.blocked_reason || ''), ($json.source_ip || ''), ($json.endpoint || ''), ($json.user_agent || ''), ($json.agent_name || ''), $json.current_minute, $json.current_hour ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "us-07",
+      "name": "Return Result",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        740,
+        300
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "r1",
+              "name": "allowed",
+              "value": "={{ $('Detect Patterns').first().json.allowed }}",
+              "type": "boolean"
+            },
+            {
+              "id": "r2",
+              "name": "blocked_reason",
+              "value": "={{ $('Detect Patterns').first().json.blocked_reason || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "r3",
+              "name": "rate_minute",
+              "value": "={{ $('Detect Patterns').first().json.current_minute }}",
+              "type": "number"
+            },
+            {
+              "id": "r4",
+              "name": "rate_hour",
+              "value": "={{ $('Detect Patterns').first().json.current_hour }}",
+              "type": "number"
+            },
+            {
+              "id": "r5",
+              "name": "patterns_detected",
+              "value": "={{ JSON.stringify($('Detect Patterns').first().json.patterns_detected) }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Receive Request": {
+      "main": [
+        [
+          {
+            "node": "Defaults",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Defaults": {
+      "main": [
+        [
+          {
+            "node": "Rate Limit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rate Limit": {
+      "main": [
+        [
+          {
+            "node": "Detect Patterns",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Detect Patterns": {
+      "main": [
+        [
+          {
+            "node": "Should Raise Event?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Should Raise Event?": {
+      "main": [
+        [
+          {
+            "node": "Raise Security Event",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Raise Security Event": {
+      "main": [
+        [
+          {
+            "node": "Return Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  }
+}

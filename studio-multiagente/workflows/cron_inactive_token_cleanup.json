@@ -1,0 +1,102 @@
+{
+  "name": "cron_inactive_token_cleanup",
+  "nodes": [
+    {
+      "id": "tc-01",
+      "name": "Schedule Daily 03:30",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -700,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "daysInterval": 1,
+              "triggerAtHour": 3,
+              "triggerAtMinute": 30
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "tc-02",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -700,
+        500
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "trigger-token-cleanup",
+        "responseMode": "lastNode",
+        "authentication": "headerAuth"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "Ba643jvuElTgMawr",
+          "name": "Webhook API Key (entrante)"
+        }
+      },
+      "webhookId": "tc-manual"
+    },
+    {
+      "id": "tc-03",
+      "name": "Revoke Stale",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -460,
+        400
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH revoked AS (\n  UPDATE client_access_tokens\n     SET revoked_at = now(),\n         notes = COALESCE(notes,'') || ' [auto-revoked: inactive>60d]'\n   WHERE revoked_at IS NULL\n     AND (\n       (last_used_at IS NULL AND issued_at < now() - INTERVAL '60 days') OR\n       (last_used_at IS NOT NULL AND last_used_at < now() - INTERVAL '60 days')\n     )\n  RETURNING id, project_id, purpose, issued_at, last_used_at\n), expired AS (\n  UPDATE client_access_tokens\n     SET revoked_at = now(),\n         notes = COALESCE(notes,'') || ' [auto-revoked: expired]'\n   WHERE revoked_at IS NULL\n     AND expires_at IS NOT NULL\n     AND expires_at < now() - INTERVAL '7 days'\n  RETURNING id, project_id, purpose, expires_at\n), event AS (\n  INSERT INTO security_events (event_type, severity, source_ip, endpoint, resource_type, description, details)\n  SELECT 'token_revoked', 'info', 'cron', 'cron_inactive_token_cleanup', 'token', 'Auto-revocados ' || ((SELECT count(*) FROM revoked) + (SELECT count(*) FROM expired)) || ' tokens',\n         jsonb_build_object('inactive_revoked', (SELECT count(*) FROM revoked), 'expired_revoked', (SELECT count(*) FROM expired))\n  WHERE (SELECT count(*) FROM revoked) + (SELECT count(*) FROM expired) > 0\n  RETURNING id\n)\nSELECT json_build_object(\n  'inactive_count', (SELECT count(*) FROM revoked),\n  'expired_count', (SELECT count(*) FROM expired),\n  'event_logged', EXISTS(SELECT 1 FROM event)\n) AS report;",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "alwaysOutputData": true
+    }
+  ],
+  "connections": {
+    "Schedule Daily 03:30": {
+      "main": [
+        [
+          {
+            "node": "Revoke Stale",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Revoke Stale",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  }
+}

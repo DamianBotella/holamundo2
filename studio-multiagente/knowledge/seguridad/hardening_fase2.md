@@ -113,8 +113,8 @@ Después: `executeWorkflow → util_security_check`. Output: `{allowed: bool, bl
 
 ## Próximas iteraciones
 
-1. **Integrar `util_security_check` en endpoints públicos** (aftercare-public-submit, client-ask, gdpr-request, contract-signed sin auth, etc.). Hoy solo está disponible el sub-workflow.
-2. **Backfill `consent_records`** para los 23 clientes existentes (RGPD).
+1. ~~**Integrar `util_security_check` en endpoints públicos**~~ ✅ Hecho 2026-04-26: cuatro endpoints integrados (`/webhook/client-ask`, `/webhook/gdpr-request`, `/webhook/aftercare-submit`, `/webhook/contract-signed`). Patrón: `Build Security Payload → Run Security Check → Security OK?` antes del primer hit a DB. Si `allowed=false` → 429 con `blocked_reason`. Smoke-test verificado: prompt-injection en client-ask devuelve `{status:'blocked', reason:'pattern:prompt_injection'}`; XSS en gdpr-request devuelve `{status:'blocked', reason:'pattern:xss'}`; preguntas legítimas pasan. `aftercare-submit` y `contract-signed` quedan tras Header Auth previo (defensa en profundidad).
+2. ~~**Backfill `consent_records`** para los 23 clientes existentes~~ ✅ Hecho 2026-04-26 (cleanup de tests, ver sección "Resolución" arriba).
 3. **Cifrar `client_conversations.question/answer`** (puede contener PII del cliente).
 4. **Cifrar `gdpr_requests.details`** (datos sensibles del cliente).
 5. **Activar RLS multi-tenant** cuando haya un segundo estudio.

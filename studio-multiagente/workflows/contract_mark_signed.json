@@ -25,6 +25,94 @@
       "webhookId": "cs-trigger"
     },
     {
+      "id": "cs-sec1",
+      "name": "Build Security Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -700,
+        60
+      ],
+      "parameters": {
+        "jsCode": "const headers = $('Webhook').first().json.headers || {};\nconst body = $('Webhook').first().json.body || {};\nreturn [{ json: {\n  source_ip: headers['x-real-ip'] || (headers['x-forwarded-for'] || '').split(',')[0].trim() || 'unknown',\n  endpoint: '/webhook/contract-signed',\n  user_agent: headers['user-agent'] || '',\n  max_per_minute: 10,\n  max_per_hour: 100,\n  agent_name: 'contract_mark_signed',\n  payload_text: JSON.stringify(body)\n}}];"
+      }
+    },
+    {
+      "id": "cs-sec2",
+      "name": "Run Security Check",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        -460,
+        60
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "5LEflgQnjSvgGAYK",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "cs-sec3",
+      "name": "Security OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -220,
+        60
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "s1",
+              "leftValue": "={{ $json.allowed }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "cs-sec4",
+      "name": "Respond 429",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        20,
+        -60
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'blocked', reason: $json.blocked_reason || 'security_check_failed'}) }}",
+        "options": {
+          "responseCode": 429
+        }
+      }
+    },
+    {
       "id": "cs-02",
       "name": "Validate",
       "type": "n8n-nodes-base.code",
@@ -208,7 +296,7 @@
       "main": [
         [
           {
-            "node": "Validate",
+            "node": "Build Security Payload",
             "type": "main",
             "index": 0
           }
@@ -278,6 +366,46 @@
         [
           {
             "node": "Respond 200",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Security Payload": {
+      "main": [
+        [
+          {
+            "node": "Run Security Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Security Check": {
+      "main": [
+        [
+          {
+            "node": "Security OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Security OK?": {
+      "main": [
+        [
+          {
+            "node": "Validate",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 429",
             "type": "main",
             "index": 0
           }

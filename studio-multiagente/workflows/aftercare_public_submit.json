@@ -1,0 +1,244 @@
+{
+  "name": "aftercare_public_submit",
+  "nodes": [
+    {
+      "id": "ps-01",
+      "name": "Webhook POST",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-700, 300],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "aftercare-public-submit",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "webhookId": "27e16c29-62a1-40a9-9d83-57255aab742a"
+    },
+    {
+      "id": "ps-sec1",
+      "name": "Build Security Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-700, 60],
+      "parameters": {
+        "jsCode": "const headers = $('Webhook POST').first().json.headers || {};\nconst body = $('Webhook POST').first().json.body || {};\nreturn [{ json: {\n  source_ip: headers['x-real-ip'] || (headers['x-forwarded-for'] || '').split(',')[0].trim() || 'unknown',\n  endpoint: '/webhook/aftercare-submit',\n  user_agent: headers['user-agent'] || '',\n  max_per_minute: 5,\n  max_per_hour: 30,\n  agent_name: 'aftercare_public_submit',\n  payload_text: (body.description || '') + ' ' + (body.token || '') + ' ' + (body.title || '') + ' ' + (body.severity || '')\n}}];"
+      }
+    },
+    {
+      "id": "ps-sec2",
+      "name": "Run Security Check",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [-460, 60],
+      "parameters": {
+        "workflowId": { "__rl": true, "value": "5LEflgQnjSvgGAYK", "mode": "id" },
+        "workflowInputs": { "mappingMode": "autoMapInputData", "value": {}, "matchingColumns": [], "schema": [] },
+        "options": {}
+      }
+    },
+    {
+      "id": "ps-sec3",
+      "name": "Security OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [-220, 60],
+      "parameters": {
+        "conditions": {
+          "options": { "version": 2, "leftValue": "", "caseSensitive": true, "typeValidation": "loose" },
+          "combinator": "and",
+          "conditions": [
+            { "id": "s1", "leftValue": "={{ $json.allowed }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true", "singleValue": true } }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ps-sec4",
+      "name": "Respond 429",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [20, -60],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'blocked', reason: $json.blocked_reason || 'security_check_failed'}) }}",
+        "options": { "responseCode": 429 }
+      }
+    },
+    {
+      "id": "0112fbfe-36bd-4370-a3ec-b0dbda4e3a20",
+      "name": "Load Architect Email",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [-580, 300],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT value FROM system_config WHERE key = 'architect_email'",
+        "options": {}
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } }
+    },
+    {
+      "id": "ps-02",
+      "name": "Validate Token",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [-460, 300],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT v.project_id, v.token_id, v.valid, v.reason, p.client_id FROM validate_client_token($1, 'aftercare_submit') v LEFT JOIN projects p ON p.id = v.project_id LIMIT 1;",
+        "options": { "queryReplacement": "={{ [ ($('Webhook POST').first().json.body.token || '') ] }}" }
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "alwaysOutputData": true
+    },
+    {
+      "id": "ps-03",
+      "name": "Token Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [-220, 300],
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose", "version": 2 },
+          "combinator": "and",
+          "conditions": [
+            { "id": "v1", "leftValue": "={{ $json.valid }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true", "singleValue": true } }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ps-04",
+      "name": "Build Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [20, 220],
+      "parameters": {
+        "jsCode": "const tok = $input.first().json;\nconst body = ($('Webhook POST').first().json.body) || {};\nconst description = (body.description || '').toString().slice(0, 2000).trim();\nif (description.length < 10) {\n  return [{ json: { ok: false, error: 'description debe tener al menos 10 caracteres' } }];\n}\nconst photoUrls = body.photo_url && typeof body.photo_url === 'string' && body.photo_url.startsWith('http') ? [body.photo_url] : [];\nconst out = {\n  ok: true,\n  project_id: tok.project_id,\n  client_id: tok.client_id || null,\n  description: description,\n  photo_urls: photoUrls,\n  client_contact: (body.client_contact || '').toString().slice(0, 200) || null,\n  has_photo: photoUrls.length > 0\n};\nreturn [{ json: out }];"
+      }
+    },
+    {
+      "id": "ps-05",
+      "name": "Payload Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [240, 220],
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2 },
+          "combinator": "and",
+          "conditions": [
+            { "id": "p1", "leftValue": "={{ $json.ok }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true", "singleValue": true } }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ps-06",
+      "name": "Insert Incident",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [460, 140],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO aftercare_incidents (project_id, client_id, reporter, description, photo_urls, client_contact, status, severity)\nVALUES ($1::uuid, NULLIF($2,'')::uuid, 'cliente', $3, $4::text[], NULLIF($5,''), 'reported', 'medium')\nRETURNING id, status, severity;",
+        "options": {
+          "queryReplacement": "={{ [ $json.project_id, $json.client_id || '', $json.description, ('{' + ($json.photo_urls || []).map(u => '\"' + u.replace(/\"/g, '\\\\\"') + '\"').join(',') + '}'), $json.client_contact || '' ] }}"
+        }
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } }
+    },
+    {
+      "id": "ps-07",
+      "name": "Notify Damian",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [680, 140],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $('Load Architect Email').first().json.value }}",
+        "subject": "=Nueva incidencia post-entrega del cliente — ref {{ $json.id }}",
+        "emailType": "html",
+        "message": "=<div style=\"font-family:Arial,sans-serif;max-width:600px;margin:0 auto\"><h2 style=\"color:#2c3e50\">Cliente ha reportado una incidencia</h2><p><b>Descripción:</b><br>{{ $('Build Payload').first().json.description }}</p>{{ ($('Build Payload').first().json.photo_urls || []).length > 0 ? '<p><b>Foto:</b> <a href=\"' + $('Build Payload').first().json.photo_urls[0] + '\">ver</a></p>' : '<p style=\"color:#6b7280\">(El cliente no adjunto foto)</p>' }}<p><b>Contacto cliente:</b> {{ $('Build Payload').first().json.client_contact || '—' }}</p><hr><p>Para asignar gremio: POST /webhook/aftercare-assign con {incident_id: \"{{ $json.id }}\", assigned_to: \"...\"}</p><p style=\"font-size:11px;color:#6b7280\">Referencia: {{ $json.id }}</p></div>",
+        "options": { "appendAttribution": false }
+      },
+      "credentials": { "gmailOAuth2": { "id": "cIma8ntTjZvIfU3H", "name": "damian2botella" } },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "ps-08",
+      "name": "Respond 201",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [900, 140],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'ok', incident_id: $('Insert Incident').first().json.id}) }}",
+        "options": { "responseCode": 201 }
+      }
+    },
+    {
+      "id": "ps-09",
+      "name": "Respond 400",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [460, 320],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'error', error: $json.error}) }}",
+        "options": { "responseCode": 400 }
+      }
+    },
+    {
+      "id": "ps-10",
+      "name": "Respond 401",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [20, 460],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'error', error: 'Token no válido o expirado'}) }}",
+        "options": { "responseCode": 401 }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook POST": { "main": [[{ "node": "Build Security Payload", "type": "main", "index": 0 }]] },
+    "Build Security Payload": { "main": [[{ "node": "Run Security Check", "type": "main", "index": 0 }]] },
+    "Run Security Check": { "main": [[{ "node": "Security OK?", "type": "main", "index": 0 }]] },
+    "Security OK?": {
+      "main": [
+        [{ "node": "Load Architect Email", "type": "main", "index": 0 }],
+        [{ "node": "Respond 429", "type": "main", "index": 0 }]
+      ]
+    },
+    "Load Architect Email": { "main": [[{ "node": "Validate Token", "type": "main", "index": 0 }]] },
+    "Validate Token": { "main": [[{ "node": "Token Valid?", "type": "main", "index": 0 }]] },
+    "Token Valid?": {
+      "main": [
+        [{ "node": "Build Payload", "type": "main", "index": 0 }],
+        [{ "node": "Respond 401", "type": "main", "index": 0 }]
+      ]
+    },
+    "Build Payload": { "main": [[{ "node": "Payload Valid?", "type": "main", "index": 0 }]] },
+    "Payload Valid?": {
+      "main": [
+        [{ "node": "Insert Incident", "type": "main", "index": 0 }],
+        [{ "node": "Respond 400", "type": "main", "index": 0 }]
+      ]
+    },
+    "Insert Incident": { "main": [[{ "node": "Notify Damian", "type": "main", "index": 0 }]] },
+    "Notify Damian": { "main": [[{ "node": "Respond 201", "type": "main", "index": 0 }]] }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  }
+}

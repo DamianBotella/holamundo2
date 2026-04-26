@@ -122,6 +122,94 @@
       }
     },
     {
+      "id": "gd-sec1",
+      "name": "Build Security Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        20,
+        60
+      ],
+      "parameters": {
+        "jsCode": "const headers = $('Webhook').first().json.headers || {};\nconst body = $('Webhook').first().json.body || {};\nconst valid = $('Validate').first().json;\nreturn [{ json: {\n  source_ip: headers['x-real-ip'] || (headers['x-forwarded-for'] || '').split(',')[0].trim() || 'unknown',\n  endpoint: '/webhook/gdpr-request',\n  user_agent: headers['user-agent'] || '',\n  max_per_minute: 5,\n  max_per_hour: 20,\n  agent_name: 'gdpr_request',\n  payload_text: (valid.details || '') + ' ' + (valid.request_type || '') + ' ' + (body.token || '')\n}}];"
+      }
+    },
+    {
+      "id": "gd-sec2",
+      "name": "Run Security Check",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        260,
+        60
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "5LEflgQnjSvgGAYK",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "gd-sec3",
+      "name": "Security OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        500,
+        60
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "s1",
+              "leftValue": "={{ $json.allowed }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "gd-sec4",
+      "name": "Respond 429",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        740,
+        -60
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'blocked', reason: $json.blocked_reason || 'security_check_failed'}) }}",
+        "options": {
+          "responseCode": 429
+        }
+      }
+    },
+    {
       "id": "gd-06",
       "name": "Insert Request",
       "type": "n8n-nodes-base.postgres",
@@ -374,7 +462,7 @@
       "main": [
         [
           {
-            "node": "Validate Token",
+            "node": "Build Security Payload",
             "type": "main",
             "index": 0
           }
@@ -484,6 +572,46 @@
         [
           {
             "node": "Respond 201",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Security Payload": {
+      "main": [
+        [
+          {
+            "node": "Run Security Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Security Check": {
+      "main": [
+        [
+          {
+            "node": "Security OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Security OK?": {
+      "main": [
+        [
+          {
+            "node": "Validate Token",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 429",
             "type": "main",
             "index": 0
           }

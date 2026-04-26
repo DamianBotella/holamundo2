@@ -1,0 +1,387 @@
+{
+  "name": "util_interop_ifc",
+  "nodes": [
+    {
+      "id": "if-01",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -700,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "export-ifc",
+        "responseMode": "responseNode",
+        "authentication": "headerAuth"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "Ba643jvuElTgMawr",
+          "name": "Webhook API Key (entrante)"
+        }
+      },
+      "webhookId": "if-trigger"
+    },
+    {
+      "id": "if-02",
+      "name": "Validate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -460,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const body = ($('Webhook').first().json.body) || {};\nif (!body.project_id) return [{ json: { valid:false, error:'project_id obligatorio' } }];\nreturn [{ json: { valid:true, project_id: body.project_id } }];"
+      }
+    },
+    {
+      "id": "if-03",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -220,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "v1",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "if-04",
+      "name": "Load Project",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        20,
+        220
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT json_build_object(\n  'project_id', p.id::text,\n  'project_name', p.name,\n  'project_type', p.project_type,\n  'property_area_m2', p.property_area_m2,\n  'location_address', p.location_address,\n  'location_city', p.location_city,\n  'location_province', p.location_province,\n  'design_option', (SELECT json_build_object('title', d.title, 'rooms_layout', d.rooms_layout) FROM design_options d WHERE d.project_id = p.id AND d.is_selected = true LIMIT 1),\n  'briefing', (SELECT json_build_object('rooms_affected', b.rooms_affected) FROM briefings b WHERE b.project_id = p.id ORDER BY b.created_at DESC LIMIT 1),\n  'materials', (SELECT json_agg(json_build_object('category', m.category, 'name', m.name, 'specification', m.specification, 'room', m.room)) FROM materials m WHERE m.project_id = p.id AND m.status != 'rejected')\n) AS data\nFROM projects p WHERE p.id = $1::uuid;",
+        "options": {
+          "queryReplacement": "={{ [ $json.project_id ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "id": "if-05",
+      "name": "Has Project?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        260,
+        220
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "h1",
+              "leftValue": "={{ $json.data?.project_id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "if-06",
+      "name": "Build IFC",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        500,
+        140
+      ],
+      "parameters": {
+        "jsCode": "// Generador IFC4 minimalista. NO es un IFC topologico completo;\n// es una representacion estructural de proyecto + site + building + storey + spaces + materials.\n// Suficiente para que Revit/ArchiCAD reconozcan el proyecto y sus estancias.\nconst data = $input.first().json.data;\nconst now = new Date();\nconst pad = n => String(n).padStart(2,'0');\nconst isoStamp = `${now.getUTCFullYear()}-${pad(now.getUTCMonth()+1)}-${pad(now.getUTCDate())}T${pad(now.getUTCHours())}:${pad(now.getUTCMinutes())}:${pad(now.getUTCSeconds())}`;\nconst escape = s => (s || '').toString().replace(/[\\\\']/g, '').replace(/[^\\x20-\\x7E]/g, c => '\\\\X2\\\\' + c.charCodeAt(0).toString(16).toUpperCase().padStart(4,'0') + '\\\\X0\\\\');\n\nconst projectName = escape(data.project_name) || 'Project';\nconst location = escape((data.location_address||'') + ', ' + (data.location_city||'') + ' (' + (data.location_province||'') + ')');\nconst designTitle = escape(data.design_option?.title || 'Design v1');\nconst rooms = (data.briefing?.rooms_affected || []).map(r => typeof r === 'string' ? r : (r.room || r.name || 'Espacio'));\nconst materials = data.materials || [];\n\nlet line = 1;\nconst entities = [];\nconst ref = (id) => '#' + id;\nconst nextId = () => line++;\n\n// Helpers\nconst PERSON = nextId();          entities.push({id: PERSON, line: `IFCPERSON($,$,'ArquitAI',$,$,$,$,$);`});\nconst ORG = nextId();             entities.push({id: ORG, line: `IFCORGANIZATION($,'Estudio Damian Martinez',$,$,$);`});\nconst PERSON_ORG = nextId();      entities.push({id: PERSON_ORG, line: `IFCPERSONANDORGANIZATION(${ref(PERSON)},${ref(ORG)},$);`});\nconst APP = nextId();             entities.push({id: APP, line: `IFCAPPLICATION(${ref(ORG)},'1.0','ArquitAI v1.0','arquitai');`});\nconst OWNER_HIST = nextId();      entities.push({id: OWNER_HIST, line: `IFCOWNERHISTORY(${ref(PERSON_ORG)},${ref(APP)},$,.ADDED.,$,${ref(PERSON_ORG)},${ref(APP)},${Math.floor(now.getTime()/1000)});`});\n\nconst CART_ORIGIN = nextId();     entities.push({id: CART_ORIGIN, line: `IFCCARTESIANPOINT((0.,0.,0.));`});\nconst AXIS_PLACEMENT_3D = nextId(); entities.push({id: AXIS_PLACEMENT_3D, line: `IFCAXIS2PLACEMENT3D(${ref(CART_ORIGIN)},$,$);`});\nconst LOCAL_PLACEMENT = nextId(); entities.push({id: LOCAL_PLACEMENT, line: `IFCLOCALPLACEMENT($,${ref(AXIS_PLACEMENT_3D)});`});\n\nconst LENGTH_UNIT = nextId();     entities.push({id: LENGTH_UNIT, line: `IFCSIUNIT(*,.LENGTHUNIT.,$,.METRE.);`});\nconst AREA_UNIT = nextId();       entities.push({id: AREA_UNIT, line: `IFCSIUNIT(*,.AREAUNIT.,$,.SQUARE_METRE.);`});\nconst VOL_UNIT = nextId();        entities.push({id: VOL_UNIT, line: `IFCSIUNIT(*,.VOLUMEUNIT.,$,.CUBIC_METRE.);`});\nconst UNITS = nextId();           entities.push({id: UNITS, line: `IFCUNITASSIGNMENT((${ref(LENGTH_UNIT)},${ref(AREA_UNIT)},${ref(VOL_UNIT)}));`});\n\nconst REPR_CTX = nextId();        entities.push({id: REPR_CTX, line: `IFCGEOMETRICREPRESENTATIONCONTEXT($,'Model',3,1.0E-5,${ref(AXIS_PLACEMENT_3D)},$);`});\n\nconst PROJECT = nextId();         entities.push({id: PROJECT, line: `IFCPROJECT('${'P'+data.project_id.replace(/-/g,'').slice(0,20)}',${ref(OWNER_HIST)},'${projectName}','Reforma','${designTitle}','${projectName}',$,(${ref(REPR_CTX)}),${ref(UNITS)});`});\n\nconst SITE = nextId();            entities.push({id: SITE, line: `IFCSITE('${'S'+data.project_id.replace(/-/g,'').slice(0,20)}',${ref(OWNER_HIST)},'Site','${location}',$,${ref(LOCAL_PLACEMENT)},$,$,.ELEMENT.,$,$,$,$,$);`});\nconst BUILDING = nextId();        entities.push({id: BUILDING, line: `IFCBUILDING('${'B'+data.project_id.replace(/-/g,'').slice(0,20)}',${ref(OWNER_HIST)},'Edificio','${projectName}',$,${ref(LOCAL_PLACEMENT)},$,$,.ELEMENT.,$,$,$);`});\nconst STOREY = nextId();          entities.push({id: STOREY, line: `IFCBUILDINGSTOREY('${'L'+data.project_id.replace(/-/g,'').slice(0,20)}',${ref(OWNER_HIST)},'Planta','Piso unico',$,${ref(LOCAL_PLACEMENT)},$,$,.ELEMENT.,0.);`});\n\nconst spaceIds = [];\nrooms.forEach((room, i) => {\n  const SPACE = nextId();\n  spaceIds.push(SPACE);\n  entities.push({id: SPACE, line: `IFCSPACE('${'SP'+i+'_'+data.project_id.replace(/-/g,'').slice(0,16)}',${ref(OWNER_HIST)},'${escape(room)}','Estancia',$,${ref(LOCAL_PLACEMENT)},$,$,.ELEMENT.,.SPACE.,$);`});\n});\n\n// Aggregations: site contains building, building contains storey, storey contains spaces\nconst REL_SITE_PROJECT = nextId(); entities.push({id: REL_SITE_PROJECT, line: `IFCRELAGGREGATES('rsp${REL_SITE_PROJECT}',${ref(OWNER_HIST)},'Site Contained',$,${ref(PROJECT)},(${ref(SITE)}));`});\nconst REL_BLD_SITE = nextId();    entities.push({id: REL_BLD_SITE, line: `IFCRELAGGREGATES('rbs${REL_BLD_SITE}',${ref(OWNER_HIST)},'Building Contained',$,${ref(SITE)},(${ref(BUILDING)}));`});\nconst REL_STO_BLD = nextId();     entities.push({id: REL_STO_BLD, line: `IFCRELAGGREGATES('rsb${REL_STO_BLD}',${ref(OWNER_HIST)},'Storey Contained',$,${ref(BUILDING)},(${ref(STOREY)}));`});\nif (spaceIds.length > 0) {\n  const REL_SPC_STO = nextId();   entities.push({id: REL_SPC_STO, line: `IFCRELAGGREGATES('rsps${REL_SPC_STO}',${ref(OWNER_HIST)},'Spaces in Storey',$,${ref(STOREY)},(${spaceIds.map(ref).join(',')}));`});\n}\n\n// Materials\nmaterials.forEach((m, i) => {\n  const MAT = nextId();\n  const matName = escape((m.name || m.category || 'Material') + (m.specification ? ' - ' + m.specification : ''));\n  entities.push({id: MAT, line: `IFCMATERIAL('${matName}');`});\n});\n\nconst body = entities.map(e => `#${e.id}=${e.line}`).join('\\n');\n\nconst ifcContent = `ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION(('ViewDefinition [CoordinationView_V2.0]'),'2;1');\nFILE_NAME('${projectName}','${isoStamp}',('ArquitAI'),('Estudio Damian Martinez'),'IFC4 stub','ArquitAI v1.0','');\nFILE_SCHEMA(('IFC4'));\nENDSEC;\nDATA;\n${body}\nENDSEC;\nEND-ISO-10303-21;\n`;\n\nconst stamp = isoStamp.replace(/[-:T]/g, '').slice(0,15);\nconst filename = `${data.project_id.substring(0,8)}_${stamp}.ifc`;\n\nreturn [{ json: {\n  filename: filename,\n  content: ifcContent,\n  bytes: Buffer.byteLength(ifcContent, 'utf8'),\n  spaces_count: spaceIds.length,\n  materials_count: materials.length,\n  project_id: data.project_id,\n  project_name: data.project_name\n}}];"
+      }
+    },
+    {
+      "id": "if-07",
+      "name": "Build Binary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        740,
+        140
+      ],
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\nreturn [{ json: item, binary: { data: { data: Buffer.from(item.content, 'utf8').toString('base64'), mimeType: 'text/plain', fileName: item.filename } } }];"
+      }
+    },
+    {
+      "id": "if-08",
+      "name": "Upload to Drive",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        980,
+        140
+      ],
+      "parameters": {
+        "operation": "upload",
+        "name": "={{ $json.filename }}",
+        "driveId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "My Drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "root"
+        },
+        "options": {},
+        "inputDataFieldName": "data"
+      },
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "VLObOrfmQGpS5Lb0",
+          "name": "damian2botella"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "if-09",
+      "name": "Log Export",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1220,
+        140
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, status, output_summary)\nVALUES ($1::uuid, 'util_interop_ifc', 'export_ifc', 'success', $2)\nRETURNING id;",
+        "options": {
+          "queryReplacement": "={{ [ $('Build IFC').first().json.project_id, ('spaces=' + $('Build IFC').first().json.spaces_count + ', materials=' + $('Build IFC').first().json.materials_count + ', bytes=' + $('Build IFC').first().json.bytes) ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "if-10",
+      "name": "Respond 200",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        1460,
+        140
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'exported', filename: $('Build IFC').first().json.filename, bytes: $('Build IFC').first().json.bytes, spaces_count: $('Build IFC').first().json.spaces_count, materials_count: $('Build IFC').first().json.materials_count, drive_file_id: ($('Upload to Drive').first()?.json?.id || null), drive_url: ($('Upload to Drive').first()?.json?.webViewLink || null), note: 'IFC4 stub minimalista (project+site+building+storey+spaces+materials). NO incluye geometria. Sirve para tracker en Revit/ArchiCAD.'}) }}",
+        "options": {
+          "responseCode": 200
+        }
+      }
+    },
+    {
+      "id": "if-11",
+      "name": "Respond 404",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        500,
+        360
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'not_found', error:'project_id no encontrado'}) }}",
+        "options": {
+          "responseCode": 404
+        }
+      }
+    },
+    {
+      "id": "if-12",
+      "name": "Respond 400",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        -220,
+        460
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'error', error: $json.error}) }}",
+        "options": {
+          "responseCode": 400
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate": {
+      "main": [
+        [
+          {
+            "node": "Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid?": {
+      "main": [
+        [
+          {
+            "node": "Load Project",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 400",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Project": {
+      "main": [
+        [
+          {
+            "node": "Has Project?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Project?": {
+      "main": [
+        [
+          {
+            "node": "Build IFC",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 404",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build IFC": {
+      "main": [
+        [
+          {
+            "node": "Build Binary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Binary": {
+      "main": [
+        [
+          {
+            "node": "Upload to Drive",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload to Drive": {
+      "main": [
+        [
+          {
+            "node": "Log Export",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Export": {
+      "main": [
+        [
+          {
+            "node": "Respond 200",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  }
+}

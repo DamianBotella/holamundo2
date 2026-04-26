@@ -1,0 +1,500 @@
+{
+  "name": "gdpr_request",
+  "nodes": [
+    {
+      "id": "gd-01",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -700,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "gdpr-request",
+        "responseMode": "responseNode"
+      },
+      "webhookId": "gd-trigger"
+    },
+    {
+      "id": "gd-02",
+      "name": "Validate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -460,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const body = ($('Webhook').first().json.body) || {};\nconst valid = ['access','export','rectification','erasure','restriction','objection','portability'];\nif (!body.token) return [{ json: { valid:false, error:'token obligatorio (con purpose project_view o full_access)' } }];\nif (!body.request_type || !valid.includes(body.request_type)) return [{ json: { valid:false, error:'request_type debe ser ' + valid.join('|') } }];\nreturn [{ json: { valid:true, token: body.token, request_type: body.request_type, details: (body.details || '').toString().slice(0, 2000), client_email: body.client_email || null } }];"
+      }
+    },
+    {
+      "id": "gd-03",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -220,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "v1",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "gd-04",
+      "name": "Validate Token",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        20,
+        220
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM validate_client_token($1, 'project_view');",
+        "options": {
+          "queryReplacement": "={{ [ $json.token ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "gd-05",
+      "name": "Token Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        260,
+        220
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "tv1",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "gd-06",
+      "name": "Insert Request",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        500,
+        140
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO gdpr_requests (client_id, project_id, token_id, request_type, client_email, client_ip, details, status)\nSELECT c.id, $1::uuid, $2::uuid, $3, $4, $5, $6, 'pending'\n  FROM projects p LEFT JOIN clients c ON c.id = p.client_id\n WHERE p.id = $1::uuid\nRETURNING id, client_id, request_type, status, created_at;",
+        "options": {
+          "queryReplacement": "={{ [ $('Validate Token').first().json.project_id, $('Validate Token').first().json.token_id, $('Validate').first().json.request_type, ($('Validate').first().json.client_email || ''), ($('Webhook').first().json.headers?.['x-real-ip'] || $('Webhook').first().json.headers?.['x-forwarded-for'] || 'unknown'), $('Validate').first().json.details ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "gd-07",
+      "name": "Load Architect Email",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        740,
+        140
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT value FROM system_config WHERE key = 'architect_email'",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "gd-08",
+      "name": "Is Export?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        980,
+        140
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "or",
+          "conditions": [
+            {
+              "id": "e1",
+              "leftValue": "={{ $('Validate').first().json.request_type }}",
+              "rightValue": "access",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            },
+            {
+              "id": "e2",
+              "leftValue": "={{ $('Validate').first().json.request_type }}",
+              "rightValue": "export",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            },
+            {
+              "id": "e3",
+              "leftValue": "={{ $('Validate').first().json.request_type }}",
+              "rightValue": "portability",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "gd-09",
+      "name": "Load Client Data",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1220,
+        60
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT row_to_json(g) AS data FROM gdpr_client_data_view g WHERE g.client_id = $1::uuid;",
+        "options": {
+          "queryReplacement": "={{ [ $('Insert Request').first().json.client_id ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "gd-10",
+      "name": "Email Damian (Export)",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1460,
+        60
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $('Load Architect Email').first().json.value }}",
+        "subject": "=GDPR — Solicitud {{ $('Validate').first().json.request_type }} de cliente",
+        "emailType": "html",
+        "message": "=<div style=\"font-family:Arial,sans-serif;max-width:680px;margin:0 auto\"><h2 style=\"color:#9b59b6\">Solicitud GDPR de cliente</h2><p><b>Tipo:</b> {{ $('Validate').first().json.request_type }} (RGPD Art. 15/20)</p><p><b>Cliente:</b> {{ $('Insert Request').first().json.client_id }}</p><p><b>Project:</b> {{ $('Validate Token').first().json.project_id }}</p><p><b>Detalles del cliente:</b> {{ $('Validate').first().json.details || '(no aporta)' }}</p><p><b>Datos solicitados (todos los datos del cliente y sus proyectos):</b></p><pre style=\"background:#f3f4f6;padding:10px;border-radius:6px;font-size:11px;max-height:400px;overflow:auto\">{{ JSON.stringify($json.data, null, 2).substring(0, 3000) }}...</pre><p><b>ACCION RECOMENDADA:</b></p><ul><li>Compilar el JSON completo (filtrar datos sensibles si necesario por consentimiento).</li><li>Enviarlo al cliente por email seguro o medio que confirme entrega.</li><li>Marcar la solicitud como <code>completed</code> ejecutando: <code>UPDATE gdpr_requests SET status='completed', response_sent_at=now() WHERE id='{{ $('Insert Request').first().json.id }}';</code></li><li>RGPD obliga a responder en plazo maximo de 1 mes.</li></ul><p style=\"font-size:11px;color:#95a5a6\">Request ID: {{ $('Insert Request').first().json.id }}</p></div>",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "cIma8ntTjZvIfU3H",
+          "name": "damian2botella"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "gd-11",
+      "name": "Email Damian (Other)",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1220,
+        220
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $('Load Architect Email').first().json.value }}",
+        "subject": "=GDPR — Solicitud {{ $('Validate').first().json.request_type }} (revisar)",
+        "emailType": "html",
+        "message": "=<div style=\"font-family:Arial,sans-serif;max-width:600px;margin:0 auto\"><h2 style=\"color:#e74c3c\">Solicitud GDPR — ATENCION REQUERIDA</h2><p><b>Tipo:</b> {{ $('Validate').first().json.request_type }}</p><p><b>Cliente:</b> {{ $('Insert Request').first().json.client_id }}</p><p><b>Detalles del cliente:</b> {{ $('Validate').first().json.details || '(no aporta)' }}</p><p style=\"background:#fff8e1;padding:10px;border-left:4px solid #fece00\"><b>RGPD obliga a responder en plazo maximo de 1 mes.</b><br>Si es ERASURE: anonimizar/borrar datos del cliente y sus proyectos. Si es RECTIFICATION: actualizar lo que el cliente indique. Si es RESTRICTION: marcar el client_id con flag para no procesar mas datos.<br>Marcar como completada cuando se ejecute: <code>UPDATE gdpr_requests SET status='completed', response_sent_at=now(), response_notes='...' WHERE id='{{ $('Insert Request').first().json.id }}';</code></p><p style=\"font-size:11px;color:#95a5a6\">Request ID: {{ $('Insert Request').first().json.id }}</p></div>",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "cIma8ntTjZvIfU3H",
+          "name": "damian2botella"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "gd-12",
+      "name": "Respond 201",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        1700,
+        140
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'received', request_id: $('Insert Request').first().json.id, request_type: $('Insert Request').first().json.request_type, message:'Tu solicitud ha sido registrada. Recibiras respuesta en un plazo maximo de 1 mes (RGPD).'}) }}",
+        "options": {
+          "responseCode": 201
+        }
+      }
+    },
+    {
+      "id": "gd-13",
+      "name": "Respond 401",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        500,
+        360
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'unauthorized', reason: ($('Validate Token').first().json.reason || 'invalid_token')}) }}",
+        "options": {
+          "responseCode": 401
+        }
+      }
+    },
+    {
+      "id": "gd-14",
+      "name": "Respond 400",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        -220,
+        460
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'error', error: $json.error}) }}",
+        "options": {
+          "responseCode": 400
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate": {
+      "main": [
+        [
+          {
+            "node": "Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid?": {
+      "main": [
+        [
+          {
+            "node": "Validate Token",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 400",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Token": {
+      "main": [
+        [
+          {
+            "node": "Token Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Token Valid?": {
+      "main": [
+        [
+          {
+            "node": "Insert Request",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 401",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Request": {
+      "main": [
+        [
+          {
+            "node": "Load Architect Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Architect Email": {
+      "main": [
+        [
+          {
+            "node": "Is Export?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Export?": {
+      "main": [
+        [
+          {
+            "node": "Load Client Data",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Email Damian (Other)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Client Data": {
+      "main": [
+        [
+          {
+            "node": "Email Damian (Export)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email Damian (Export)": {
+      "main": [
+        [
+          {
+            "node": "Respond 201",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email Damian (Other)": {
+      "main": [
+        [
+          {
+            "node": "Respond 201",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  }
+}

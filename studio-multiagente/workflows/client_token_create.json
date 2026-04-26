@@ -105,7 +105,7 @@
         220
       ],
       "parameters": {
-        "jsCode": "const r = $input.first().json;\nconst N8N = 'https://n8n-n8n.zzeluw.easypanel.host';\nconst urls = {};\nif (r.purpose === 'aftercare_submit' || r.purpose === 'full_access') {\n  urls.aftercare_form = N8N + '/webhook/aftercare-public-form?token=' + encodeURIComponent(r.token);\n}\nif (r.purpose === 'project_view' || r.purpose === 'full_access') {\n  urls.project_summary = N8N + '/webhook/project-summary?token=' + encodeURIComponent(r.token);\n}\nif (r.purpose === 'client_ask' || r.purpose === 'full_access') {\n  urls.client_ask_endpoint = N8N + '/webhook/client-ask';\n  urls.client_ask_token = r.token;\n}\nreturn [{ json: { token_id: r.id, token: r.token, project_id: r.project_id, client_id: r.client_id, purpose: r.purpose, expires_at: r.expires_at, urls: urls } }];"
+        "jsCode": "const r = $input.first().json;\nconst N8N = 'https://n8n-n8n.zzeluw.easypanel.host';\nconst urls = {};\nif (r.purpose === 'aftercare_submit' || r.purpose === 'full_access') {\n  urls.aftercare_form = N8N + '/webhook/aftercare-public-form?token=' + encodeURIComponent(r.token);\n}\nif (r.purpose === 'project_view' || r.purpose === 'full_access') {\n  urls.project_summary = N8N + '/webhook/project-summary?token=' + encodeURIComponent(r.token);\n}\nif (r.purpose === 'client_ask' || r.purpose === 'full_access') {\n  urls.client_ask_endpoint = N8N + '/webhook/client-ask';\n  urls.client_ask_token = r.token;\n  urls.client_ask_form = N8N + '/webhook/client-ask-form?token=' + encodeURIComponent(r.token);\n}\nreturn [{ json: { token_id: r.id, token: r.token, project_id: r.project_id, client_id: r.client_id, purpose: r.purpose, expires_at: r.expires_at, urls: urls } }];"
       }
     },
     {

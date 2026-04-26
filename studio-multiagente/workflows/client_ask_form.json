@@ -1,0 +1,259 @@
+{
+  "name": "client_ask_form",
+  "nodes": [
+    {
+      "id": "kf-01",
+      "name": "Webhook GET",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -700,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "client-ask-form",
+        "responseMode": "responseNode"
+      },
+      "webhookId": "kf-trigger"
+    },
+    {
+      "id": "kf-02",
+      "name": "Validate Token",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -460,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM validate_client_token($1, 'client_ask');",
+        "options": {
+          "queryReplacement": "={{ [ ($json.query?.token || '') ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "id": "kf-03",
+      "name": "Token Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -220,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "tv1",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "kf-04",
+      "name": "Load Project Snippet",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        20,
+        220
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT json_build_object('project_name', p.name, 'client_name', c.name, 'current_phase', p.current_phase) AS data FROM projects p LEFT JOIN clients c ON c.id = p.client_id WHERE p.id = $1::uuid;",
+        "options": {
+          "queryReplacement": "={{ [ $json.project_id ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "kf-05",
+      "name": "Build Form HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        220
+      ],
+      "parameters": {
+        "jsCode": "const data = $input.first().json.data || {};\nconst token = $('Webhook GET').first().json.query?.token || '';\nconst N8N = 'https://n8n-n8n.zzeluw.easypanel.host';\nconst html = `<!DOCTYPE html>\n<html lang=\"es\"><head>\n<meta charset=\"UTF-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n<title>ArquitAI Concierge - ${data.project_name || 'Tu proyecto'}</title>\n<style>\n* { box-sizing: border-box; }\nbody { font-family: 'Segoe UI', Arial, sans-serif; margin: 0; padding: 20px; background: #f3f4f6; color: #2c3e50; }\n.container { max-width: 720px; margin: 0 auto; background: white; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); overflow: hidden; }\n.header { background: #2c3e50; color: white; padding: 20px; }\n.header h1 { margin: 0; font-size: 20px; }\n.header p { margin: 6px 0 0; opacity: 0.85; font-size: 14px; }\n.body { padding: 20px; }\n.history { max-height: 400px; overflow-y: auto; margin-bottom: 20px; padding: 10px; background: #f9fafb; border-radius: 6px; }\n.msg { padding: 10px 14px; border-radius: 12px; margin-bottom: 10px; max-width: 85%; }\n.msg.user { background: #3498db; color: white; margin-left: auto; }\n.msg.bot { background: #ecf0f1; color: #2c3e50; }\n.msg.escalated { background: #e67e22; color: white; }\n.msg.bot small { display: block; opacity: 0.7; margin-top: 4px; font-size: 11px; }\n.form { display: flex; gap: 10px; }\n.form textarea { flex: 1; padding: 10px; border: 1px solid #d1d5db; border-radius: 6px; font-family: inherit; resize: vertical; min-height: 60px; }\n.form button { background: #3498db; color: white; border: none; padding: 0 24px; border-radius: 6px; cursor: pointer; font-weight: bold; }\n.form button:hover { background: #2980b9; }\n.form button:disabled { background: #95a5a6; cursor: not-allowed; }\n.footer { padding: 12px 20px; background: #f9fafb; border-top: 1px solid #e5e7eb; font-size: 12px; color: #7f8c8d; }\n.empty { text-align: center; color: #95a5a6; padding: 40px 20px; }\n</style></head><body>\n<div class=\"container\">\n<div class=\"header\">\n<h1>${data.project_name || 'Tu proyecto'}</h1>\n<p>Hola ${data.client_name || 'cliente'}, soy ArquitAI Concierge. Hazme cualquier pregunta sobre tu proyecto.</p>\n</div>\n<div class=\"body\">\n<div id=\"history\" class=\"history\"><div class=\"empty\">Aun no has hecho preguntas. Pruebame con &quot;En que fase esta mi proyecto?&quot; o &quot;Cuando esta prevista la entrega?&quot;</div></div>\n<form id=\"chatForm\" class=\"form\" onsubmit=\"return askQuestion(event)\">\n<textarea id=\"question\" placeholder=\"Escribe tu pregunta aqui...\" required></textarea>\n<button type=\"submit\" id=\"sendBtn\">Enviar</button>\n</form>\n</div>\n<div class=\"footer\">Si tu pregunta requiere decision profesional, te conectaremos con el arquitecto. Las respuestas son automaticas y referenciales — confia siempre en la palabra final del arquitecto.</div>\n</div>\n<script>\nconst TOKEN = ${JSON.stringify(token)};\nconst API = ${JSON.stringify(N8N + '/webhook/client-ask')};\nconst history = document.getElementById('history');\nlet first = true;\n\nasync function askQuestion(e) {\n  e.preventDefault();\n  const ta = document.getElementById('question');\n  const btn = document.getElementById('sendBtn');\n  const q = ta.value.trim();\n  if (!q) return false;\n  if (first) { history.innerHTML = ''; first = false; }\n  const u = document.createElement('div');\n  u.className = 'msg user';\n  u.textContent = q;\n  history.appendChild(u);\n  history.scrollTop = history.scrollHeight;\n  ta.value = ''; btn.disabled = true; btn.textContent = '...';\n  try {\n    const res = await fetch(API, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({token: TOKEN, question: q})});\n    const data = await res.json();\n    const b = document.createElement('div');\n    b.className = 'msg bot' + (data.escalated ? ' escalated' : '');\n    b.innerHTML = (data.answer || 'Sin respuesta').replace(/\\\\n/g,'<br>') + (data.escalated ? '<small>El arquitecto recibe esta consulta y se pondra en contacto.</small>' : '');\n    history.appendChild(b);\n    history.scrollTop = history.scrollHeight;\n  } catch (err) {\n    const b = document.createElement('div');\n    b.className = 'msg bot';\n    b.textContent = 'Error de conexion. Intentalo de nuevo en un momento.';\n    history.appendChild(b);\n  } finally {\n    btn.disabled = false; btn.textContent = 'Enviar';\n  }\n  return false;\n}\n</script></body></html>`;\nreturn [{ json: { html: html } }];"
+      }
+    },
+    {
+      "id": "kf-06",
+      "name": "Respond HTML",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        500,
+        220
+      ],
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.html }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "content-type",
+                "value": "text/html; charset=utf-8"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "kf-07",
+      "name": "Build 404",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        20,
+        400
+      ],
+      "parameters": {
+        "jsCode": "return [{ json: { html: '<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><title>Enlace no valido</title></head><body style=\"font-family:Arial,sans-serif;padding:40px;text-align:center;color:#7f8c8d\"><h1>Enlace no valido</h1><p>El enlace al chat ha caducado o es incorrecto. Contacta con el arquitecto para solicitar uno nuevo.</p></body></html>' } }];"
+      }
+    },
+    {
+      "id": "kf-08",
+      "name": "Respond 404",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        260,
+        400
+      ],
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.html }}",
+        "options": {
+          "responseCode": 404,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "content-type",
+                "value": "text/html; charset=utf-8"
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook GET": {
+      "main": [
+        [
+          {
+            "node": "Validate Token",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Token": {
+      "main": [
+        [
+          {
+            "node": "Token Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Token Valid?": {
+      "main": [
+        [
+          {
+            "node": "Load Project Snippet",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build 404",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Project Snippet": {
+      "main": [
+        [
+          {
+            "node": "Build Form HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Form HTML": {
+      "main": [
+        [
+          {
+            "node": "Respond HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build 404": {
+      "main": [
+        [
+          {
+            "node": "Respond 404",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  }
+}

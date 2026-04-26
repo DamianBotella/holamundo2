@@ -1,0 +1,293 @@
+{
+  "name": "cron_proposal_to_contract",
+  "nodes": [
+    {
+      "id": "pc-01",
+      "name": "Schedule Daily 10:30",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -700,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "daysInterval": 1,
+              "triggerAtHour": 10,
+              "triggerAtMinute": 30
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "pc-02",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -700,
+        500
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "trigger-proposal-to-contract",
+        "responseMode": "lastNode",
+        "authentication": "headerAuth"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "Ba643jvuElTgMawr",
+          "name": "Webhook API Key (entrante)"
+        }
+      },
+      "webhookId": "pc-manual"
+    },
+    {
+      "id": "pc-03",
+      "name": "Load Architect Email",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -460,
+        400
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT value FROM system_config WHERE key = 'architect_email'",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "pc-04",
+      "name": "Find Pending",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -220,
+        400
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT json_agg(t.* ORDER BY t.proposal_approved_at DESC) AS rows, count(*) AS total\n  FROM (\n    SELECT pr.id AS proposal_id, pr.project_id, pr.client_response_at AS proposal_approved_at,\n           p.name AS project_name, c.name AS client_name, pii_decrypt(c.email_enc) AS client_email,\n           p.location_address || ', ' || p.location_city AS project_location,\n           pr.total_price AS proposal_total\n    FROM proposals pr\n    JOIN projects p ON p.id = pr.project_id\n    LEFT JOIN clients c ON c.id = p.client_id\n    WHERE pr.status = 'approved'\n      AND pr.client_response_at > now() - INTERVAL '14 days'\n      AND NOT EXISTS (SELECT 1 FROM contracts ct WHERE ct.project_id = pr.project_id AND ct.contract_type = 'encargo_profesional' AND ct.status NOT IN ('cancelled','rejected'))\n  ) t;",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "id": "pc-05",
+      "name": "Has Pending?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        20,
+        400
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "h1",
+              "leftValue": "={{ Number($json.total) || 0 }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "pc-06",
+      "name": "Build Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        320
+      ],
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst rows = (data.rows || []).map(r => '<tr>' +\n  '<td><b>' + (r.project_name || '?') + '</b><br><small style=\\\"color:#7f8c8d\\\">' + (r.project_location || '') + '</small></td>' +\n  '<td>' + (r.client_name || '?') + '<br><small>' + (r.client_email || '—') + '</small></td>' +\n  '<td>' + (r.proposal_total ? r.proposal_total.toLocaleString('es-ES') + ' EUR' : '?') + '</td>' +\n  '<td>' + (r.proposal_approved_at ? r.proposal_approved_at.substring(0,10) : '—') + '</td>' +\n  '<td><code style=\\\"font-size:11px\\\">project_id: ' + r.project_id + '</code></td>' +\n  '</tr>').join('');\nconst html = '<h2>Propuestas aprobadas pendientes de generar encargo profesional</h2>' +\n  '<p>Total: <b>' + data.total + '</b>. Considera generar el <code>encargo_profesional</code> ahora que hay propuesta firme.</p>' +\n  '<table border=\\\"1\\\" cellpadding=\\\"6\\\" cellspacing=\\\"0\\\" style=\\\"border-collapse:collapse;font-family:sans-serif;font-size:13px\\\">' +\n  '<thead><tr style=\\\"background:#f3f4f6\\\"><th>Proyecto</th><th>Cliente</th><th>Importe</th><th>Aprobada</th><th>Project ID</th></tr></thead>' +\n  '<tbody>' + rows + '</tbody></table>' +\n  '<h3>Comando para generar (rellena DNI/email/parties):</h3>' +\n  '<pre style=\\\"background:#f3f4f6;padding:10px;border-radius:6px;font-size:11px\\\">' +\n  'curl -X POST https://n8n-n8n.zzeluw.easypanel.host/webhook/contract-generate \\\\\\n' +\n  '  -H \"X-API-Key: arquitai-...\" \\\\\\n' +\n  '  -H \"Content-Type: application/json\" \\\\\\n' +\n  '  -d \\'{\"project_id\":\"&lt;uuid&gt;\",\"contract_type\":\"encargo_profesional\",\\\\\\n' +\n  '       \"parties\":[{\"role\":\"cliente\",\"name\":\"...\",\"dni\":\"...\",\"email\":\"...\"},\\\\\\n' +\n  '                  {\"role\":\"arquitecto\",\"name\":\"Damian Martinez\",\"email\":\"...\"}],\\\\\\n' +\n  '       \"scope\":\"DO + CSS para reforma...\",\"amount_eur\":4800,\"expires_days\":60}\\'' +\n  '</pre>';\nreturn [{ json: { html_body: html, count: data.total } }];"
+      }
+    },
+    {
+      "id": "pc-07",
+      "name": "Send Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        500,
+        320
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $('Load Architect Email').first().json.value }}",
+        "subject": "=ArquitAI — {{ $json.count }} propuesta(s) aprobada(s) sin contrato encargo",
+        "emailType": "html",
+        "message": "={{ $json.html_body }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "cIma8ntTjZvIfU3H",
+          "name": "damian2botella"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "pc-08",
+      "name": "Log",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        740,
+        320
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, status, input_summary)\nVALUES (NULL, 'cron_proposal_to_contract', 'suggest_encargo', 'success', $1)\nRETURNING id;",
+        "options": {
+          "queryReplacement": "={{ [ ('pending=' + $json.count) ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "pc-09",
+      "name": "Nothing",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        260,
+        480
+      ],
+      "parameters": {}
+    }
+  ],
+  "connections": {
+    "Schedule Daily 10:30": {
+      "main": [
+        [
+          {
+            "node": "Load Architect Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Load Architect Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Architect Email": {
+      "main": [
+        [
+          {
+            "node": "Find Pending",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Pending": {
+      "main": [
+        [
+          {
+            "node": "Has Pending?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Pending?": {
+      "main": [
+        [
+          {
+            "node": "Build Email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Nothing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Email": {
+      "main": [
+        [
+          {
+            "node": "Send Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Email": {
+      "main": [
+        [
+          {
+            "node": "Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  }
+}

@@ -125,7 +125,7 @@
         220
       ],
       "parameters": {
-        "jsCode": "const project = $input.first().json.data || {};\nconst input   = $('Validate Input').first().json;\nconst client  = project.client || {};\n\nconst today = new Date().toLocaleDateString('es-ES', { day:'2-digit', month:'long', year:'numeric' });\nconst location = `${project.location_address || ''}, ${project.location_city || ''} (${project.location_province || ''})`;\nconst partiesText = (input.parties || []).map(p => `• ${p.role.toUpperCase()}: ${p.name}${p.dni ? ' (DNI ' + p.dni + ')' : ''}${p.email ? ', email: ' + p.email : ''}${p.address ? ', domicilio: ' + p.address : ''}`).join('\\n');\n\nconst TPL = {\n  encargo_profesional: () => ({\n    title: `Encargo profesional — ${project.project_name}`,\n    body: `ENCARGO PROFESIONAL DE SERVICIOS DE ARQUITECTURA TECNICA\\n\\nEn ${project.location_city || '___'}, a ${today}.\\n\\nREUNIDOS:\\n${partiesText}\\n\\nMANIFIESTAN que el ARQUITECTO/A asume el siguiente encargo profesional para el inmueble sito en ${location}, con superficie util aproximada de ${project.property_area_m2 || '___'} m2.\\n\\nALCANCE:\\n${input.scope || '(pendiente de detallar)'}\\n\\nHONORARIOS: ${input.amount_eur ? input.amount_eur.toLocaleString('es-ES') + ' EUR (IVA no incluido)' : '(a determinar)'}.\\n\\nFORMA DE PAGO: 30% al inicio, 40% al hito intermedio, 30% al cierre.\\n\\nPLAZO ESTIMADO: ${project.target_completion ? 'hasta ' + project.target_completion : 'segun acuerdo de las partes'}.\\n\\nRESPONSABILIDAD CIVIL: cubierta por la poliza colegial obligatoria del COAATM/COAAT correspondiente.\\n\\nAMBAS PARTES aceptan el presente encargo y firman en la fecha y lugar indicados.\\n\\n______________________________               ______________________________\\nFirma del CLIENTE                                                Firma del ARQUITECTO\\nNombre: ${client.name || ''}                                       Nombre: \\nDNI:                                                                            Colegiado n.º: \\n`\n  }),\n  contrato_cliente: () => ({\n    title: `Contrato de obra — ${project.project_name}`,\n    body: `CONTRATO DE EJECUCION DE OBRA DE REFORMA\\n\\nEn ${project.location_city || '___'}, a ${today}.\\n\\nREUNIDOS:\\n${partiesText}\\n\\nMANIFIESTAN su voluntad de contratar la ejecucion de la obra descrita a continuacion en el inmueble sito en ${location}.\\n\\nCLAUSULAS:\\n\\n1. OBJETO: ejecucion de la obra en regimen de contrato de obra a tanto alzado/segun mediciones.\\n\\n2. DESCRIPCION: ${input.scope || project.project_type}.\\n\\n3. IMPORTE TOTAL: ${input.amount_eur ? input.amount_eur.toLocaleString('es-ES') + ' EUR (IVA no incluido)' : '(a determinar segun presupuesto cerrado adjunto como anexo I)'}.\\n\\n4. FORMA DE PAGO: por certificaciones parciales mensuales segun obra ejecutada, con saldo final tras Acta de Recepcion Provisional.\\n\\n5. PLAZO: inicio estimado tras concesion de licencias necesarias. Plazo de ejecucion: a definir segun cronograma adjunto.\\n\\n6. GARANTIA LOE (Ley de Ordenacion de la Edificacion): 1 ano (acabados), 3 anos (habitabilidad), 10 anos (estructura), contados desde la firma del Acta de Recepcion.\\n\\n7. RECEPCION: la obra se entendera recibida tras firma del Acta de Recepcion Provisional, sin perjuicio de defectos detectados con posterioridad.\\n\\n8. JURISDICCION: las partes se someten expresamente a los Juzgados y Tribunales de ${project.location_city || '___'}.\\n\\nFirmado en duplicado.\\n\\n______________________________               ______________________________\\nFirma del CLIENTE                                                Firma del CONTRATISTA\\n`\n  }),\n  contrato_gremio: () => ({\n    title: `Contrato con gremio — ${project.project_name}`,\n    body: `CONTRATO DE SUBCONTRATACION DE TRABAJOS DE OBRA\\n\\nEn ${project.location_city || '___'}, a ${today}.\\n\\nREUNIDOS:\\n${partiesText}\\n\\nMANIFIESTAN que el GREMIO/EMPRESA SUBCONTRATISTA se compromete a ejecutar los siguientes trabajos como parte de la obra del proyecto ${project.project_name} en ${location}.\\n\\nALCANCE:\\n${input.scope || '(pendiente)'}\\n\\nIMPORTE: ${input.amount_eur ? input.amount_eur.toLocaleString('es-ES') + ' EUR (IVA no incluido)' : '(segun presupuesto adjunto)'}.\\n\\nPLAZO: a definir segun planificacion de obra.\\n\\nGARANTIA: 6 meses desde finalizacion del trabajo, sin perjuicio de las obligaciones LOE que recaen sobre el contratista principal.\\n\\nDOCUMENTACION OBLIGATORIA del subcontratista (a aportar antes del inicio): ITA, RC, alta autonomos/SS, certificado de estar al corriente con AEAT y SS, plan de seguridad y salud espećifico.\\n\\n______________________________               ______________________________\\nFirma del CONTRATISTA                                  Firma del SUBCONTRATISTA\\n`\n  }),\n  acta_replanteo: () => ({\n    title: `Acta de replanteo — ${project.project_name}`,\n    body: `ACTA DE REPLANTEO\\n\\nEn ${project.location_city || '___'}, a ${today}, en el inmueble sito en ${location}.\\n\\nINTERVIENEN:\\n${partiesText}\\n\\nMANIFIESTAN que se ha procedido al replanteo de la obra del proyecto ${project.project_name} y que las medidas y disposiciones se ajustan a lo previsto en el proyecto/memoria valorada, salvo las observaciones recogidas en el apartado siguiente.\\n\\nOBSERVACIONES Y AJUSTES ACEPTADOS:\\n${input.scope || '(sin observaciones)'}\\n\\nFECHA EFECTIVA DE INICIO DE OBRA: ${today}.\\n\\nLas partes firman conformes.\\n\\n______________________________               ______________________________\\nFirma del PROPIEDAD                                          Firma del CONTRATISTA\\n______________________________\\nFirma del DIRECTOR DE LA EJECUCION (Arquitecto Tecnico)\\n`\n  }),\n  acta_recepcion_provisional: () => ({\n    title: `Acta de recepcion provisional — ${project.project_name}`,\n    body: `ACTA DE RECEPCION PROVISIONAL DE OBRA\\n\\nEn ${project.location_city || '___'}, a ${today}, en el inmueble sito en ${location}.\\n\\nINTERVIENEN:\\n${partiesText}\\n\\nMANIFIESTAN que han revisado conjuntamente la obra del proyecto ${project.project_name} y que se da por RECIBIDA PROVISIONALMENTE en la fecha indicada, comenzando en este momento el ćomputo de los plazos de garantia previstos en la LOE (1 ano acabados, 3 anos habitabilidad, 10 anos estructura).\\n\\nINCIDENCIAS PENDIENTES (anexo) detectadas durante la revision:\\n${input.scope || '(ninguna)'}\\n\\nEl plazo para subsanacion de las incidencias pendientes es de 30 dias naturales desde la fecha del presente acta.\\n\\n______________________________               ______________________________\\nFirma del PROPIEDAD                                          Firma del CONTRATISTA\\n______________________________\\nFirma del DIRECTOR DE LA EJECUCION\\n`\n  }),\n  acta_recepcion_definitiva: () => ({\n    title: `Acta de recepcion definitiva — ${project.project_name}`,\n    body: `ACTA DE RECEPCION DEFINITIVA DE OBRA\\n\\nEn ${project.location_city || '___'}, a ${today}.\\n\\nINTERVIENEN:\\n${partiesText}\\n\\nMANIFIESTAN que tras la subsanacion de las incidencias del Acta de Recepcion Provisional, dan por DEFINITIVAMENTE RECIBIDA la obra del proyecto ${project.project_name} en ${location}.\\n\\nCERTIFICAN que se han entregado al PROPIETARIO la documentacion final de obra: boletines, certificados de instalaciones, manuales de electrodomesticos, garantias, planos finales y libro del edificio en su caso.\\n\\nNotas finales:\\n${input.scope || '(ninguna)'}\\n\\n______________________________               ______________________________\\nFirma del PROPIEDAD                                          Firma del CONTRATISTA\\n`\n  }),\n  modificado_obra: () => ({\n    title: `Modificado de obra — ${project.project_name}`,\n    body: `MODIFICADO DE OBRA\\n\\nEn ${project.location_city || '___'}, a ${today}.\\n\\nINTERVIENEN:\\n${partiesText}\\n\\nMANIFIESTAN que se acuerda introducir las siguientes modificaciones al proyecto ${project.project_name} respecto al alcance contratado inicialmente.\\n\\nALCANCE DE LA MODIFICACION:\\n${input.scope || '(detallar)'}\\n\\nIMPACTO ECONOMICO: ${input.amount_eur ? (input.amount_eur > 0 ? 'INCREMENTO de ' : 'REDUCCION de ') + Math.abs(input.amount_eur).toLocaleString('es-ES') + ' EUR' : '(sin impacto economico, solo reorganizacion)'}.\\n\\nIMPACTO EN PLAZO: a confirmar segun cronograma actualizado.\\n\\nLas partes firman su conformidad.\\n\\n______________________________               ______________________________\\nFirma del PROPIEDAD                                          Firma del CONTRATISTA\\n`\n  }),\n  renuncia_garantia: () => ({\n    title: `Renuncia de garantia — ${project.project_name}`,\n    body: `RENUNCIA EXPRESA DE LA PROPIEDAD A INSTALACION/SOLUCION TECNICA RECOMENDADA POR LA DIRECCION FACULTATIVA\\n\\nEn ${project.location_city || '___'}, a ${today}.\\n\\nINTERVIENEN:\\n${partiesText}\\n\\nMANIFIESTAN que la PROPIEDAD ha decidido NO acometer la siguiente actuacion, recomendada por la direccion facultativa por motivos t́ecnicos/normativos:\\n${input.scope || '(detallar)'}\\n\\nLa PROPIEDAD asume las consecuencias de su decision y RENUNCIA expresamente a las garantias o reclamaciones futuras derivadas de los danos o defectos causados por dicha omision.\\n\\n______________________________\\nFirma del PROPIEDAD\\n`\n  }),\n  otros: () => ({\n    title: `Documento contractual — ${project.project_name}`,\n    body: `DOCUMENTO CONTRACTUAL\\n\\nEn ${project.location_city || '___'}, a ${today}.\\n\\nPARTES:\\n${partiesText}\\n\\nALCANCE:\\n${input.scope || '(detallar)'}\\n\\nIMPORTE: ${input.amount_eur ? input.amount_eur.toLocaleString('es-ES') + ' EUR' : 'n/a'}\\n\\n______________________________               ______________________________\\nFirma                                                                              Firma\\n`\n  })\n};\n\nconst gen = TPL[input.contract_type] || TPL.otros;\nconst { title, body } = gen();\n\nconst expiresAt = new Date(Date.now() + (input.expires_days * 86400 * 1000)).toISOString();\n\nreturn [{ json: {\n  title: title,\n  body: body,\n  template_used: input.contract_type + ':v1',\n  expires_at: expiresAt,\n  project_id: input.project_id,\n  project_name: project.project_name,\n  contract_type: input.contract_type,\n  parties: input.parties,\n  amount_eur: input.amount_eur,\n  scope: input.scope,\n  notes: input.notes,\n  client_email: client.email\n}}];"
+        "jsCode": "const tpl = $input.first().json;\nconst projectRow = $('Load Project + Client').first().json.data || {};\nconst input = $('Validate Input').first().json;\nconst client = projectRow.client || {};\n\nconst today = new Date().toLocaleDateString('es-ES', { day:'2-digit', month:'long', year:'numeric' });\nconst location = `${projectRow.location_address || ''}, ${projectRow.location_city || ''} (${projectRow.location_province || ''})`;\nconst partiesText = (input.parties || []).map(p => `• ${p.role.toUpperCase()}: ${p.name}${p.dni ? ' (DNI ' + p.dni + ')' : ''}${p.email ? ', email: ' + p.email : ''}${p.address ? ', domicilio: ' + p.address : ''}`).join('\\n');\nconst amount_text = input.amount_eur ? input.amount_eur.toLocaleString('es-ES') + ' EUR (IVA no incluido)' : '(a determinar)';\n\nconst vars = {\n  project_name: projectRow.project_name || '',\n  location_city: projectRow.location_city || '',\n  location: location,\n  property_area_m2: projectRow.property_area_m2 || '___',\n  today: today,\n  partiesText: partiesText,\n  scope: input.scope || '(pendiente)',\n  amount_text: amount_text,\n  amount_eur: input.amount_eur || '',\n  client_name: client.name || ''\n};\n\nconst render = (s) => (s || '').replace(/\\{(\\w+)\\}/g, (m, k) => vars[k] !== undefined ? String(vars[k]) : m);\n\nlet title, body;\nif (tpl && tpl.title_template) {\n  title = render(tpl.title_template);\n  body  = render(tpl.body_template);\n} else {\n  title = 'Documento contractual — ' + vars.project_name;\n  body  = 'Plantilla no encontrada para tipo ' + input.contract_type + '. Editar manualmente.';\n}\n\nconst expiresAt = new Date(Date.now() + (input.expires_days * 86400 * 1000)).toISOString();\n\nreturn [{ json: {\n  title: title,\n  body: body,\n  template_used: input.contract_type + ':v' + (tpl?.version || 1) + ':db',\n  expires_at: expiresAt,\n  project_id: input.project_id,\n  project_name: vars.project_name,\n  contract_type: input.contract_type,\n  parties: input.parties,\n  amount_eur: input.amount_eur,\n  scope: input.scope,\n  notes: input.notes,\n  client_email: client.email\n}}];"
       }
     },
     {
@@ -268,6 +268,30 @@
           "responseCode": 400
         }
       }
+    },
+    {
+      "id": "ac-tpl",
+      "name": "Load Template",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        380,
+        220
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT title_template, body_template FROM contract_templates WHERE contract_type = $1 AND is_active = true ORDER BY version DESC LIMIT 1;",
+        "options": {
+          "queryReplacement": "={{ [ $('Validate Input').first().json.contract_type ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "alwaysOutputData": true
     }
   ],
   "connections": {
@@ -316,17 +340,6 @@
         [
           {
             "node": "Respond 400",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Load Project + Client": {
-      "main": [
-        [
-          {
-            "node": "Build Contract Content",
             "type": "main",
             "index": 0
           }
@@ -382,6 +395,28 @@
         [
           {
             "node": "Respond 201",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Project + Client": {
+      "main": [
+        [
+          {
+            "node": "Load Template",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Template": {
+      "main": [
+        [
+          {
+            "node": "Build Contract Content",
             "type": "main",
             "index": 0
           }

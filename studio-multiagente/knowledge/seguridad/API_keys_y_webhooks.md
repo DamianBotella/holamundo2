@@ -34,7 +34,7 @@ O en n8n: Credentials → "Webhook API Key (entrante)" → ver el valor.
 ```bash
 curl -X POST https://n8n-n8n.zzeluw.easypanel.host/webhook/new-project \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: arquitai-qmcipaAHcGGWWolSz+psvmx2DEALwNbX" \
+  -H "X-API-Key: <WEBHOOK_API_KEY>" \
   -d '{ "client_name": "...", "project_name": "...", "project_type": "reforma_integral", ... }'
 ```
 

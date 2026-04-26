@@ -28,7 +28,7 @@ Pipeline:
 ```bash
 curl -X POST https://n8n-n8n.zzeluw.easypanel.host/webhook/trigger-drive-cleanup \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: arquitai-qmcipaAHcGGWWolSz+psvmx2DEALwNbX" \
+  -H "X-API-Key: <WEBHOOK_API_KEY>" \
   -d '{}'
 ```
 

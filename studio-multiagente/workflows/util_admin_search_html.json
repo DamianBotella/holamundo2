@@ -1,0 +1,73 @@
+{
+  "name": "util_admin_search_html",
+  "nodes": [
+    {
+      "id": "as-01",
+      "name": "Webhook GET",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-700, 300],
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "admin-search",
+        "responseMode": "responseNode",
+        "authentication": "headerAuth"
+      },
+      "credentials": { "httpHeaderAuth": { "id": "Ba643jvuElTgMawr", "name": "Webhook API Key (entrante)" } },
+      "webhookId": "as-trigger"
+    },
+    {
+      "id": "as-02",
+      "name": "Search",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [-460, 300],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH q AS (SELECT NULLIF(trim($1),'') AS term)\nSELECT json_build_object(\n  'term', (SELECT term FROM q),\n  'projects', CASE WHEN (SELECT term FROM q) IS NULL THEN '[]'::json\n    ELSE (SELECT json_agg(t.* ORDER BY t.updated_at DESC NULLS LAST) FROM (\n      SELECT id, name, current_phase, project_type, location_city, status, updated_at\n        FROM projects\n       WHERE name ILIKE '%' || (SELECT term FROM q) || '%'\n          OR location_city ILIKE '%' || (SELECT term FROM q) || '%'\n          OR location_address ILIKE '%' || (SELECT term FROM q) || '%'\n       LIMIT 20\n    ) t)\n  END,\n  'clients', CASE WHEN (SELECT term FROM q) IS NULL THEN '[]'::json\n    ELSE (SELECT json_agg(t.*) FROM (\n      SELECT id, name, pii_decrypt(email_enc) AS email, created_at\n        FROM clients\n       WHERE name ILIKE '%' || (SELECT term FROM q) || '%'\n          OR pii_decrypt(email_enc) ILIKE '%' || (SELECT term FROM q) || '%'\n       LIMIT 20\n    ) t)\n  END,\n  'recent_events', CASE WHEN (SELECT term FROM q) IS NULL THEN '[]'::json\n    ELSE (SELECT json_agg(t.* ORDER BY t.occurred_at DESC) FROM (\n      SELECT event_type, severity, source_ip, occurred_at, LEFT(description, 80) AS preview\n        FROM security_events\n       WHERE description ILIKE '%' || (SELECT term FROM q) || '%'\n          OR source_ip = (SELECT term FROM q)\n       ORDER BY occurred_at DESC\n       LIMIT 10\n    ) t)\n  END\n) AS report;",
+        "options": { "queryReplacement": "={{ [ ($('Webhook GET').first().json.query.q || '') ] }}" }
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } }
+    },
+    {
+      "id": "as-03",
+      "name": "Build HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-220, 300],
+      "parameters": {
+        "jsCode": "const r = $input.first().json.report || {};\nconst term = r.term;\nconst projects = r.projects || [];\nconst clients = r.clients || [];\nconst events = r.recent_events || [];\nconst row = (cells) => '<tr>'+cells.map(c=>'<td style=\"padding:6px 8px;border-bottom:1px solid #eee;font-size:12px\">'+c+'</td>').join('')+'</tr>';\nconst section = (title, body, count) => '<h2 style=\"color:#374151;font-size:15px;margin:20px 0 8px\">'+title+(count!==undefined?' <span style=\"color:#6b7280\">('+count+')</span>':'')+'</h2>'+body;\nconst tbl = (headers, rows) => '<table style=\"width:100%;background:white;border-collapse:collapse;border-radius:6px;overflow:hidden\"><thead style=\"background:#1f2937;color:white\"><tr>'+headers.map(h=>'<th style=\"padding:8px;text-align:left;font-size:11px\">'+h+'</th>').join('')+'</tr></thead><tbody>'+(rows.length>0?rows.join(''):row(headers.map(()=>'<i style=\"color:#6b7280\">sin resultados</i>')))+'</tbody></table>';\nconst projRows = projects.map(p=>row([\n  '<a href=\"/webhook/admin-project?project_id='+p.id+'\" style=\"color:#2563eb;font-weight:600;text-decoration:none\">'+p.name+'</a>',\n  '<code>'+p.current_phase+'</code>',\n  p.project_type||'-',\n  p.location_city||'-',\n  '<code>'+p.status+'</code>',\n  new Date(p.updated_at).toISOString().slice(0,10)\n]));\nconst clientRows = clients.map(c=>row([\n  '<b>'+c.name+'</b>',\n  '<code>'+(c.email||'-')+'</code>',\n  new Date(c.created_at).toISOString().slice(0,10)\n]));\nconst eventRows = events.map(e=>row([\n  e.event_type, e.severity, e.source_ip||'-',\n  new Date(e.occurred_at).toISOString().slice(0,16).replace('T',' '),\n  e.preview||'-'\n]));\nconst html = '<!DOCTYPE html><html lang=\"es\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>Buscar — ArquitAI</title>' +\n'<style>body{font-family:-apple-system,Arial,sans-serif;max-width:1100px;margin:24px auto;padding:16px;color:#1f2937;background:#f3f4f6}h1{color:#0f172a;margin:0 0 4px}form{background:white;padding:14px;border-radius:8px;margin:16px 0;display:flex;gap:8px}input[type=text]{flex:1;padding:8px 12px;border:1px solid #d1d5db;border-radius:4px;font-size:14px}button{padding:8px 16px;background:#2563eb;color:white;border:0;border-radius:4px;cursor:pointer;font-size:14px}.meta{color:#64748b;font-size:13px}</style>' +\n'</head><body>' +\n'<a href=\"/webhook/admin-index\" style=\"color:#2563eb;font-size:13px;text-decoration:none\">← Admin index</a>' +\n'<h1>Buscar</h1>' +\n'<form method=\"get\" action=\"/webhook/admin-search\"><input type=\"text\" name=\"q\" placeholder=\"nombre proyecto, ciudad, email cliente o IP...\" value=\"'+(term||'')+'\" autofocus><button type=\"submit\">Buscar</button></form>' +\n(term ? ('<div class=\"meta\">Resultados para <b>'+term+'</b></div>' +\n  section('Proyectos', tbl(['Proyecto','Fase','Tipo','Ciudad','Status','Update'], projRows), projects.length) +\n  section('Clientes', tbl(['Nombre','Email','Creado'], clientRows), clients.length) +\n  section('Security events relacionados', tbl(['Tipo','Sev','IP','Cuando','Preview'], eventRows), events.length))\n: '<div class=\"meta\">Introduce un termino para buscar.</div>') +\n'</body></html>';\nreturn [{ json: { html } }];"
+      }
+    },
+    {
+      "id": "as-04",
+      "name": "Respond HTML",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [20, 300],
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.html }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              { "name": "Content-Type", "value": "text/html; charset=utf-8" },
+              { "name": "X-Frame-Options", "value": "DENY" },
+              { "name": "Cache-Control", "value": "no-store" }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook GET": { "main": [[{ "node": "Search",      "type": "main", "index": 0 }]] },
+    "Search":      { "main": [[{ "node": "Build HTML",  "type": "main", "index": 0 }]] },
+    "Build HTML":  { "main": [[{ "node": "Respond HTML","type": "main", "index": 0 }]] }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5"
+  }
+}

@@ -1,0 +1,77 @@
+{
+  "name": "cron_business_weekly_email",
+  "nodes": [
+    {
+      "id": "be-01",
+      "name": "Monday 08:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-700, 300],
+      "parameters": { "rule": { "interval": [{ "field": "cronExpression", "expression": "0 8 * * 1" }] } }
+    },
+    {
+      "id": "be-02",
+      "name": "Compute KPIs",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [-460, 300],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT json_build_object(\n  'projects_active', (SELECT count(*) FROM projects WHERE status='active' AND current_phase NOT IN ('completed','archived')),\n  'projects_completed_7d', (SELECT count(*) FROM projects WHERE current_phase='completed' AND completed_at > now() - INTERVAL '7 days'),\n  'invoices_paid_7d_eur', COALESCE((SELECT round(sum(total_amount)::numeric, 2) FROM invoices WHERE status='paid' AND paid_at > now() - INTERVAL '7 days'), 0),\n  'invoices_pending', (SELECT count(*) FROM invoices WHERE status='pending'),\n  'aftercare_open_urgent', (SELECT count(*) FROM aftercare_incidents WHERE status NOT IN ('resolved','closed','cancelled') AND severity IN ('high','critical')),\n  'collab_overdue', (SELECT count(*) FROM collab_assignments WHERE status NOT IN ('approved','closed','cancelled','rejected') AND deadline IS NOT NULL AND deadline < now()::date),\n  'consultations_pending', (SELECT count(*) FROM consultation_queue WHERE status='pending'),\n  'contracts_expiring_7d', (SELECT count(*) FROM contracts WHERE status IN ('sent','ready_to_sign','draft') AND expires_at BETWEEN now() AND now() + INTERVAL '7 days'),\n  'llm_cost_7d_usd', COALESCE(round((SELECT sum(cost_usd) FROM llm_calls WHERE occurred_at > now() - INTERVAL '7 days')::numeric, 2), 0),\n  'llm_calls_7d', (SELECT count(*) FROM llm_calls WHERE occurred_at > now() - INTERVAL '7 days'),\n  'health_score', (SELECT score FROM system_health_score),\n  'health_color', (SELECT color FROM system_health_score),\n  'top_projects_by_activity', (SELECT json_agg(t.* ORDER BY t.events DESC) FROM (\n    SELECT p.name, count(al.*) AS events\n      FROM projects p JOIN activity_log al ON al.project_id = p.id\n     WHERE al.created_at > now() - INTERVAL '7 days' AND p.status='active'\n     GROUP BY p.name ORDER BY events DESC LIMIT 5\n  ) t)\n) AS report;",
+        "options": {}
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } }
+    },
+    {
+      "id": "be-03",
+      "name": "Load Architect Email",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [-220, 300],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT value FROM system_config WHERE key='architect_email'",
+        "options": {}
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } }
+    },
+    {
+      "id": "be-04",
+      "name": "Build Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [20, 300],
+      "parameters": {
+        "jsCode": "const r = $('Compute KPIs').first().json.report || {};\nconst score = r.health_score;\nconst color = r.health_color || 'gray';\nconst bg = color === 'green' ? '#10b981' : (color === 'yellow' ? '#f59e0b' : '#dc2626');\nconst tops = r.top_projects_by_activity || [];\nconst topsHtml = tops.length>0 ? tops.map(t => '<li>'+t.name+' — <b>'+t.events+'</b> eventos</li>').join('') : '<li><i>sin actividad reciente</i></li>';\nconst card = (label, value, unit) => '<td style=\"padding:14px;background:#f9fafb;border-radius:6px;width:33%;vertical-align:top\"><div style=\"font-size:11px;color:#6b7280;text-transform:uppercase\">'+label+'</div><div style=\"font-size:22px;font-weight:bold;color:#1f2937;margin-top:4px\">'+(value!=null?value:'-')+(unit?' <span style=\"font-size:13px;color:#6b7280;font-weight:normal\">'+unit+'</span>':'')+'</div></td>';\nconst html = '<div style=\"font-family:Arial,sans-serif;max-width:680px;margin:0 auto;padding:20px;color:#1f2937\">' +\n'<h1 style=\"color:#0f172a;margin:0 0 4px\">Resumen semanal estudio</h1>' +\n'<div style=\"color:#64748b;font-size:13px;margin-bottom:16px\">Lunes ' + new Date().toLocaleDateString('es-ES') + ' — datos ultimos 7 dias</div>' +\n'<div style=\"background:'+bg+';color:white;padding:14px 20px;border-radius:8px;margin-bottom:20px;display:flex;align-items:center;gap:14px\"><div style=\"font-size:36px;font-weight:bold\">'+(score!=null?score:'?')+'</div><div><div style=\"font-size:11px;text-transform:uppercase;letter-spacing:1px;opacity:.85\">System health score</div><div style=\"font-size:14px;font-weight:600\">'+color.toUpperCase()+'</div></div></div>' +\n'<table style=\"width:100%;border-spacing:8px;border-collapse:separate\">' +\n  '<tr>' + card('Proyectos activos', r.projects_active||0) + card('Completados 7d', r.projects_completed_7d||0) + card('Cobrado 7d', Number(r.invoices_paid_7d_eur||0).toLocaleString('es-ES'), 'EUR') + '</tr>' +\n  '<tr>' + card('Aftercare urgent', r.aftercare_open_urgent||0) + card('Collab overdue', r.collab_overdue||0) + card('Contratos expiran 7d', r.contracts_expiring_7d||0) + '</tr>' +\n  '<tr>' + card('Consultas pending', r.consultations_pending||0) + card('LLM coste 7d', r.llm_cost_7d_usd||0, 'USD') + card('LLM calls 7d', r.llm_calls_7d||0) + '</tr>' +\n'</table>' +\n'<h2 style=\"color:#374151;font-size:16px;margin:24px 0 8px\">Proyectos con mas actividad esta semana</h2>' +\n'<ul style=\"color:#374151;font-size:14px\">' + topsHtml + '</ul>' +\n'<p style=\"color:#94a3b8;font-size:11px;margin-top:32px;border-top:1px solid #e5e7eb;padding-top:12px\">Para detalle: <a href=\"https://n8n-n8n.zzeluw.easypanel.host/webhook/admin-index\" style=\"color:#2563eb\">/webhook/admin-index</a> con tu X-API-Key. Este email se envia automaticamente cada lunes a las 08:00.</p>' +\n'</div>';\nreturn [{ json: { html: html, subject: '[ArquitAI] Resumen semanal '+new Date().toLocaleDateString('es-ES')+' — score '+(score||'?')+' '+color.toUpperCase() } }];"
+      }
+    },
+    {
+      "id": "be-05",
+      "name": "Send Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [260, 300],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $('Load Architect Email').first().json.value }}",
+        "subject": "={{ $('Build Email').first().json.subject }}",
+        "emailType": "html",
+        "message": "={{ $('Build Email').first().json.html }}",
+        "options": { "appendAttribution": false }
+      },
+      "credentials": { "gmailOAuth2": { "id": "cIma8ntTjZvIfU3H", "name": "damian2botella" } },
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "Monday 08:00":         { "main": [[{ "node": "Compute KPIs",        "type": "main", "index": 0 }]] },
+    "Compute KPIs":         { "main": [[{ "node": "Load Architect Email","type": "main", "index": 0 }]] },
+    "Load Architect Email": { "main": [[{ "node": "Build Email",         "type": "main", "index": 0 }]] },
+    "Build Email":          { "main": [[{ "node": "Send Email",          "type": "main", "index": 0 }]] }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5"
+  }
+}

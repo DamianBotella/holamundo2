@@ -1,0 +1,119 @@
+{
+  "name": "cron_backup_verify",
+  "nodes": [
+    {
+      "id": "bv-01",
+      "name": "Daily 07:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-700, 300],
+      "parameters": { "rule": { "interval": [{ "field": "cronExpression", "expression": "0 7 * * *" }] } }
+    },
+    {
+      "id": "bv-02",
+      "name": "Check Backups",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [-460, 300],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT json_build_object(\n  'last_backup_age_hours', COALESCE(EXTRACT(EPOCH FROM (now() - max(created_at)))/3600, 9999)::int,\n  'last_backup_status', (SELECT status FROM system_backups ORDER BY created_at DESC LIMIT 1),\n  'last_backup_type', (SELECT backup_type FROM system_backups ORDER BY created_at DESC LIMIT 1),\n  'last_backup_destination', (SELECT destination FROM system_backups ORDER BY created_at DESC LIMIT 1),\n  'last_backup_size_mb', COALESCE(round(((SELECT size_bytes FROM system_backups ORDER BY created_at DESC LIMIT 1)::numeric / 1048576), 2), 0),\n  'failures_last_7d', (SELECT count(*) FROM system_backups WHERE created_at > now() - INTERVAL '7 days' AND status='failed'),\n  'success_last_7d', (SELECT count(*) FROM system_backups WHERE created_at > now() - INTERVAL '7 days' AND status='success'),\n  'total_backups_known', (SELECT count(*) FROM system_backups)\n) AS report FROM system_backups;",
+        "options": {}
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "alwaysOutputData": true
+    },
+    {
+      "id": "bv-03",
+      "name": "Stale or Failed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [-220, 300],
+      "parameters": {
+        "conditions": {
+          "options": { "version": 2, "leftValue": "", "caseSensitive": true, "typeValidation": "loose" },
+          "combinator": "or",
+          "conditions": [
+            { "id": "s1", "leftValue": "={{ Number($json.report.last_backup_age_hours) }}", "rightValue": 168, "operator": { "type": "number", "operation": "gt" } },
+            { "id": "s2", "leftValue": "={{ $json.report.last_backup_status }}", "rightValue": "failed", "operator": { "type": "string", "operation": "equals" } },
+            { "id": "s3", "leftValue": "={{ Number($json.report.failures_last_7d) }}", "rightValue": 2, "operator": { "type": "number", "operation": "gt" } }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "bv-04",
+      "name": "Raise Critical",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [20, 220],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT raise_security_event(\n  'data_breach_suspected'::text,\n  'critical'::text,\n  'cron'::text, '/cron_backup_verify'::text, 'backup_health'::text, NULL::uuid,\n  'Backup verify FAIL: ultimo backup hace ' || ($1::int) || 'h, status: ' || COALESCE($2::text, '(ninguno)') || ', failures 7d: ' || $3::int,\n  $4::jsonb\n) AS event_id;",
+        "options": { "queryReplacement": "={{ [ $json.report.last_backup_age_hours, $json.report.last_backup_status, $json.report.failures_last_7d, JSON.stringify($json.report) ] }}" }
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } }
+    },
+    {
+      "id": "bv-05",
+      "name": "Load Architect Email",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [260, 220],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT value FROM system_config WHERE key='architect_email'",
+        "options": {}
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } }
+    },
+    {
+      "id": "bv-06",
+      "name": "Send Alert",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [500, 220],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $json.value }}",
+        "subject": "[ARQUITAI CRITICAL] Backup verificacion fallida",
+        "emailType": "html",
+        "message": "=<div style=\"font-family:Arial;max-width:600px\"><h2 style=\"color:#dc2626\">Backup en riesgo</h2><p>El cron_backup_verify ha detectado problemas con el sistema de backups:</p><pre style=\"background:#f3f4f6;padding:12px;border-radius:6px;font-size:12px\">{{ JSON.stringify($('Check Backups').first().json.report, null, 2) }}</pre><p><b>Acciones:</b></p><ul><li>Verifica que cron_external_backup esta activo en n8n</li><li>Revisa logs de las ultimas ejecuciones (n8n executions)</li><li>Verifica que el destino de backup (Drive/S3) sigue accesible</li></ul></div>",
+        "options": { "appendAttribution": false }
+      },
+      "credentials": { "gmailOAuth2": { "id": "cIma8ntTjZvIfU3H", "name": "damian2botella" } },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "bv-07",
+      "name": "Log OK",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [20, 380],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (action, agent_name, details) VALUES ('backup_verify_ok', 'cron_backup_verify', $1::jsonb);",
+        "options": { "queryReplacement": "={{ [ JSON.stringify($json.report) ] }}" }
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } }
+    }
+  ],
+  "connections": {
+    "Daily 07:00":          { "main": [[{ "node": "Check Backups",        "type": "main", "index": 0 }]] },
+    "Check Backups":        { "main": [[{ "node": "Stale or Failed?",     "type": "main", "index": 0 }]] },
+    "Stale or Failed?":     {
+      "main": [
+        [{ "node": "Raise Critical", "type": "main", "index": 0 }],
+        [{ "node": "Log OK",         "type": "main", "index": 0 }]
+      ]
+    },
+    "Raise Critical":       { "main": [[{ "node": "Load Architect Email", "type": "main", "index": 0 }]] },
+    "Load Architect Email": { "main": [[{ "node": "Send Alert",           "type": "main", "index": 0 }]] }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5"
+  }
+}

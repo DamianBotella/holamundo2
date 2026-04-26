@@ -24,6 +24,8 @@
 | `GET /webhook/admin-export?dataset=<name>` | `util_admin_export_csv` (`fKn8F4cXN17QXydM`) | Header X-API-Key | Export CSV multi-dataset |
 | `GET /webhook/admin-search?q=<term>` | `util_admin_search_html` (`64dANKQHPVyfKnbG`) | Header X-API-Key | Búsqueda transversal proyectos/clientes/eventos |
 | `GET /webhook/admin-activity` | `util_admin_recent_activity_html` (`6Rk662AIopY93BGw`) | Header X-API-Key | Timeline 48h security events + activity_log |
+| `GET /webhook/admin-health-history` | `util_admin_health_history_html` (`PbSh6qd4wD2pHfO4`) | Header X-API-Key | Tendencia 30d del health score (SVG bar chart) |
+| `GET /webhook/admin-workflows` | `util_admin_audit_workflows_html` (`zP7NQ6wfhQFyw2ZB`) | Header X-API-Key | Status de 14 crons críticos (OK/STALE/NEVER/NO_TRACK) |
 
 ### Endpoints públicos (con security_check integrado)
 
@@ -69,6 +71,9 @@
 | `45 4 * * *` (diario 04:45) | `cron_db_size_check` (`edBWaDXssbrp96X0`) | Snapshot db_size + alerta si crece >50% en 7d |
 | `30 3 * * 0` (semanal Dom 03:30) | `cron_vacuum_analyze` (`TGie3Mfy5jKqTF7z`) | VACUUM ANALYZE sobre 12 tablas core |
 | `0 9 * * 1` (semanal Lun 09:00) | `cron_normativa_freshness` (`bMhUwi8PdlIlh5aW`) | Alerta si normativa_knowledge stale >90d |
+| `30 6 * * *` (diario 06:30) | `cron_health_score_snapshot` (`FQaWcUybqapIEoAg`) | Snapshot diario en health_score_history |
+| `30 7 * * *` (diario 07:30) | `cron_workflow_audit` (`YzFIE4H1RLrLDbt9`) | Verifica que 10 crons criticos hayan corrido en su ventana |
+| `0 8 * * 1` (semanal Lun 08:00) | `cron_business_weekly_email` (`J09y2O7LWrWoTn4B`) | Digest semanal del estudio (KPIs business + score) |
 
 ## Funciones SQL (PostgreSQL)
 
@@ -145,3 +150,4 @@
 | 036 | `036_db_size_history.sql` | Tabla db_size_history para tracking de crecimiento |
 | 037 | `037_agent_prompts_history.sql` | Tabla agent_prompts_history + trigger snapshot + vista churn |
 | 038 | `038_system_health_score.sql` | Vista system_health_score (0-100 con color green/yellow/red) |
+| 039 | `039_health_score_history.sql` | Tabla health_score_history para trends del score |

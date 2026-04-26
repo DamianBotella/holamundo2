@@ -1,0 +1,19 @@
+{
+  "name": "util_admin_pipeline_metrics_html",
+  "_n8n_id": "Zw6iaYTwznmgkeuL",
+  "_purpose": "Dashboard ejecutivo del pipeline. GET /webhook/admin-pipeline-metrics con header x-api-key. Muestra: 4 cards (total, activos, completados, tiempo medio), distribucion de proyectos por fase con barras visuales, actividad de agentes 7d (runs+fails), proyectos estancados >14d sin movimiento, ultimos completados.",
+  "_triggers": "GET /webhook/admin-pipeline-metrics (header x-api-key)",
+  "_complementa_a": "util_admin_pipeline_html (KdkEHQuMDQMpgckP) — kanban visual de proyectos por fase. Este es metrico/agregado, el otro es kanban con cards de proyectos.",
+  "_data_source": "tabla projects (current_phase, created_at, updated_at) + agent_executions (started_at, status) 7d window",
+  "nodes": [
+    { "id": "apm-01", "name": "Webhook GET",            "type": "n8n-nodes-base.webhook",          "position": [-700, 300] },
+    { "id": "apm-02", "name": "Load Pipeline Metrics",  "type": "n8n-nodes-base.postgres",         "position": [-460, 300], "_query_summary": "json_build_object con phase_counts (CTE phase_map ordenado), totals (total/active/completed/archived), avg_days_completed, stale_projects (>14d sin updated_at), recent_completed (top 8 por updated_at), agent_activity_7d" },
+    { "id": "apm-03", "name": "Build HTML",             "type": "n8n-nodes-base.code",             "position": [-220, 300] },
+    { "id": "apm-04", "name": "Respond HTML",           "type": "n8n-nodes-base.respondToWebhook", "position": [20, 300] }
+  ],
+  "connections": {
+    "Webhook GET":            { "main": [[{ "node": "Load Pipeline Metrics", "type": "main", "index": 0 }]] },
+    "Load Pipeline Metrics":  { "main": [[{ "node": "Build HTML",            "type": "main", "index": 0 }]] },
+    "Build HTML":             { "main": [[{ "node": "Respond HTML",          "type": "main", "index": 0 }]] }
+  }
+}

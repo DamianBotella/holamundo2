@@ -1,0 +1,37 @@
+{
+  "name": "cron_drive_cleanup",
+  "_n8n_id": "6bG0DUrVWo9uBbNz",
+  "_note": "Stub sincronizado 2026-04-26 (bloque 13). Para version completa: mcp__n8n__n8n_get_workflow id=6bG0DUrVWo9uBbNz mode=full",
+  "_purpose": "Cron mensual que limpia backups antiguos en Google Drive (>retention configurable). Lista archivos en la carpeta de backups, filtra por modifiedTime < cutoff, los borra uno a uno con SplitInBatches loop, y notifica al arquitecto con el resumen (archivos borrados, espacio liberado, errores).",
+  "_triggers": {
+    "Schedule Monthly": "cron mensual (dia 1 a las XX:XX)",
+    "Manual Trigger":   "POST /webhook/trigger-drive-cleanup (test on-demand con X-API-Key)"
+  },
+  "_loop_pattern": "SplitInBatches output[1] = procesar archivo -> Delete File -> SplitInBatches (cierra loop) | output[0] = todos terminados -> Aggregate -> Notify",
+  "nodes": [
+    { "id": "cdc-01", "name": "Schedule Monthly",     "type": "n8n-nodes-base.scheduleTrigger", "position": [-700, 300] },
+    { "id": "cdc-02", "name": "Manual Trigger",       "type": "n8n-nodes-base.webhook",         "position": [-700, 500] },
+    { "id": "293b0250-ca32-443e-af79-143a4ea7b0b8", "name": "Load Architect Email", "type": "n8n-nodes-base.postgres", "position": [-580, 400] },
+    { "id": "cdc-03", "name": "Compute Cutoff",       "type": "n8n-nodes-base.code",            "position": [-460, 400] },
+    { "id": "cdc-04", "name": "List Old Backups",     "type": "n8n-nodes-base.httpRequest",     "position": [-220, 400] },
+    { "id": "cdc-05", "name": "Split Files",          "type": "n8n-nodes-base.splitInBatches",  "position": [20, 400] },
+    { "id": "cdc-06", "name": "Delete File",          "type": "n8n-nodes-base.googleDrive",     "position": [260, 320] },
+    { "id": "cdc-07", "name": "Aggregate Deletions",  "type": "n8n-nodes-base.code",            "position": [520, 400] },
+    { "id": "cdc-08", "name": "Notify Cleanup",       "type": "n8n-nodes-base.gmail",           "position": [780, 400] }
+  ],
+  "connections": {
+    "Schedule Monthly":     { "main": [[{ "node": "Load Architect Email", "type": "main", "index": 0 }]] },
+    "Manual Trigger":       { "main": [[{ "node": "Load Architect Email", "type": "main", "index": 0 }]] },
+    "Load Architect Email": { "main": [[{ "node": "Compute Cutoff",       "type": "main", "index": 0 }]] },
+    "Compute Cutoff":       { "main": [[{ "node": "List Old Backups",     "type": "main", "index": 0 }]] },
+    "List Old Backups":     { "main": [[{ "node": "Split Files",          "type": "main", "index": 0 }]] },
+    "Split Files":          {
+      "main": [
+        [{ "node": "Aggregate Deletions", "type": "main", "index": 0 }],
+        [{ "node": "Delete File",         "type": "main", "index": 0 }]
+      ]
+    },
+    "Delete File":          { "main": [[{ "node": "Split Files",          "type": "main", "index": 0 }]] },
+    "Aggregate Deletions":  { "main": [[{ "node": "Notify Cleanup",       "type": "main", "index": 0 }]] }
+  }
+}

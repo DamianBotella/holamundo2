@@ -32,6 +32,7 @@
 | `POST /webhook/admin-note-toggle` | `util_admin_note_toggle` (`FOLt1PzhD1wh9WhX`) | Header X-API-Key | Pin/unpin/delete una nota existente |
 | `GET /webhook/admin-notes-list?project_id=<uuid>` | `util_admin_notes_list` (`yL2a8zawMoQrZtRH`) | Header X-API-Key | Listar notas del estudio (filtra por proyecto si se pasa). Cierra ciclo notes. |
 | `GET /webhook/admin-llm-stats` | `util_admin_llm_stats_html` (`QlGwyyV9S4AuVtln`) | Header X-API-Key | Dashboard HTML de costes LLM 24h/7d/30d, por agente y modelo, banner si hay `unknown_agent` en 24h |
+| `GET /webhook/admin-pipeline-metrics` | `util_admin_pipeline_metrics_html` (`Zw6iaYTwznmgkeuL`) | Header X-API-Key | Dashboard ejecutivo: distribución por fase con barras, totales, agentes 7d, proyectos estancados >14d, recientes completados |
 
 ### Endpoints públicos (con security_check integrado)
 

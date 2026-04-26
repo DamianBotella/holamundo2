@@ -1,0 +1,53 @@
+{
+  "name": "aftercare_submit",
+  "_n8n_id": "GkcU8G1y3gFOeZp9",
+  "_note": "Stub sincronizado 2026-04-26 (bloque 13). Para version completa: mcp__n8n__n8n_get_workflow id=GkcU8G1y3gFOeZp9 mode=full",
+  "_purpose": "Webhook publico postventa LOE. Cliente envia foto de incidencia; valida (security_check + token); carga datos del proyecto + handover; Vision LLM clasifica la incidencia (categoria, severidad, urgencia); inserta en aftercare_issues con status='pending'; envia email al arquitecto con el detalle clasificado.",
+  "_triggers": "POST /webhook/aftercare-public-submit (con body token + security_check previo via util_security_check)",
+  "_persists_to": "aftercare_issues (project_id, photo_url, category, description, severity, urgency, classification_llm)",
+  "_chain": "aftercare_submit recibe -> arquitecto recibe email -> aftercare_assign_resolve marca como resolved | requires_visit",
+  "_loe": "Postventa cubre el plazo legal de 1ano (responsabilidad por defectos), 3anos (acabados), 10anos (estructural).",
+  "nodes": [
+    { "id": "as-01", "name": "Webhook",               "type": "n8n-nodes-base.webhook",          "position": [-900, 300] },
+    { "id": "f14a73ec-95c6-458c-a4bf-c165c03d25b5", "name": "Load Architect Email", "type": "n8n-nodes-base.postgres", "position": [-800, 300] },
+    { "id": "as-02", "name": "Validate",              "type": "n8n-nodes-base.code",             "position": [-680, 300] },
+    { "id": "as-03", "name": "Valid?",                "type": "n8n-nodes-base.if",               "position": [-460, 300] },
+    { "id": "as-04", "name": "Respond 400",           "type": "n8n-nodes-base.respondToWebhook", "position": [-220, 480] },
+    { "id": "as-05", "name": "Load Project + Handover","type": "n8n-nodes-base.postgres",        "position": [-220, 220] },
+    { "id": "as-06", "name": "Build Vision Prompt",   "type": "n8n-nodes-base.code",             "position": [0, 220] },
+    { "id": "as-07", "name": "Call Vision",           "type": "n8n-nodes-base.httpRequest",      "position": [220, 220] },
+    { "id": "as-08", "name": "Parse + Classify",      "type": "n8n-nodes-base.code",             "position": [440, 160] },
+    { "id": "as-09", "name": "Insert Incident",       "type": "n8n-nodes-base.postgres",         "position": [660, 160] },
+    { "id": "as-10", "name": "Build Email",           "type": "n8n-nodes-base.code",             "position": [880, 160] },
+    { "id": "as-11", "name": "Send Email",            "type": "n8n-nodes-base.gmail",            "position": [1100, 160] },
+    { "id": "as-12", "name": "Mark Alert Sent",       "type": "n8n-nodes-base.postgres",         "position": [1320, 160] },
+    { "id": "as-13", "name": "Respond 201",           "type": "n8n-nodes-base.respondToWebhook", "position": [1540, 160] },
+    { "id": "as-14", "name": "Handle Vision Error",   "type": "n8n-nodes-base.code",             "position": [440, 320] },
+    { "id": "as-15", "name": "Respond 502",           "type": "n8n-nodes-base.respondToWebhook", "position": [660, 320] }
+  ],
+  "connections": {
+    "Webhook":                 { "main": [[{ "node": "Load Architect Email",   "type": "main", "index": 0 }]] },
+    "Load Architect Email":    { "main": [[{ "node": "Validate",               "type": "main", "index": 0 }]] },
+    "Validate":                { "main": [[{ "node": "Valid?",                 "type": "main", "index": 0 }]] },
+    "Valid?":                  {
+      "main": [
+        [{ "node": "Load Project + Handover", "type": "main", "index": 0 }],
+        [{ "node": "Respond 400",             "type": "main", "index": 0 }]
+      ]
+    },
+    "Load Project + Handover": { "main": [[{ "node": "Build Vision Prompt",   "type": "main", "index": 0 }]] },
+    "Build Vision Prompt":     { "main": [[{ "node": "Call Vision",           "type": "main", "index": 0 }]] },
+    "Call Vision":             {
+      "main": [
+        [{ "node": "Parse + Classify",   "type": "main", "index": 0 }],
+        [{ "node": "Handle Vision Error","type": "main", "index": 0 }]
+      ]
+    },
+    "Parse + Classify":        { "main": [[{ "node": "Insert Incident",       "type": "main", "index": 0 }]] },
+    "Insert Incident":         { "main": [[{ "node": "Build Email",           "type": "main", "index": 0 }]] },
+    "Build Email":             { "main": [[{ "node": "Send Email",            "type": "main", "index": 0 }]] },
+    "Send Email":              { "main": [[{ "node": "Mark Alert Sent",       "type": "main", "index": 0 }]] },
+    "Mark Alert Sent":         { "main": [[{ "node": "Respond 201",           "type": "main", "index": 0 }]] },
+    "Handle Vision Error":     { "main": [[{ "node": "Respond 502",           "type": "main", "index": 0 }]] }
+  }
+}

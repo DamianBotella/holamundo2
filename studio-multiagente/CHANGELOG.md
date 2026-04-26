@@ -2,7 +2,16 @@
 
 Histórico cronológico de hitos del sistema. Generado a partir de git log.
 
-## 2026-04-26 — Bloques 7-12: sync huérfanos + audits + meta-vigilancia LLM
+## 2026-04-26 — Bloques 7-13: sync huérfanos + audits + meta-vigilancia LLM
+
+### Bloque 13 (5 puntos): plan 5h
+- `util_admin_pipeline_metrics_html` (id `Zw6iaYTwznmgkeuL`, activo): GET `/webhook/admin-pipeline-metrics`. Dashboard ejecutivo con 4 cards (total, activos, completados, tiempo medio), distribución de fases con barras visuales, actividad de agentes 7d, proyectos estancados >14d, últimos completados.
+- 5 stubs huérfanos sincronizados: `agent_compliance_audit`, `agent_certificate_generator`, `agent_contracts` (los 3 reescritos al patrón stub estructural — antes eran versiones obsoletas sin `_n8n_id`), `aftercare_submit`, `cron_drive_cleanup`.
+- `studio-multiagente/docs/contexto_para_damian.md` actualizado con header de estado actual (22/26 features ArquitAI sec 3, 4 quick-wins priorizados, qué queda real). El cuerpo del doc original (20 oportunidades, taxonomía, knowledge/) queda intacto como referencia para Fase 2.
+- Doc nuevo `studio-multiagente/docs/stub_estructural_pattern.md`: mini-guía técnica del patrón (cuándo usar stub vs full, estructura mínima, reglas, anti-ejemplos, lista de los 20 stubs vivos en bloque 13).
+- AUDIT/CHANGELOG/referencia_workflows actualizados.
+
+
 
 ### Bloque 12 (5 puntos): plan 5h
 - `cron_workflow_audit` ahora vigila también `cron_unknown_agent_alert` (action `unknown_agent_check_clean`, ventana 26h). El cron ahora escribe activity_log también cuando count=0 (rama NoOp reemplazada por Postgres).

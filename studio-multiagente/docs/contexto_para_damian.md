@@ -6,6 +6,33 @@ Cuando tengas una sección lista, me la pasas y yo la integro al sistema (prompt
 
 ---
 
+## Estado actual (snapshot 2026-04-26, bloque 13)
+
+**Cobertura ArquitAI sec 3**: 22 de 26 oportunidades con MVP construido. La sección 1 de este documento sigue mostrando las 20 originales tal como las planteamos — pero la mayoría YA están en producción. Mantenidas aquí porque las "tu opinión" y "prerequisitos" siguen útiles para Fase 2 de cada una.
+
+**Resumen de qué queda real**:
+
+| Pendientes XL | Por qué no están | Bloqueador |
+|---|---|---|
+| 3.8 `agent_qc_checklists` | Tabla qc_checks existe; falta UI móvil | Frontend |
+| 3.12 `agent_bim_sync` | Necesita addin Revit/IFC | Tooling externo |
+| 3.17 `agent_ar_preview` | Necesita pipeline 3D + WebXR | Frontend + 3D |
+| 2.4 `agent_3d_design` | Pipeline SketchUp/Blender | Tooling externo |
+| 2.5 Chat sidebar + directives | Frontend completo | Frontend |
+| 2.6 Multi-tenant V2 | Refactor RLS profundo | Refactor |
+| 3.14 Ciberseguridad ampliada | DKIM/SPF/DMARC + RLS multi-rol | Configuración dominio |
+| 2.3 LightRAG normativa | Skill descargado, falta indexar | Tiempo CPU |
+
+**Próximos quick-wins (orden por impacto/esfuerzo)**:
+1. **Afinar `prompt_system` de los 11 agentes núcleo** en tono "Damián real" (2-4h, alto impacto cualitativo).
+2. **Poblar `supplier_catalog`** con 20-30 items reales (1h, agent_materials empieza a usar tus precios reales — el cableado ya está hecho desde bloque 10).
+3. **`cron_collab_review`** (~2h, valor preventivo).
+4. **Dashboard agregado de gremios** (1-2h, valor medio).
+
+Ver detalles ampliados de qué queda + reparto del trabajo de `knowledge/` en mi versión paralela: el resto de este archivo es tu mapa estratégico original (sigue siendo útil para reflexión + Fase 2).
+
+---
+
 ## Índice
 
 1. [Las 20 oportunidades identificadas — detalle + prerequisitos + tu opinión](#1-las-20-oportunidades)

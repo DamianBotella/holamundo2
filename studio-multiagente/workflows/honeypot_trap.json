@@ -1,0 +1,66 @@
+{
+  "name": "honeypot_trap",
+  "nodes": [
+    { "id": "hp-wh1", "name": "WH /admin", "type": "n8n-nodes-base.webhook", "typeVersion": 2, "position": [-700, 0], "parameters": { "httpMethod": "GET", "path": "admin", "responseMode": "responseNode" }, "webhookId": "hp-admin" },
+    { "id": "hp-wh2", "name": "WH /wp-admin", "type": "n8n-nodes-base.webhook", "typeVersion": 2, "position": [-700, 100], "parameters": { "httpMethod": "GET", "path": "wp-admin", "responseMode": "responseNode" }, "webhookId": "hp-wp-admin" },
+    { "id": "hp-wh3", "name": "WH /wp-login", "type": "n8n-nodes-base.webhook", "typeVersion": 2, "position": [-700, 200], "parameters": { "httpMethod": "GET", "path": "wp-login.php", "responseMode": "responseNode" }, "webhookId": "hp-wp-login" },
+    { "id": "hp-wh4", "name": "WH /.env", "type": "n8n-nodes-base.webhook", "typeVersion": 2, "position": [-700, 300], "parameters": { "httpMethod": "GET", "path": ".env", "responseMode": "responseNode" }, "webhookId": "hp-env" },
+    { "id": "hp-wh5", "name": "WH /.git/config", "type": "n8n-nodes-base.webhook", "typeVersion": 2, "position": [-700, 400], "parameters": { "httpMethod": "GET", "path": ".git/config", "responseMode": "responseNode" }, "webhookId": "hp-git" },
+    { "id": "hp-wh6", "name": "WH /phpmyadmin", "type": "n8n-nodes-base.webhook", "typeVersion": 2, "position": [-700, 500], "parameters": { "httpMethod": "GET", "path": "phpmyadmin", "responseMode": "responseNode" }, "webhookId": "hp-pma" },
+    { "id": "hp-wh7", "name": "WH /api/v1/admin", "type": "n8n-nodes-base.webhook", "typeVersion": 2, "position": [-700, 600], "parameters": { "httpMethod": "GET", "path": "api/v1/admin", "responseMode": "responseNode" }, "webhookId": "hp-api-admin" },
+    { "id": "hp-wh8", "name": "WH /console", "type": "n8n-nodes-base.webhook", "typeVersion": 2, "position": [-700, 700], "parameters": { "httpMethod": "GET", "path": "console", "responseMode": "responseNode" }, "webhookId": "hp-console" },
+    { "id": "hp-wh9", "name": "WH POST /login", "type": "n8n-nodes-base.webhook", "typeVersion": 2, "position": [-700, 800], "parameters": { "httpMethod": "POST", "path": "login", "responseMode": "responseNode" }, "webhookId": "hp-login" },
+    {
+      "id": "hp-build",
+      "name": "Build Event Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-300, 400],
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\nconst headers = item.headers || {};\nconst body = item.body || {};\nconst params = item.params || {};\nconst query = item.query || {};\nconst webhookUrl = item.webhookUrl || '';\nconst path = '/' + (webhookUrl.split('/webhook/')[1] || 'unknown');\nconst sourceIp = headers['x-real-ip'] || (headers['x-forwarded-for'] || '').split(',')[0].trim() || 'unknown';\nconst ua = headers['user-agent'] || '';\nconst payload = JSON.stringify({ params, query, body }).slice(0, 500);\nreturn [{ json: {\n  source_ip: sourceIp,\n  endpoint: path,\n  user_agent: ua,\n  description: 'Honeypot hit on ' + path + ' from ' + sourceIp,\n  details: { user_agent: ua, params, query, body_preview: payload }\n}}];"
+      }
+    },
+    {
+      "id": "hp-log",
+      "name": "Log Honeypot Hit",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [0, 400],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT raise_security_event(\n  'unauthorized_endpoint'::text,\n  'high'::text,\n  $1::text,\n  $2::text,\n  'honeypot'::text,\n  NULL::uuid,\n  $3::text,\n  $4::jsonb\n) AS event_id;",
+        "options": { "queryReplacement": "={{ [ $json.source_ip, $json.endpoint, $json.description, JSON.stringify($json.details) ] }}" }
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } }
+    },
+    {
+      "id": "hp-resp",
+      "name": "Respond 404",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [300, 400],
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "Not Found",
+        "options": { "responseCode": 404, "responseHeaders": { "entries": [{ "name": "Content-Type", "value": "text/plain" }] } }
+      }
+    }
+  ],
+  "connections": {
+    "WH /admin":         { "main": [[{ "node": "Build Event Payload", "type": "main", "index": 0 }]] },
+    "WH /wp-admin":      { "main": [[{ "node": "Build Event Payload", "type": "main", "index": 0 }]] },
+    "WH /wp-login":      { "main": [[{ "node": "Build Event Payload", "type": "main", "index": 0 }]] },
+    "WH /.env":          { "main": [[{ "node": "Build Event Payload", "type": "main", "index": 0 }]] },
+    "WH /.git/config":   { "main": [[{ "node": "Build Event Payload", "type": "main", "index": 0 }]] },
+    "WH /phpmyadmin":    { "main": [[{ "node": "Build Event Payload", "type": "main", "index": 0 }]] },
+    "WH /api/v1/admin":  { "main": [[{ "node": "Build Event Payload", "type": "main", "index": 0 }]] },
+    "WH /console":       { "main": [[{ "node": "Build Event Payload", "type": "main", "index": 0 }]] },
+    "WH POST /login":    { "main": [[{ "node": "Build Event Payload", "type": "main", "index": 0 }]] },
+    "Build Event Payload": { "main": [[{ "node": "Log Honeypot Hit", "type": "main", "index": 0 }]] },
+    "Log Honeypot Hit":    { "main": [[{ "node": "Respond 404",       "type": "main", "index": 0 }]] }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5"
+  }
+}

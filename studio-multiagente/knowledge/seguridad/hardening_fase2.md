@@ -115,13 +115,13 @@ Después: `executeWorkflow → util_security_check`. Output: `{allowed: bool, bl
 
 1. ~~**Integrar `util_security_check` en endpoints públicos**~~ ✅ Hecho 2026-04-26: cuatro endpoints integrados (`/webhook/client-ask`, `/webhook/gdpr-request`, `/webhook/aftercare-submit`, `/webhook/contract-signed`). Patrón: `Build Security Payload → Run Security Check → Security OK?` antes del primer hit a DB. Si `allowed=false` → 429 con `blocked_reason`. Smoke-test verificado: prompt-injection en client-ask devuelve `{status:'blocked', reason:'pattern:prompt_injection'}`; XSS en gdpr-request devuelve `{status:'blocked', reason:'pattern:xss'}`; preguntas legítimas pasan. `aftercare-submit` y `contract-signed` quedan tras Header Auth previo (defensa en profundidad).
 2. ~~**Backfill `consent_records`** para los 23 clientes existentes~~ ✅ Hecho 2026-04-26 (cleanup de tests, ver sección "Resolución" arriba).
-3. **Cifrar `client_conversations.question/answer`** (puede contener PII del cliente).
-4. **Cifrar `gdpr_requests.details`** (datos sensibles del cliente).
+3. ~~**Cifrar `client_conversations.question/answer`**~~ ✅ Hecho 2026-04-26 (migration 031, mismo patrón que migration 009: columnas `_enc bytea` + trigger BEFORE INSERT/UPDATE auto-cifra con `pii_encrypt()`. Backward-compatible: workflows actuales no requieren cambio).
+4. ~~**Cifrar `gdpr_requests.details`**~~ ✅ Hecho 2026-04-26 (migration 031, idem). Round-trip verificado (`pii_decrypt(pii_encrypt(x)) = x`).
 5. **Activar RLS multi-tenant** cuando haya un segundo estudio.
 6. **Rotación automática de `webhook_api_key`** (cron mensual + workflow `key_rotation` que actualiza system_config).
 7. **DKIM/SPF/DMARC** en el dominio del estudio (fuera de n8n — DNS).
 8. **Webhook signature** (HMAC-SHA256) en endpoints externos firma DocuSign / aftercare gremio reply.
-9. **Honeypot endpoints** (`/webhook/admin`, `/webhook/.env`) que loguean intentos de exploración.
+9. ~~**Honeypot endpoints**~~ ✅ Hecho 2026-04-26 — workflow `honeypot_trap` (`Gjsc6nxHY3KIlKj3`) con 9 paths trampa: `/admin`, `/wp-admin`, `/wp-login.php`, `/.env`, `/.git/config`, `/phpmyadmin`, `/api/v1/admin`, `/console`, `POST /login`. Cualquier hit registra `unauthorized_endpoint` con severity `high` en `security_events` y devuelve 404 genérico (sin revelar que es honeypot). Smoke verificado: 3 hits desde mi IP visibles en dashboard.
 10. **Penetration test profesional anual** (externo, no MVP).
 
 ## Espacio para Damián

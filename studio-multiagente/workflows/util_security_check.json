@@ -84,7 +84,7 @@
       ],
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT * FROM check_rate_limit($1, $2, $3::int, $4::int);",
+        "query": "SELECT\n  CASE WHEN is_ip_blocked($1) THEN false ELSE rl.allowed END AS allowed,\n  CASE WHEN is_ip_blocked($1) THEN 'ip_blocklist' ELSE rl.reason END AS reason,\n  rl.current_minute,\n  rl.current_hour,\n  is_ip_blocked($1) AS ip_blocked\nFROM check_rate_limit($1, $2, $3::int, $4::int) rl;",
         "options": {
           "queryReplacement": "={{ [ $json.source_ip, $json.endpoint, $json.max_per_minute, $json.max_per_hour ] }}"
         }

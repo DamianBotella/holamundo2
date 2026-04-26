@@ -34,6 +34,21 @@
       "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } }
     },
     {
+      "id": "hp-ban",
+      "name": "Maybe Auto-Ban",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [150, 400],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH recent_hits AS (\n  SELECT count(*) AS hits\n    FROM security_events\n   WHERE source_ip = $1\n     AND event_type = 'unauthorized_endpoint'\n     AND occurred_at > now() - INTERVAL '10 minutes'\n),\nban_action AS (\n  SELECT\n    rh.hits,\n    CASE WHEN rh.hits >= 3\n         THEN ban_ip($1, INTERVAL '24 hours', 'auto_ban_honeypot_3plus_hits_10min', $2::uuid)\n         ELSE NULL\n    END AS ban_id\n    FROM recent_hits rh\n)\nSELECT\n  hits,\n  ban_id,\n  CASE WHEN ban_id IS NOT NULL\n       THEN raise_security_event(\n         'data_breach_suspected'::text,\n         'critical'::text,\n         $1, '/honeypot_trap'::text, 'honeypot'::text, NULL::uuid,\n         'IP ' || $1 || ' auto-banned 24h after ' || hits || ' honeypot hits in 10min',\n         jsonb_build_object('ban_id', ban_id, 'evidence_event_id', $2, 'window_minutes', 10)\n       )\n       ELSE NULL\n  END AS critical_event_id\n  FROM ban_action;",
+        "options": { "queryReplacement": "={{ [ $('Build Event Payload').first().json.source_ip, $('Log Honeypot Hit').first().json.event_id ] }}"
+        }
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "alwaysOutputData": true
+    },
+    {
       "id": "hp-resp",
       "name": "Respond 404",
       "type": "n8n-nodes-base.respondToWebhook",
@@ -57,7 +72,8 @@
     "WH /console":       { "main": [[{ "node": "Build Event Payload", "type": "main", "index": 0 }]] },
     "WH POST /login":    { "main": [[{ "node": "Build Event Payload", "type": "main", "index": 0 }]] },
     "Build Event Payload": { "main": [[{ "node": "Log Honeypot Hit", "type": "main", "index": 0 }]] },
-    "Log Honeypot Hit":    { "main": [[{ "node": "Respond 404",       "type": "main", "index": 0 }]] }
+    "Log Honeypot Hit":    { "main": [[{ "node": "Maybe Auto-Ban",   "type": "main", "index": 0 }]] },
+    "Maybe Auto-Ban":      { "main": [[{ "node": "Respond 404",       "type": "main", "index": 0 }]] }
   },
   "settings": {
     "executionOrder": "v1",

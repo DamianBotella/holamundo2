@@ -1,0 +1,99 @@
+{
+  "name": "util_admin_note_create",
+  "nodes": [
+    {
+      "id": "nt-01",
+      "name": "Webhook POST",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-700, 300],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "admin-note",
+        "responseMode": "responseNode",
+        "authentication": "headerAuth"
+      },
+      "credentials": { "httpHeaderAuth": { "id": "Ba643jvuElTgMawr", "name": "Webhook API Key (entrante)" } },
+      "webhookId": "nt-trigger"
+    },
+    {
+      "id": "nt-02",
+      "name": "Validate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-460, 300],
+      "parameters": {
+        "jsCode": "const body = ($('Webhook POST').first().json.body) || {};\nconst pid = (body.project_id || '').trim();\nconst note = (body.body || '').trim();\nconst category = body.category || 'general';\nconst pinned = !!body.pinned;\nconst validCats = ['general','client_pref','site_access','contract','warning','idea'];\nif (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(pid)) return [{json:{valid:false, error:'project_id debe ser UUID'}}];\nif (note.length < 3 || note.length > 2000) return [{json:{valid:false, error:'body debe tener 3-2000 chars'}}];\nif (!validCats.includes(category)) return [{json:{valid:false, error:'category debe ser uno de: '+validCats.join(', ')}}];\nreturn [{json:{valid:true, project_id:pid, body:note, category, pinned}}];"
+      }
+    },
+    {
+      "id": "nt-03",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [-220, 300],
+      "parameters": {
+        "conditions": {
+          "options": { "version": 2, "leftValue": "", "caseSensitive": true, "typeValidation": "loose" },
+          "combinator": "and",
+          "conditions": [
+            { "id": "v1", "leftValue": "={{ $json.valid }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true", "singleValue": true } }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "nt-04",
+      "name": "Insert Note",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [20, 220],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO project_notes (project_id, body, category, pinned) VALUES ($1::uuid, $2, $3, $4::boolean) RETURNING id, project_id, body, category, pinned, created_at;",
+        "options": { "queryReplacement": "={{ [ $json.project_id, $json.body, $json.category, $json.pinned ] }}" }
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } }
+    },
+    {
+      "id": "nt-05",
+      "name": "Respond OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [260, 220],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'ok', note: $json}) }}",
+        "options": { "responseCode": 201 }
+      }
+    },
+    {
+      "id": "nt-06",
+      "name": "Respond Bad",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [20, 420],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'error', error: $json.error}) }}",
+        "options": { "responseCode": 400 }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook POST": { "main": [[{ "node": "Validate",   "type": "main", "index": 0 }]] },
+    "Validate":     { "main": [[{ "node": "Valid?",     "type": "main", "index": 0 }]] },
+    "Valid?":       {
+      "main": [
+        [{ "node": "Insert Note","type": "main", "index": 0 }],
+        [{ "node": "Respond Bad","type": "main", "index": 0 }]
+      ]
+    },
+    "Insert Note":  { "main": [[{ "node": "Respond OK", "type": "main", "index": 0 }]] }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5"
+  }
+}

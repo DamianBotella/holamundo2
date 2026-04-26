@@ -1,0 +1,80 @@
+{
+  "name": "cron_blocklist_cleanup",
+  "nodes": [
+    {
+      "id": "bc-01",
+      "name": "Daily Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-700, 300],
+      "parameters": {
+        "rule": { "interval": [{ "field": "cronExpression", "expression": "0 4 * * *" }] }
+      }
+    },
+    {
+      "id": "bc-02",
+      "name": "Delete Expired Bans",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [-460, 300],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH deleted AS (\n  DELETE FROM ip_blocklist\n   WHERE blocked_until < now() - INTERVAL '7 days'\n  RETURNING source_ip, hit_count, reason, blocked_until\n)\nSELECT json_build_object(\n  'rows_deleted', count(*),\n  'sample',       (SELECT array_agg(source_ip) FROM (SELECT source_ip FROM deleted LIMIT 5) s)\n) AS report FROM deleted;",
+        "options": {}
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } }
+    },
+    {
+      "id": "bc-03",
+      "name": "Anything Deleted?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [-220, 300],
+      "parameters": {
+        "conditions": {
+          "options": { "version": 2, "leftValue": "", "caseSensitive": true, "typeValidation": "loose" },
+          "combinator": "and",
+          "conditions": [
+            { "id": "d1", "leftValue": "={{ Number($json.report.rows_deleted) }}", "rightValue": 0, "operator": { "type": "number", "operation": "gt" } }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "bc-04",
+      "name": "Log Activity",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [20, 220],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (action, agent_name, details) VALUES ('blocklist_cleanup', 'cron_blocklist_cleanup', $1::jsonb);",
+        "options": { "queryReplacement": "={{ [ JSON.stringify($json.report) ] }}" }
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } }
+    },
+    {
+      "id": "bc-05",
+      "name": "No-op",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [20, 380],
+      "parameters": {}
+    }
+  ],
+  "connections": {
+    "Daily Trigger":       { "main": [[{ "node": "Delete Expired Bans", "type": "main", "index": 0 }]] },
+    "Delete Expired Bans": { "main": [[{ "node": "Anything Deleted?",   "type": "main", "index": 0 }]] },
+    "Anything Deleted?":   {
+      "main": [
+        [{ "node": "Log Activity", "type": "main", "index": 0 }],
+        [{ "node": "No-op",        "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5"
+  }
+}

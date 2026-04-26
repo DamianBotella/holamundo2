@@ -14,7 +14,10 @@
 | Path | Workflow | Auth | Función |
 |---|---|---|---|
 | `GET /webhook/security-dashboard` | `util_security_dashboard` (`k7sXYc50Ta1Y8NhN`) | Header X-API-Key | Snapshot completo en JSON (snapshot, recent_critical, top_ips_24h, blocklist) |
-| `GET /webhook/security-dashboard-html` | `util_security_dashboard_html` (`hhjRkb0aBnCIsHg7`) | Header X-API-Key | Vista HTML del dashboard (cards + 3 tablas) |
+| `GET /webhook/security-dashboard-html` | `util_security_dashboard_html` (`hhjRkb0aBnCIsHg7`) | Header X-API-Key | Vista HTML del dashboard de seguridad (cards + 3 tablas) |
+| `GET /webhook/dashboard-summary` | `util_dashboard_summary` (`BfNjUhQECJY6J5n6`) | Header X-API-Key | KPIs estudio en JSON |
+| `GET /webhook/dashboard-html` | `util_dashboard_summary_html` (`3GKoism5dRILkE9T`) | Header X-API-Key | Vista HTML del dashboard del estudio (proyectos, finance, concierge) |
+| `GET /webhook/llm-costs-html` | `util_llm_costs_html` (`SM5LbXSelBgt3B1U`) | Header X-API-Key | Vista HTML de costes LLM (por agente, proyecto, modelo, errores) |
 
 ### Endpoints públicos (con security_check integrado)
 
@@ -54,6 +57,8 @@
 | `0 3 * * 0` (semanal Dom 03:00) | `cron_security_events_purge` (`n702LDg8Y76oUs8k`) | DELETE events resolved >365d |
 | `30 4 * * *` (diario 04:30) | `cron_access_log_purge` (`AUwmuKSQTlIaC3W9`) | DELETE access_log >90d (preserva PII y errores) |
 | `0 6 * * *` (diario 06:00) | `cron_health_check` (`ztTrZupYJiQmkNGW`) | Verifica funciones SQL + tablas + roundtrip pii. Email crítico si falla |
+| `15 * * * *` (cada hora :15) | `cron_stuck_executions` (`eJD0DhgAvZXW5bYW`) | agent_executions running >10min → marcar failed |
+| `30 5 * * *` (diario 05:30) | `cron_data_integrity` (`XP04imsIGNlr1smJ`) | 15 chequeos de orphans / FKs / fases / enums |
 
 ## Funciones SQL (PostgreSQL)
 
@@ -126,3 +131,4 @@
 | 032 | `032_gdpr_view_uses_enc.sql` | gdpr_client_data_view → pii_decrypt(_enc) |
 | 033 | `033_ip_blocklist.sql` | Tabla ip_blocklist + is_ip_blocked() + ban_ip() |
 | 034 | `034_drop_pii_plain_columns.sql` | DROP COLUMN question, answer, details (PII en plain eliminada) |
+| 035 | `035_llm_calls_tracking.sql` | Tabla llm_calls + función log_llm_call() + vista llm_costs_summary |

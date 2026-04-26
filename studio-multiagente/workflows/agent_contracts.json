@@ -1,0 +1,398 @@
+{
+  "name": "agent_contracts",
+  "nodes": [
+    {
+      "id": "ac-01",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -700,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "contract-generate",
+        "responseMode": "responseNode",
+        "authentication": "headerAuth"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "Ba643jvuElTgMawr",
+          "name": "Webhook API Key (entrante)"
+        }
+      },
+      "webhookId": "ac-trigger"
+    },
+    {
+      "id": "ac-02",
+      "name": "Load Architect Email",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -460,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT value FROM system_config WHERE key = 'architect_email'",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ac-03",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -220,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const body = ($('Webhook').first().json.body) || {};\nconst types = ['encargo_profesional','contrato_cliente','contrato_gremio','acta_replanteo','acta_recepcion_provisional','acta_recepcion_definitiva','modificado_obra','renuncia_garantia','otros'];\nif (!body.project_id) return [{ json: { valid:false, error:'project_id obligatorio' } }];\nif (!body.contract_type || !types.includes(body.contract_type)) return [{ json: { valid:false, error:'contract_type debe ser uno de: '+types.join(', ') } }];\nif (!body.parties || !Array.isArray(body.parties) || body.parties.length === 0) return [{ json: { valid:false, error:'parties debe ser array no vacio con [{role, name, dni?, email?, address?}]' } }];\nreturn [{ json: {\n  valid: true,\n  project_id:    body.project_id,\n  contract_type: body.contract_type,\n  parties:       body.parties,\n  scope:         (body.scope || '').toString().slice(0, 5000),\n  amount_eur:    body.amount_eur ? Number(body.amount_eur) : null,\n  expires_days:  body.expires_days ? Number(body.expires_days) : 30,\n  notes:         (body.notes || '').toString().slice(0, 1000)\n}}];"
+      }
+    },
+    {
+      "id": "ac-04",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        20,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "v1",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ac-05",
+      "name": "Load Project + Client",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        260,
+        220
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT json_build_object(\n  'project_id', p.id,\n  'project_name', p.name,\n  'project_type', p.project_type,\n  'property_type', p.property_type,\n  'property_area_m2', p.property_area_m2,\n  'location_address', p.location_address,\n  'location_city', p.location_city,\n  'location_province', p.location_province,\n  'budget_target', p.budget_target,\n  'started_at', p.started_at,\n  'target_completion', p.target_completion,\n  'client', json_build_object('name', c.name, 'email', pii_decrypt(c.email_enc), 'phone', pii_decrypt(c.phone_enc), 'notes', pii_decrypt(c.notes_enc))\n) AS data\nFROM projects p JOIN clients c ON c.id = p.client_id\nWHERE p.id = $1::uuid;",
+        "options": {
+          "queryReplacement": "={{ [ $('Validate Input').first().json.project_id ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ac-06",
+      "name": "Build Contract Content",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        500,
+        220
+      ],
+      "parameters": {
+        "jsCode": "const project = $input.first().json.data || {};\nconst input   = $('Validate Input').first().json;\nconst client  = project.client || {};\n\nconst today = new Date().toLocaleDateString('es-ES', { day:'2-digit', month:'long', year:'numeric' });\nconst location = `${project.location_address || ''}, ${project.location_city || ''} (${project.location_province || ''})`;\nconst partiesText = (input.parties || []).map(p => `• ${p.role.toUpperCase()}: ${p.name}${p.dni ? ' (DNI ' + p.dni + ')' : ''}${p.email ? ', email: ' + p.email : ''}${p.address ? ', domicilio: ' + p.address : ''}`).join('\\n');\n\nconst TPL = {\n  encargo_profesional: () => ({\n    title: `Encargo profesional — ${project.project_name}`,\n    body: `ENCARGO PROFESIONAL DE SERVICIOS DE ARQUITECTURA TECNICA\\n\\nEn ${project.location_city || '___'}, a ${today}.\\n\\nREUNIDOS:\\n${partiesText}\\n\\nMANIFIESTAN que el ARQUITECTO/A asume el siguiente encargo profesional para el inmueble sito en ${location}, con superficie util aproximada de ${project.property_area_m2 || '___'} m2.\\n\\nALCANCE:\\n${input.scope || '(pendiente de detallar)'}\\n\\nHONORARIOS: ${input.amount_eur ? input.amount_eur.toLocaleString('es-ES') + ' EUR (IVA no incluido)' : '(a determinar)'}.\\n\\nFORMA DE PAGO: 30% al inicio, 40% al hito intermedio, 30% al cierre.\\n\\nPLAZO ESTIMADO: ${project.target_completion ? 'hasta ' + project.target_completion : 'segun acuerdo de las partes'}.\\n\\nRESPONSABILIDAD CIVIL: cubierta por la poliza colegial obligatoria del COAATM/COAAT correspondiente.\\n\\nAMBAS PARTES aceptan el presente encargo y firman en la fecha y lugar indicados.\\n\\n______________________________               ______________________________\\nFirma del CLIENTE                                                Firma del ARQUITECTO\\nNombre: ${client.name || ''}                                       Nombre: \\nDNI:                                                                            Colegiado n.º: \\n`\n  }),\n  contrato_cliente: () => ({\n    title: `Contrato de obra — ${project.project_name}`,\n    body: `CONTRATO DE EJECUCION DE OBRA DE REFORMA\\n\\nEn ${project.location_city || '___'}, a ${today}.\\n\\nREUNIDOS:\\n${partiesText}\\n\\nMANIFIESTAN su voluntad de contratar la ejecucion de la obra descrita a continuacion en el inmueble sito en ${location}.\\n\\nCLAUSULAS:\\n\\n1. OBJETO: ejecucion de la obra en regimen de contrato de obra a tanto alzado/segun mediciones.\\n\\n2. DESCRIPCION: ${input.scope || project.project_type}.\\n\\n3. IMPORTE TOTAL: ${input.amount_eur ? input.amount_eur.toLocaleString('es-ES') + ' EUR (IVA no incluido)' : '(a determinar segun presupuesto cerrado adjunto como anexo I)'}.\\n\\n4. FORMA DE PAGO: por certificaciones parciales mensuales segun obra ejecutada, con saldo final tras Acta de Recepcion Provisional.\\n\\n5. PLAZO: inicio estimado tras concesion de licencias necesarias. Plazo de ejecucion: a definir segun cronograma adjunto.\\n\\n6. GARANTIA LOE (Ley de Ordenacion de la Edificacion): 1 ano (acabados), 3 anos (habitabilidad), 10 anos (estructura), contados desde la firma del Acta de Recepcion.\\n\\n7. RECEPCION: la obra se entendera recibida tras firma del Acta de Recepcion Provisional, sin perjuicio de defectos detectados con posterioridad.\\n\\n8. JURISDICCION: las partes se someten expresamente a los Juzgados y Tribunales de ${project.location_city || '___'}.\\n\\nFirmado en duplicado.\\n\\n______________________________               ______________________________\\nFirma del CLIENTE                                                Firma del CONTRATISTA\\n`\n  }),\n  contrato_gremio: () => ({\n    title: `Contrato con gremio — ${project.project_name}`,\n    body: `CONTRATO DE SUBCONTRATACION DE TRABAJOS DE OBRA\\n\\nEn ${project.location_city || '___'}, a ${today}.\\n\\nREUNIDOS:\\n${partiesText}\\n\\nMANIFIESTAN que el GREMIO/EMPRESA SUBCONTRATISTA se compromete a ejecutar los siguientes trabajos como parte de la obra del proyecto ${project.project_name} en ${location}.\\n\\nALCANCE:\\n${input.scope || '(pendiente)'}\\n\\nIMPORTE: ${input.amount_eur ? input.amount_eur.toLocaleString('es-ES') + ' EUR (IVA no incluido)' : '(segun presupuesto adjunto)'}.\\n\\nPLAZO: a definir segun planificacion de obra.\\n\\nGARANTIA: 6 meses desde finalizacion del trabajo, sin perjuicio de las obligaciones LOE que recaen sobre el contratista principal.\\n\\nDOCUMENTACION OBLIGATORIA del subcontratista (a aportar antes del inicio): ITA, RC, alta autonomos/SS, certificado de estar al corriente con AEAT y SS, plan de seguridad y salud espećifico.\\n\\n______________________________               ______________________________\\nFirma del CONTRATISTA                                  Firma del SUBCONTRATISTA\\n`\n  }),\n  acta_replanteo: () => ({\n    title: `Acta de replanteo — ${project.project_name}`,\n    body: `ACTA DE REPLANTEO\\n\\nEn ${project.location_city || '___'}, a ${today}, en el inmueble sito en ${location}.\\n\\nINTERVIENEN:\\n${partiesText}\\n\\nMANIFIESTAN que se ha procedido al replanteo de la obra del proyecto ${project.project_name} y que las medidas y disposiciones se ajustan a lo previsto en el proyecto/memoria valorada, salvo las observaciones recogidas en el apartado siguiente.\\n\\nOBSERVACIONES Y AJUSTES ACEPTADOS:\\n${input.scope || '(sin observaciones)'}\\n\\nFECHA EFECTIVA DE INICIO DE OBRA: ${today}.\\n\\nLas partes firman conformes.\\n\\n______________________________               ______________________________\\nFirma del PROPIEDAD                                          Firma del CONTRATISTA\\n______________________________\\nFirma del DIRECTOR DE LA EJECUCION (Arquitecto Tecnico)\\n`\n  }),\n  acta_recepcion_provisional: () => ({\n    title: `Acta de recepcion provisional — ${project.project_name}`,\n    body: `ACTA DE RECEPCION PROVISIONAL DE OBRA\\n\\nEn ${project.location_city || '___'}, a ${today}, en el inmueble sito en ${location}.\\n\\nINTERVIENEN:\\n${partiesText}\\n\\nMANIFIESTAN que han revisado conjuntamente la obra del proyecto ${project.project_name} y que se da por RECIBIDA PROVISIONALMENTE en la fecha indicada, comenzando en este momento el ćomputo de los plazos de garantia previstos en la LOE (1 ano acabados, 3 anos habitabilidad, 10 anos estructura).\\n\\nINCIDENCIAS PENDIENTES (anexo) detectadas durante la revision:\\n${input.scope || '(ninguna)'}\\n\\nEl plazo para subsanacion de las incidencias pendientes es de 30 dias naturales desde la fecha del presente acta.\\n\\n______________________________               ______________________________\\nFirma del PROPIEDAD                                          Firma del CONTRATISTA\\n______________________________\\nFirma del DIRECTOR DE LA EJECUCION\\n`\n  }),\n  acta_recepcion_definitiva: () => ({\n    title: `Acta de recepcion definitiva — ${project.project_name}`,\n    body: `ACTA DE RECEPCION DEFINITIVA DE OBRA\\n\\nEn ${project.location_city || '___'}, a ${today}.\\n\\nINTERVIENEN:\\n${partiesText}\\n\\nMANIFIESTAN que tras la subsanacion de las incidencias del Acta de Recepcion Provisional, dan por DEFINITIVAMENTE RECIBIDA la obra del proyecto ${project.project_name} en ${location}.\\n\\nCERTIFICAN que se han entregado al PROPIETARIO la documentacion final de obra: boletines, certificados de instalaciones, manuales de electrodomesticos, garantias, planos finales y libro del edificio en su caso.\\n\\nNotas finales:\\n${input.scope || '(ninguna)'}\\n\\n______________________________               ______________________________\\nFirma del PROPIEDAD                                          Firma del CONTRATISTA\\n`\n  }),\n  modificado_obra: () => ({\n    title: `Modificado de obra — ${project.project_name}`,\n    body: `MODIFICADO DE OBRA\\n\\nEn ${project.location_city || '___'}, a ${today}.\\n\\nINTERVIENEN:\\n${partiesText}\\n\\nMANIFIESTAN que se acuerda introducir las siguientes modificaciones al proyecto ${project.project_name} respecto al alcance contratado inicialmente.\\n\\nALCANCE DE LA MODIFICACION:\\n${input.scope || '(detallar)'}\\n\\nIMPACTO ECONOMICO: ${input.amount_eur ? (input.amount_eur > 0 ? 'INCREMENTO de ' : 'REDUCCION de ') + Math.abs(input.amount_eur).toLocaleString('es-ES') + ' EUR' : '(sin impacto economico, solo reorganizacion)'}.\\n\\nIMPACTO EN PLAZO: a confirmar segun cronograma actualizado.\\n\\nLas partes firman su conformidad.\\n\\n______________________________               ______________________________\\nFirma del PROPIEDAD                                          Firma del CONTRATISTA\\n`\n  }),\n  renuncia_garantia: () => ({\n    title: `Renuncia de garantia — ${project.project_name}`,\n    body: `RENUNCIA EXPRESA DE LA PROPIEDAD A INSTALACION/SOLUCION TECNICA RECOMENDADA POR LA DIRECCION FACULTATIVA\\n\\nEn ${project.location_city || '___'}, a ${today}.\\n\\nINTERVIENEN:\\n${partiesText}\\n\\nMANIFIESTAN que la PROPIEDAD ha decidido NO acometer la siguiente actuacion, recomendada por la direccion facultativa por motivos t́ecnicos/normativos:\\n${input.scope || '(detallar)'}\\n\\nLa PROPIEDAD asume las consecuencias de su decision y RENUNCIA expresamente a las garantias o reclamaciones futuras derivadas de los danos o defectos causados por dicha omision.\\n\\n______________________________\\nFirma del PROPIEDAD\\n`\n  }),\n  otros: () => ({\n    title: `Documento contractual — ${project.project_name}`,\n    body: `DOCUMENTO CONTRACTUAL\\n\\nEn ${project.location_city || '___'}, a ${today}.\\n\\nPARTES:\\n${partiesText}\\n\\nALCANCE:\\n${input.scope || '(detallar)'}\\n\\nIMPORTE: ${input.amount_eur ? input.amount_eur.toLocaleString('es-ES') + ' EUR' : 'n/a'}\\n\\n______________________________               ______________________________\\nFirma                                                                              Firma\\n`\n  })\n};\n\nconst gen = TPL[input.contract_type] || TPL.otros;\nconst { title, body } = gen();\n\nconst expiresAt = new Date(Date.now() + (input.expires_days * 86400 * 1000)).toISOString();\n\nreturn [{ json: {\n  title: title,\n  body: body,\n  template_used: input.contract_type + ':v1',\n  expires_at: expiresAt,\n  project_id: input.project_id,\n  project_name: project.project_name,\n  contract_type: input.contract_type,\n  parties: input.parties,\n  amount_eur: input.amount_eur,\n  scope: input.scope,\n  notes: input.notes,\n  client_email: client.email\n}}];"
+      }
+    },
+    {
+      "id": "ac-07",
+      "name": "Create Google Doc",
+      "type": "n8n-nodes-base.googleDocs",
+      "typeVersion": 2,
+      "position": [
+        740,
+        220
+      ],
+      "parameters": {
+        "operation": "create",
+        "title": "={{ $json.title }}",
+        "folderId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "root",
+          "cachedResultName": "/ (Drive raíz)"
+        }
+      },
+      "credentials": {
+        "googleDocsOAuth2Api": {
+          "id": "6NK9u2hvm1UUdoVu",
+          "name": "Google Docs account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "ac-08",
+      "name": "Insert Doc Body HTTP",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        980,
+        220
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://docs.googleapis.com/v1/documents/' + $('Create Google Doc').first().json.id + ':batchUpdate' }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleDocsOAuth2Api",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ requests: [{ insertText: { location: { index: 1 }, text: $('Build Contract Content').first().json.body } }] }) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "credentials": {
+        "googleDocsOAuth2Api": {
+          "id": "6NK9u2hvm1UUdoVu",
+          "name": "Google Docs account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "ac-09",
+      "name": "Insert Contract Row",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1220,
+        220
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO contracts (\n  project_id, contract_type, title, parties, template_used, doc_url, doc_id, expires_at, amount_eur, scope, notes, status\n) VALUES (\n  $1::uuid, $2, $3, $4::jsonb, $5, $6, $7, $8::timestamptz, $9::numeric, $10, $11, 'draft'\n)\nRETURNING id, title, status, doc_url, expires_at;",
+        "options": {
+          "queryReplacement": "={{ [\n  $('Build Contract Content').first().json.project_id,\n  $('Build Contract Content').first().json.contract_type,\n  $('Build Contract Content').first().json.title,\n  JSON.stringify($('Build Contract Content').first().json.parties),\n  $('Build Contract Content').first().json.template_used,\n  ('https://docs.google.com/document/d/' + ($('Create Google Doc').first().json.id || '') + '/edit'),\n  ($('Create Google Doc').first().json.id || ''),\n  $('Build Contract Content').first().json.expires_at,\n  $('Build Contract Content').first().json.amount_eur,\n  $('Build Contract Content').first().json.scope,\n  $('Build Contract Content').first().json.notes\n] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ac-10",
+      "name": "Notify Damian",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1460,
+        220
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $('Load Architect Email').first().json.value }}",
+        "subject": "=ArquitAI — Contrato generado: {{ $json.title }}",
+        "emailType": "html",
+        "message": "=<div style=\"font-family:Arial,sans-serif;max-width:600px;margin:0 auto\"><h2>Contrato generado en borrador</h2><h3 style=\"color:#7f8c8d\">{{ $('Build Contract Content').first().json.project_name }}</h3><p><b>Tipo:</b> {{ $('Build Contract Content').first().json.contract_type }}</p><p><b>Importe:</b> {{ $('Build Contract Content').first().json.amount_eur || 'n/a' }} EUR</p><p><b>Estado:</b> draft (revisalo, edita lo necesario y envíalo manualmente al firmante)</p><p><a href=\"https://docs.google.com/document/d/{{ $('Create Google Doc').first().json.id }}/edit\" style=\"background:#3498db;color:white;padding:10px 20px;text-decoration:none;border-radius:4px\">Abrir borrador en Google Docs</a></p><p style=\"font-size:12px;color:#95a5a6\">Cuando tengas el contrato firmado: POST /webhook/contract-signed con {contract_id, signer_email, signed_doc_url} y se marcara como signed automaticamente.</p><p><b>Contract ID:</b> {{ $json.id }}</p></div>",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "cIma8ntTjZvIfU3H",
+          "name": "damian2botella"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "ac-11",
+      "name": "Respond 201",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        1700,
+        220
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'created', contract_id: $('Insert Contract Row').first().json.id, title: $('Insert Contract Row').first().json.title, doc_url: 'https://docs.google.com/document/d/' + $('Create Google Doc').first().json.id + '/edit', expires_at: $('Insert Contract Row').first().json.expires_at}) }}",
+        "options": {
+          "responseCode": 201
+        }
+      }
+    },
+    {
+      "id": "ac-12",
+      "name": "Respond 400",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        20,
+        480
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'error', error: $json.error}) }}",
+        "options": {
+          "responseCode": 400
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Load Architect Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Architect Email": {
+      "main": [
+        [
+          {
+            "node": "Validate Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Input": {
+      "main": [
+        [
+          {
+            "node": "Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid?": {
+      "main": [
+        [
+          {
+            "node": "Load Project + Client",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 400",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Project + Client": {
+      "main": [
+        [
+          {
+            "node": "Build Contract Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Contract Content": {
+      "main": [
+        [
+          {
+            "node": "Create Google Doc",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Google Doc": {
+      "main": [
+        [
+          {
+            "node": "Insert Doc Body HTTP",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Doc Body HTTP": {
+      "main": [
+        [
+          {
+            "node": "Insert Contract Row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Contract Row": {
+      "main": [
+        [
+          {
+            "node": "Notify Damian",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify Damian": {
+      "main": [
+        [
+          {
+            "node": "Respond 201",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  }
+}

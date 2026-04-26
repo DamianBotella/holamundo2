@@ -1,0 +1,191 @@
+{
+  "name": "collab_register",
+  "nodes": [
+    {
+      "id": "cr-01",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -700,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "collab-register",
+        "responseMode": "responseNode",
+        "authentication": "headerAuth"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "Ba643jvuElTgMawr",
+          "name": "Webhook API Key (entrante)"
+        }
+      },
+      "webhookId": "cr-trigger"
+    },
+    {
+      "id": "cr-02",
+      "name": "Validate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -460,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const body = ($('Webhook').first().json.body) || {};\nconst specs = ['estructurista','instalaciones','paisajismo','interiorista','arquitecto','aparejador','ingeniero','topografo','geotecnico','otros'];\nif (!body.name) return [{ json: { valid:false, error:'name obligatorio' } }];\nif (!body.email || !/^[^@\\s]+@[^@\\s]+$/.test(body.email)) return [{ json: { valid:false, error:'email valido obligatorio' } }];\nif (!body.specialty || !specs.includes(body.specialty)) return [{ json: { valid:false, error:'specialty debe ser uno de: '+specs.join(', ') } }];\nreturn [{ json: {\n  valid:true,\n  name: body.name.toString().slice(0,200),\n  email: body.email,\n  phone: body.phone || null,\n  specialty: body.specialty,\n  company: body.company || null,\n  collegiate_no: body.collegiate_no || null,\n  hourly_rate_eur: body.hourly_rate_eur ? Number(body.hourly_rate_eur) : null,\n  notes: (body.notes || '').toString().slice(0,500)\n}}];"
+      }
+    },
+    {
+      "id": "cr-03",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -220,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "v1",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "cr-04",
+      "name": "Insert Collab",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        20,
+        220
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO collaborators (name, email, phone, specialty, company, collegiate_no, hourly_rate_eur, notes)\nVALUES ($1, $2, $3, $4, $5, $6, $7::numeric, $8)\nRETURNING id, name, email, specialty, company;",
+        "options": {
+          "queryReplacement": "={{ [ $json.name, $json.email, $json.phone || '', $json.specialty, $json.company || '', $json.collegiate_no || '', $json.hourly_rate_eur, $json.notes ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "cr-05",
+      "name": "Respond 201",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        260,
+        220
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'created', collaborator_id: $json.id, name: $json.name, specialty: $json.specialty}) }}",
+        "options": {
+          "responseCode": 201
+        }
+      }
+    },
+    {
+      "id": "cr-06",
+      "name": "Respond 400",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        20,
+        460
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'error', error: $json.error}) }}",
+        "options": {
+          "responseCode": 400
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate": {
+      "main": [
+        [
+          {
+            "node": "Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid?": {
+      "main": [
+        [
+          {
+            "node": "Insert Collab",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 400",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Collab": {
+      "main": [
+        [
+          {
+            "node": "Respond 201",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  }
+}

@@ -1,0 +1,388 @@
+{
+  "name": "util_interop_bc3",
+  "nodes": [
+    {
+      "id": "bc-01",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -700,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "export-bc3",
+        "responseMode": "responseNode",
+        "authentication": "headerAuth"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "Ba643jvuElTgMawr",
+          "name": "Webhook API Key (entrante)"
+        }
+      },
+      "webhookId": "bc-trigger"
+    },
+    {
+      "id": "bc-02",
+      "name": "Validate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -460,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const body = ($('Webhook').first().json.body) || {};\nif (!body.project_id) return [{ json: { valid:false, error:'project_id obligatorio' } }];\nreturn [{ json: { valid:true, project_id: body.project_id, version: body.version || null } }];"
+      }
+    },
+    {
+      "id": "bc-03",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -220,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "v1",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "bc-04",
+      "name": "Load Cost Estimate",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        20,
+        220
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT json_build_object(\n  'project_id', p.id,\n  'project_name', p.name,\n  'project_type', p.project_type,\n  'property_area_m2', p.property_area_m2,\n  'location_city', p.location_city,\n  'cost_estimate_id', ce.id,\n  'version', ce.version,\n  'total_estimated', ce.total_estimated,\n  'budget_target', ce.budget_target,\n  'breakdown', ce.breakdown,\n  'status', ce.status\n) AS data\nFROM projects p\nJOIN cost_estimates ce ON ce.project_id = p.id\nWHERE p.id = $1::uuid\n  AND ($2::int IS NULL OR ce.version = $2::int)\nORDER BY ce.version DESC\nLIMIT 1;",
+        "options": {
+          "queryReplacement": "={{ [ $json.project_id, $json.version === null || $json.version === undefined ? null : $json.version ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "id": "bc-05",
+      "name": "Has Estimate?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        260,
+        220
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "h1",
+              "leftValue": "={{ $json.data?.cost_estimate_id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "bc-06",
+      "name": "Build BC3",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        500,
+        140
+      ],
+      "parameters": {
+        "jsCode": "// FIEBDC-3 (BC3) export\n// Spec ref: https://www.fiebdc.es/\nconst data = $input.first().json.data;\nconst breakdown = data.breakdown || [];\n\n// Format date as DDMMYYYY\nconst d = new Date();\nconst pad = n => String(n).padStart(2,'0');\nconst fechaBC3 = pad(d.getDate()) + pad(d.getMonth()+1) + d.getFullYear();\n\n// Sanitize text for BC3: no tildes ni saltos de linea (BC3 usa | y ~ como separadores)\nconst clean = s => (s || '').toString().replace(/[~|\\\\]/g, ' ').replace(/[\\r\\n]+/g, ' ').trim();\nconst num = n => (n === null || n === undefined || isNaN(Number(n))) ? '0.00' : Number(n).toFixed(2);\n\nconst lines = [];\n// Cabecera version\nlines.push(`~V|3.1|FIEBDC-3/2007|${fechaBC3}|EUROCONSTRUCTOR|ArquitAI v1.0|EUR|`);\n// Concepto raiz: el proyecto entero\nconst rootCode = '##';\nconst rootName = clean(data.project_name) + ' (v' + data.version + ')';\nlines.push(`~C|${rootCode}||${rootName}|${num(data.total_estimated)}|${fechaBC3}|0|`);\n\n// Generar capitulos y partidas a partir del breakdown\n// breakdown puede tener formato variable; intentamos manejar { partida, importe, unidad, cantidad, precio_unit, source } como minimo\n// Si breakdown es array de objetos:\nconst partidas = Array.isArray(breakdown) ? breakdown : (breakdown.items || breakdown.partidas || []);\n\n// Generar pseudo-codigos: 1, 2, 3...\nlet idx = 0;\nconst descomposicion = [];\npartidas.forEach((p, i) => {\n  idx++;\n  const code = String(idx).padStart(3,'0');\n  const unit = clean(p.unidad || p.unit || 'pa');\n  const name = clean(p.partida || p.name || p.concept || ('Partida ' + idx));\n  const cantidad = Number(p.cantidad || p.quantity || 1);\n  const precio = Number(p.precio_unit || p.unit_price || (Number(p.importe || p.amount || 0) / Math.max(cantidad,1)));\n  const importe = Number(p.importe || p.amount || (cantidad * precio));\n  // Tipo 2 = partida\n  lines.push(`~C|${code}|${unit}|${name}|${num(precio)}|${fechaBC3}|2|`);\n  // Texto extendido si hay notes/source\n  if (p.notes || p.source) {\n    lines.push(`~T|${code}|${clean((p.notes || '') + (p.source ? ' [Fuente: ' + p.source + ']' : ''))}|`);\n  }\n  // Descomposicion: el rootCode contiene este code con cantidad\n  descomposicion.push(`${code}\\\\${num(cantidad)}\\\\`);\n});\n\nif (descomposicion.length > 0) {\n  lines.push(`~D|${rootCode}\\\\${descomposicion.join('')}|`);\n}\n\nconst content = lines.join('\\n') + '\\n';\nconst filename = `${data.project_id.substring(0,8)}_v${data.version}_${fechaBC3}.bc3`;\n\nreturn [{ json: {\n  filename: filename,\n  content: content,\n  bytes: Buffer.byteLength(content, 'utf8'),\n  partidas_count: partidas.length,\n  total_estimated: data.total_estimated,\n  project_id: data.project_id,\n  cost_estimate_id: data.cost_estimate_id,\n  project_name: data.project_name\n}}];"
+      }
+    },
+    {
+      "id": "bc-07",
+      "name": "Build Binary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        740,
+        140
+      ],
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\nreturn [{ json: item, binary: { data: { data: Buffer.from(item.content, 'utf8').toString('base64'), mimeType: 'text/plain', fileName: item.filename } } }];"
+      }
+    },
+    {
+      "id": "bc-08",
+      "name": "Upload to Drive",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        980,
+        140
+      ],
+      "parameters": {
+        "resource": "file",
+        "operation": "upload",
+        "name": "={{ $json.filename }}",
+        "driveId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "My Drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "root"
+        },
+        "options": {},
+        "inputDataFieldName": "data"
+      },
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "VLObOrfmQGpS5Lb0",
+          "name": "damian2botella"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "bc-09",
+      "name": "Log Export",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1220,
+        140
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, status, output_summary)\nVALUES ($1::uuid, 'util_interop_bc3', 'export_bc3', 'success', $2)\nRETURNING id;",
+        "options": {
+          "queryReplacement": "={{ [ $('Build BC3').first().json.project_id, ('partidas=' + $('Build BC3').first().json.partidas_count + ', bytes=' + $('Build BC3').first().json.bytes) ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "bc-10",
+      "name": "Respond 200",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        1460,
+        140
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'exported', filename: $('Build BC3').first().json.filename, bytes: $('Build BC3').first().json.bytes, partidas_count: $('Build BC3').first().json.partidas_count, drive_file_id: ($('Upload to Drive').first()?.json?.id || null), drive_url: ($('Upload to Drive').first()?.json?.webViewLink || null)}) }}",
+        "options": {
+          "responseCode": 200
+        }
+      }
+    },
+    {
+      "id": "bc-11",
+      "name": "Respond 404",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        500,
+        360
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'not_found', error:'No hay cost_estimate para ese project_id'}) }}",
+        "options": {
+          "responseCode": 404
+        }
+      }
+    },
+    {
+      "id": "bc-12",
+      "name": "Respond 400",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        -220,
+        460
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'error', error: $json.error}) }}",
+        "options": {
+          "responseCode": 400
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate": {
+      "main": [
+        [
+          {
+            "node": "Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid?": {
+      "main": [
+        [
+          {
+            "node": "Load Cost Estimate",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 400",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Cost Estimate": {
+      "main": [
+        [
+          {
+            "node": "Has Estimate?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Estimate?": {
+      "main": [
+        [
+          {
+            "node": "Build BC3",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 404",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build BC3": {
+      "main": [
+        [
+          {
+            "node": "Build Binary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Binary": {
+      "main": [
+        [
+          {
+            "node": "Upload to Drive",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload to Drive": {
+      "main": [
+        [
+          {
+            "node": "Log Export",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Export": {
+      "main": [
+        [
+          {
+            "node": "Respond 200",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  }
+}

@@ -1,0 +1,425 @@
+{
+  "name": "collab_assign",
+  "nodes": [
+    {
+      "id": "ca-01",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -700,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "collab-assign",
+        "responseMode": "responseNode",
+        "authentication": "headerAuth"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "Ba643jvuElTgMawr",
+          "name": "Webhook API Key (entrante)"
+        }
+      },
+      "webhookId": "ca-trigger"
+    },
+    {
+      "id": "ca-02",
+      "name": "Load Architect Email",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -460,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT value FROM system_config WHERE key = 'architect_email'",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ca-03",
+      "name": "Validate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -220,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const body = ($('Webhook').first().json.body) || {};\nif (!body.project_id) return [{ json: { valid:false, error:'project_id obligatorio' } }];\nif (!body.collaborator_id) return [{ json: { valid:false, error:'collaborator_id obligatorio' } }];\nif (!body.role) return [{ json: { valid:false, error:'role obligatorio (ej: \"calculo estructural\")' } }];\nif (!body.scope || body.scope.toString().length < 10) return [{ json: { valid:false, error:'scope >= 10 chars obligatorio' } }];\nreturn [{ json: {\n  valid:true,\n  project_id: body.project_id,\n  collaborator_id: body.collaborator_id,\n  role: body.role.toString().slice(0,200),\n  scope: body.scope.toString().slice(0,3000),\n  deliverables: Array.isArray(body.deliverables) ? body.deliverables : [],\n  fee_eur: body.fee_eur ? Number(body.fee_eur) : null,\n  deadline: body.deadline || null\n}}];"
+      }
+    },
+    {
+      "id": "ca-04",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        20,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "v1",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ca-05",
+      "name": "Load Project + Collab",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        260,
+        220
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT json_build_object(\n  'project_id', p.id,\n  'project_name', p.name,\n  'project_type', p.project_type,\n  'location', p.location_address || ', ' || p.location_city,\n  'collaborator_id', c.id,\n  'collab_name', c.name,\n  'collab_email', c.email,\n  'collab_phone', c.phone,\n  'collab_specialty', c.specialty,\n  'collab_company', c.company\n) AS data\nFROM projects p, collaborators c\nWHERE p.id = $1::uuid AND c.id = $2::uuid;",
+        "options": {
+          "queryReplacement": "={{ [ $('Validate').first().json.project_id, $('Validate').first().json.collaborator_id ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "id": "ca-06",
+      "name": "Has Both?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        500,
+        220
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "h1",
+              "leftValue": "={{ $json.data?.collab_email }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ca-07",
+      "name": "Insert Assignment",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        740,
+        140
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO collab_assignments (project_id, collaborator_id, role, scope, deliverables, fee_eur, deadline, status)\nVALUES ($1::uuid, $2::uuid, $3, $4, $5::jsonb, $6::numeric, NULLIF($7,'')::date, 'invited')\nRETURNING id, role, status, deadline;",
+        "options": {
+          "queryReplacement": "={{ [\n  $('Validate').first().json.project_id,\n  $('Validate').first().json.collaborator_id,\n  $('Validate').first().json.role,\n  $('Validate').first().json.scope,\n  JSON.stringify($('Validate').first().json.deliverables),\n  $('Validate').first().json.fee_eur,\n  $('Validate').first().json.deadline || ''\n] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ca-08",
+      "name": "Build Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        980,
+        140
+      ],
+      "parameters": {
+        "jsCode": "const inserted = $input.first().json;\nconst data = $('Load Project + Collab').first().json.data;\nconst input = $('Validate').first().json;\nconst delivs = (input.deliverables || []).map(d => '<li>' + (typeof d === 'string' ? d : (d.name || JSON.stringify(d))) + '</li>').join('');\n\nconst html = `<div style=\"font-family:Arial,sans-serif;max-width:680px;margin:0 auto\">\n<h2 style=\"color:#2c3e50\">Solicitud de colaboracion en proyecto</h2>\n<p>Hola ${data.collab_name},</p>\n<p>Te invitamos a colaborar en el proyecto <b>${data.project_name}</b> (${data.location}).</p>\n<table style=\"width:100%;border-collapse:collapse\">\n  <tr><td style=\"padding:6px;background:#f3f4f6\"><b>Rol</b></td><td style=\"padding:6px\">${input.role}</td></tr>\n  <tr><td style=\"padding:6px;background:#f3f4f6\"><b>Especialidad</b></td><td style=\"padding:6px\">${data.collab_specialty}</td></tr>\n  <tr><td style=\"padding:6px;background:#f3f4f6\"><b>Honorarios</b></td><td style=\"padding:6px\">${input.fee_eur ? input.fee_eur.toLocaleString('es-ES') + ' EUR' : 'a convenir'}</td></tr>\n  <tr><td style=\"padding:6px;background:#f3f4f6\"><b>Deadline</b></td><td style=\"padding:6px\">${input.deadline || 'a convenir'}</td></tr>\n</table>\n<h3>Alcance</h3>\n<p>${input.scope}</p>\n${delivs ? '<h3>Entregables</h3><ul>' + delivs + '</ul>' : ''}\n<p style=\"margin-top:24px\">Por favor, confirma si aceptas el encargo respondiendo a este email. Una vez aceptado, te enviaremos los datos del proyecto y el plazo definitivo.</p>\n<p style=\"font-size:12px;color:#95a5a6\">Assignment ID: ${inserted.id}<br>Damian Martinez — ArquitAI</p>\n</div>`;\n\nreturn [{ json: {\n  to_collab: data.collab_email,\n  cc_architect: $('Load Architect Email').first().json.value,\n  subject: 'Colaboracion en ' + data.project_name + ' — ' + input.role,\n  html_body: html,\n  assignment_id: inserted.id,\n  collab_email: data.collab_email,\n  project_name: data.project_name\n}}];"
+      }
+    },
+    {
+      "id": "ca-09",
+      "name": "Email Collaborator",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1220,
+        140
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $json.to_collab }}",
+        "subject": "={{ $json.subject }}",
+        "emailType": "html",
+        "message": "={{ $json.html_body }}",
+        "options": {
+          "appendAttribution": false,
+          "ccList": "={{ $json.cc_architect }}"
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "cIma8ntTjZvIfU3H",
+          "name": "damian2botella"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "ca-10",
+      "name": "Log",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1460,
+        140
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, status, output_summary)\nVALUES ($1::uuid, 'collab_assign', 'collaborator_invited', 'success', $2)\nRETURNING id;",
+        "options": {
+          "queryReplacement": "={{ [ $('Validate').first().json.project_id, ('to=' + $json.to + ', assignment=' + $('Build Email').first().json.assignment_id) ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ca-11",
+      "name": "Respond 201",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        1700,
+        140
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'invited', assignment_id: $('Insert Assignment').first().json.id, role: $('Insert Assignment').first().json.role, deadline: $('Insert Assignment').first().json.deadline, collab_email: $('Build Email').first().json.collab_email}) }}",
+        "options": {
+          "responseCode": 201
+        }
+      }
+    },
+    {
+      "id": "ca-12",
+      "name": "Respond 404",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        740,
+        320
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'not_found', error:'project_id o collaborator_id no encontrados'}) }}",
+        "options": {
+          "responseCode": 404
+        }
+      }
+    },
+    {
+      "id": "ca-13",
+      "name": "Respond 400",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        20,
+        460
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'error', error: $json.error}) }}",
+        "options": {
+          "responseCode": 400
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Load Architect Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Architect Email": {
+      "main": [
+        [
+          {
+            "node": "Validate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate": {
+      "main": [
+        [
+          {
+            "node": "Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid?": {
+      "main": [
+        [
+          {
+            "node": "Load Project + Collab",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 400",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Project + Collab": {
+      "main": [
+        [
+          {
+            "node": "Has Both?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Both?": {
+      "main": [
+        [
+          {
+            "node": "Insert Assignment",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 404",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Assignment": {
+      "main": [
+        [
+          {
+            "node": "Build Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Email": {
+      "main": [
+        [
+          {
+            "node": "Email Collaborator",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email Collaborator": {
+      "main": [
+        [
+          {
+            "node": "Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log": {
+      "main": [
+        [
+          {
+            "node": "Respond 201",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  }
+}

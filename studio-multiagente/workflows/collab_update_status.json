@@ -1,0 +1,390 @@
+{
+  "name": "collab_update_status",
+  "nodes": [
+    {
+      "id": "cu-01",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -700,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "collab-update",
+        "responseMode": "responseNode",
+        "authentication": "headerAuth"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "Ba643jvuElTgMawr",
+          "name": "Webhook API Key (entrante)"
+        }
+      },
+      "webhookId": "cu-trigger"
+    },
+    {
+      "id": "cu-02",
+      "name": "Load Architect Email",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -460,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT value FROM system_config WHERE key = 'architect_email'",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "cu-03",
+      "name": "Validate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -220,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const body = ($('Webhook').first().json.body) || {};\nconst valid = ['accepted','rejected','in_progress','delivered','approved','rejected_delivery','closed','cancelled'];\nif (!body.assignment_id) return [{ json: { valid:false, error:'assignment_id obligatorio' } }];\nif (!body.new_status || !valid.includes(body.new_status)) return [{ json: { valid:false, error:'new_status debe ser: '+valid.join(',') } }];\nreturn [{ json: {\n  valid:true,\n  assignment_id: body.assignment_id,\n  new_status: body.new_status,\n  decision_notes: (body.decision_notes || '').toString().slice(0,1000),\n  delivery_files: Array.isArray(body.delivery_files) ? body.delivery_files : []\n}}];"
+      }
+    },
+    {
+      "id": "cu-04",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        20,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "v1",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "cu-05",
+      "name": "Update Assignment",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        260,
+        220
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE collab_assignments\n   SET status = $2,\n       decision_notes = COALESCE(NULLIF($3,''), decision_notes),\n       delivery_files = CASE WHEN $4::jsonb IS NOT NULL AND jsonb_array_length($4::jsonb) > 0 THEN $4::jsonb ELSE delivery_files END\n WHERE id = $1::uuid\n RETURNING id, project_id, collaborator_id, role, status, deadline, scope, accepted_at, delivered_at;",
+        "options": {
+          "queryReplacement": "={{ [ $json.assignment_id, $json.new_status, $json.decision_notes, JSON.stringify($json.delivery_files || []) ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "id": "cu-06",
+      "name": "Match?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        500,
+        220
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "m1",
+              "leftValue": "={{ $json.id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "cu-07",
+      "name": "Load Collab Info",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        740,
+        140
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT json_build_object('project_name', p.name, 'collab_name', c.name, 'collab_email', c.email, 'collab_specialty', c.specialty) AS data FROM collab_assignments ca JOIN projects p ON p.id = ca.project_id JOIN collaborators c ON c.id = ca.collaborator_id WHERE ca.id = $1::uuid;",
+        "options": {
+          "queryReplacement": "={{ [ $json.id ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "cu-08",
+      "name": "Build Notif",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        980,
+        140
+      ],
+      "parameters": {
+        "jsCode": "const data = $input.first().json.data;\nconst input = $('Validate').first().json;\nconst upd = $('Update Assignment').first().json;\n\nconst statusBadge = {\n  accepted: '#27ae60', rejected: '#e74c3c', in_progress: '#3498db',\n  delivered: '#9b59b6', approved: '#27ae60', rejected_delivery: '#e74c3c',\n  closed: '#7f8c8d', cancelled: '#7f8c8d'\n};\nconst color = statusBadge[input.new_status] || '#95a5a6';\nconst files = (input.delivery_files || []).map(f => '<li>' + (typeof f === 'string' ? f : (f.url || f.name || JSON.stringify(f))) + '</li>').join('');\n\nconst html = `<div style=\"font-family:Arial,sans-serif;max-width:600px;margin:0 auto\">\n<h2 style=\"color:#2c3e50\">Estado actualizado de colaboracion</h2>\n<h3 style=\"color:#7f8c8d\">${data.project_name}</h3>\n<p><b>Colaborador:</b> ${data.collab_name} (${data.collab_specialty}) — ${data.collab_email}</p>\n<p><b>Rol:</b> ${upd.role}</p>\n<p><b>Nuevo estado:</b> <span style=\"background:${color};color:white;padding:4px 12px;border-radius:12px\">${input.new_status}</span></p>\n${input.decision_notes ? '<p><b>Notas:</b> ' + input.decision_notes + '</p>' : ''}\n${files ? '<h3>Entregables recibidos</h3><ul>' + files + '</ul>' : ''}\n<p style=\"font-size:12px;color:#95a5a6\">Assignment ID: ${upd.id}</p>\n</div>`;\n\nreturn [{ json: { html_body: html, project_name: data.project_name, status: input.new_status } }];"
+      }
+    },
+    {
+      "id": "cu-09",
+      "name": "Notify Damian",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1220,
+        140
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $('Load Architect Email').first().json.value }}",
+        "subject": "=ArquitAI — Colab {{ $json.project_name }} → {{ $json.status }}",
+        "emailType": "html",
+        "message": "={{ $json.html_body }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "cIma8ntTjZvIfU3H",
+          "name": "damian2botella"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "cu-10",
+      "name": "Respond 200",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        1460,
+        140
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'updated', assignment_id: $('Update Assignment').first().json.id, new_status: $('Update Assignment').first().json.status}) }}",
+        "options": {
+          "responseCode": 200
+        }
+      }
+    },
+    {
+      "id": "cu-11",
+      "name": "Respond 404",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        740,
+        320
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'not_found', error:'assignment_id no encontrado'}) }}",
+        "options": {
+          "responseCode": 404
+        }
+      }
+    },
+    {
+      "id": "cu-12",
+      "name": "Respond 400",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        20,
+        460
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'error', error: $json.error}) }}",
+        "options": {
+          "responseCode": 400
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Load Architect Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Architect Email": {
+      "main": [
+        [
+          {
+            "node": "Validate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate": {
+      "main": [
+        [
+          {
+            "node": "Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid?": {
+      "main": [
+        [
+          {
+            "node": "Update Assignment",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 400",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Assignment": {
+      "main": [
+        [
+          {
+            "node": "Match?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Match?": {
+      "main": [
+        [
+          {
+            "node": "Load Collab Info",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 404",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Collab Info": {
+      "main": [
+        [
+          {
+            "node": "Build Notif",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Notif": {
+      "main": [
+        [
+          {
+            "node": "Notify Damian",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify Damian": {
+      "main": [
+        [
+          {
+            "node": "Respond 200",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  }
+}

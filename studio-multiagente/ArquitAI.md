@@ -250,11 +250,9 @@ Sistema multiagente para estudios de arquitectura técnica especializados en **r
 ### 3.9 ~~`agent_memory_v2`~~ — ✅ CONSTRUIDO (2026-04-25)
 **Movido a sección 1.3 — pgvector + similarity search integrado en `agent_memory` (genera embedding al guardar case) y `agent_briefing` (busca casos similares al iniciar). Ver `knowledge/memoria/sistema_memoria_v2.md`.**
 
-### 3.10 Simulación energética y huella de carbono — `agent_energy_assessor`
-- **Laguna real.** El CEE (Certificado de Eficiencia Energética) y la huella de carbono son cada vez más exigidos pero se hacen con software desconectado (CE3X, CYPETherm) al final del proyecto.
-- **Técnica.** Agente que lee design_option + materiales aprobados + ubicación, calcula demanda aproximada con fórmulas CTE HE0/HE1 y huella embebida desde base de datos de productos (ITeC BEDEC tiene datos de CO₂). Exporta directamente a formato CE3X o genera informe simplificado.
-- **Función.** Pre-evaluación energética viva durante el diseño, no certificación forense al final.
-- **Beneficio.** Decisiones de diseño (aislamiento, ventanas, orientación) se toman viendo el impacto energético al momento. Evita el rework de "casi certificado, falta subir aislamiento".
+### 3.10 ~~Simulación energética y huella de carbono~~ — ✅ MVP CONSTRUIDO (2026-04-26)
+- **Construido (fase 1)**: tabla `energy_assessments` (28 cols, jsonb breakdown CO2 + recomendaciones) en migración 021. Workflow `agent_energy_assessor` (`63XFqhlsg0d1cXav`) con prompt experto CTE DB-HE0/HE1 + Anejo B (zonas climáticas A3-E1). Endpoints: `POST /webhook/trigger-energy-assessor` + executeWorkflowTrigger. Calcula demanda kWh/m²·año (calefacción + refrigeración), transmitancia envolvente, emisiones CO2, calificación A-G, cumple_he0/he1 + recomendaciones priorizadas. Tabla embebida `CO2_FACTORS` por categoría material para huella embebida (kg CO2eq). Coste ~$0.01/eval con gpt-4o. Documentado en `knowledge/agent_energy_assessor.md`.
+- **Pendiente (fase 2)**: hook con agent_design / agent_materials para auto-disparo cuando cambia diseño/materiales; comparativa antes/después entre versiones; export CE3X .ctex; mover CO2_FACTORS a tabla `co2_factors_db`; integración con LightRAG normativa CTE para citas exactas.
 
 ### 3.11 ~~`agent_accessibility`~~ — ✅ CONSTRUIDO (2026-04-25)
 **Movido a sección 1.2.12 como agente operativo.**
@@ -265,11 +263,9 @@ Sistema multiagente para estudios de arquitectura técnica especializados en **r
 - **Función.** Mantiene ArquitAI y el modelo BIM como gemelos digitales bidireccionales.
 - **Beneficio.** Un cambio en el modelo BIM actualiza mediciones y presupuesto automáticamente. Fin de la dualidad "modelo de cálculo" vs "modelo de presupuesto".
 
-### 3.13 Firma electrónica y gestión de contratos — `agent_contracts`
-- **Laguna real.** Cada proyecto tiene 3-6 documentos que requieren firma (encargo profesional, contrato con cliente, contratos con gremios, actas). Se imprimen, firman, escanean — o se usa un servicio externo desconectado.
-- **Técnica.** Integración con FNMT / Autofirma / DocuSign. Generación del documento desde plantilla en Google Docs, envío para firma al firmante correcto, callback al firmarse → `documents` con `signed_at`, `signer_email`, `hash`.
-- **Función.** Ciclo completo: generar → enviar → firmar → archivar con trazabilidad legal.
-- **Beneficio.** Valor jurídico verificable, auditoría temporal exacta, archivo ordenado para defensa ante cualquier incidencia.
+### 3.13 ~~Firma electrónica y gestión de contratos~~ — ✅ MVP CONSTRUIDO (2026-04-26)
+- **Construido (fase 1)**: tabla `contracts` (23 cols + touch trigger signed_at/sent_at) en migración 022. 9 plantillas inline embebidas: `encargo_profesional`, `contrato_cliente`, `contrato_gremio`, `acta_replanteo`, `acta_recepcion_provisional/definitiva`, `modificado_obra`, `renuncia_garantia`, `otros`. Workflow `agent_contracts` (`Abwnfh4BtHPU9lHg`): `POST /webhook/contract-generate` con `{project_id, contract_type, parties, scope, amount_eur, expires_days}` → genera Google Doc parametrizado + email a Damián para revisar. Workflow `contract_mark_signed` (`QK640K7iJ9dPJATR`): `POST /webhook/contract-signed` cierra ciclo de firma manual con timestamps automáticos. Documentado en `knowledge/agent_contracts.md`.
+- **Pendiente (fase 2)**: integración DocuSign/FNMT/Autofirma (firma electrónica con hash); plantillas configurables en BD (`contract_templates`); generación PDF automática; `cron_contract_followup` con alertas de unsigned > 7d; hook agent_proposal aprobada → auto-genera encargo; hook qc_recepcion_provisional complete → auto-genera acta_recepcion_provisional.
 
 ### 3.14 Ciberseguridad y protección de datos
 - **Laguna real.** Un estudio maneja datos personales de clientes + planos (propiedad intelectual) + precios de gremios (confidencial comercial). La protección suele ser "Drive con contraseña fuerte y ya".
@@ -305,19 +301,12 @@ Sistema multiagente para estudios de arquitectura técnica especializados en **r
 - **Pendiente (fase 2)**: hook con `agent_briefing` para que las patologías alimenten constraints automáticos (SQL listo en docs); hook con `agent_costs` para sumar `estimated_intervention_cost` como partida; `pathology_confirm/repair` workflows; cron review de findings sin actualizar > 30d; RAG semántico sobre catálogos técnicos de patología.
 
 ### 3.19 Interoperabilidad con software del sector — `util_interop`
-- **Laguna real.** CYPE, Presto, TCQ, Navisworks son parte del día a día. ArquitAI los ignora hoy.
-- **Técnica.** Export/import de formatos estándar:
-  - **BC3** (FIEBDC) para presupuestos CYPE/Presto — `cost_estimates` ↔ BC3.
-  - **IFC** para modelo BIM — `material_items` + `design_options` ↔ IFC properties.
-  - **GAEB** para clientes internacionales.
-- **Función.** ArquitAI deja de ser un silo — conversa con el ecosistema profesional.
-- **Beneficio.** El arquitecto puede usar ArquitAI como orquestador y seguir trabajando en CYPE/Revit cuando conviene. Facilita la adopción.
+- **BC3 export ✅ MVP CONSTRUIDO (2026-04-26)**: workflow `util_interop_bc3` (`WJUcvxmUQU0wR42l`). `POST /webhook/export-bc3` con `{project_id, version?}` → genera fichero `.bc3` formato FIEBDC-3/2007 (`~V`/`~C`/`~T`/`~D`) desde `cost_estimates.breakdown` y lo sube a Drive (carpeta presupuestos). Sanitiza delimitadores. Compatible con CYPE/Presto/TCQ. Documentado en `knowledge/util_interop_bc3.md`.
+- **Pendiente (fase 2)**: import BC3 inverso (cambios en CYPE → refresca cost_estimates); soporte IFC para BIM; soporte GAEB internacional; descomposición auxiliar (mano de obra + materiales por partida); códigos jerárquicos (01.02.005); auto-export al cerrar `cost_estimates.status='approved'`.
 
-### 3.20 Coordinación con colaboradores externos — `agent_collab_coordinator`
-- **Laguna real.** Proyectos complejos requieren colaboradores puntuales (estructuras, instalaciones, paisajismo). La coordinación es por emails dispersos.
-- **Técnica.** Perfil de colaborador en el sistema con rol limitado (RLS). Asignación de entregables con fechas y plantillas. Notificaciones automatizadas con context resumido del proyecto. Aprobación del arquitecto antes de incorporar entregables al proyecto principal.
-- **Función.** Gestiona el ciclo entrega → revisión → integración de colaboradores externos.
-- **Beneficio.** El arquitecto escala su equipo sin perder control ni trazabilidad del origen de cada decisión técnica.
+### 3.20 ~~Coordinación con colaboradores externos~~ — ✅ MVP CONSTRUIDO (2026-04-26)
+- **Construido (fase 1)**: tablas `collaborators` (catálogo: name, email, specialty, collegiate_no, hourly_rate_eur) + `collab_assignments` (project_id + collaborator_id + role + scope + deliverables + fee + deadline, ciclo invited→accepted→in_progress→delivered→approved→closed con timestamps automáticos por trigger). Migración 023. **3 workflows**: `collab_register` (`0FTkQZ7DmwUH7wif`, alta de colaborador), `collab_assign` (`8BFQs3rWSfWp7nTJ`, asigna entregable + email automático al colaborador con CC a Damián), `collab_update_status` (`1iZQkV6uzkRDqpfF`, actualiza status con notif a Damián con badge). Documentado en `knowledge/agent_collab_coordinator.md`.
+- **Pendiente (fase 2)**: `cron_collab_review` (alertas deadline vencido o delivered>7d sin approved); RLS multi-tenant cuando sea multi-estudio; portal colaborador (link mágico para aceptar/rechazar/entregar sin email); hook agent_pathology → propone collab habitual de la especialidad; auto-invoice tras `approved`.
 
 ---
 

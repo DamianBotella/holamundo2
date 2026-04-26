@@ -1,0 +1,615 @@
+{
+  "name": "agent_energy_assessor",
+  "nodes": [
+    {
+      "id": "ea-01",
+      "name": "Receive Project",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        -700,
+        300
+      ],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    },
+    {
+      "id": "ea-02",
+      "name": "Load Architect Email",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -460,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT value FROM system_config WHERE key = 'architect_email'",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ea-03",
+      "name": "Load Project Data",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -220,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT json_build_object(\n  'project_id', p.id,\n  'project_name', p.name,\n  'project_type', p.project_type,\n  'property_type', p.property_type,\n  'property_area_m2', p.property_area_m2,\n  'location_city', p.location_city,\n  'location_province', p.location_province,\n  'location_address', p.location_address,\n  'budget_target', p.budget_target,\n  'metadata', p.metadata,\n  'design_option', (SELECT json_build_object('id', d.id, 'title', d.title, 'description', d.description, 'intervention_logic', d.intervention_logic, 'rooms_layout', d.rooms_layout, 'technical_notes', d.technical_notes) FROM design_options d WHERE d.project_id = p.id AND d.is_selected = true LIMIT 1),\n  'briefing', (SELECT json_build_object('summary', b.summary, 'objectives', b.objectives, 'constraints', b.constraints, 'rooms_affected', b.rooms_affected) FROM briefings b WHERE b.project_id = p.id ORDER BY b.created_at DESC LIMIT 1),\n  'materials', (SELECT json_agg(json_build_object('category', m.category, 'name', m.name, 'specification', m.specification, 'quantity', m.quantity, 'unit', m.unit, 'room', m.room)) FROM materials m WHERE m.project_id = p.id AND m.status != 'rejected'),\n  'next_version', COALESCE((SELECT max(version) FROM energy_assessments WHERE project_id = p.id), 0) + 1\n) AS data\nFROM projects p\nWHERE p.id = $1::uuid;",
+        "options": {
+          "queryReplacement": "={{ [$('Normalize Input').first().json.project_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ea-04",
+      "name": "Validate Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        20,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\nconst data = item.data;\n// data viene de Load Project Data ($json.data)\nif (!data) {\n  return [{ json: { valid: false, error: 'project_id no encontrado' } }];\n}\nif (!data.property_area_m2 || data.property_area_m2 <= 0) {\n  return [{ json: { valid: false, error: 'property_area_m2 obligatorio (>0) para estimar demanda energetica' } }];\n}\nif (!data.location_province) {\n  return [{ json: { valid: false, error: 'location_province obligatorio para zona climatica' } }];\n}\nreturn [{ json: { valid: true, ...data } }];"
+      }
+    },
+    {
+      "id": "ea-05",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        260,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "v1",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ea-06",
+      "name": "Load Agent Prompt",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        500,
+        220
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT content, model_recommended, temperature FROM agent_prompts WHERE agent_name='agent_energy_assessor' AND prompt_type='system' AND is_active=true ORDER BY version DESC LIMIT 1;",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ea-07",
+      "name": "Prepare LLM Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        740,
+        220
+      ],
+      "parameters": {
+        "jsCode": "const promptRow = $input.first().json;\nconst project   = $('Validate Data').first().json;\n\nconst materialSummary = (project.materials || []).map(m => `- [${m.category}] ${m.name}${m.specification ? ' (' + m.specification + ')' : ''}: ${m.quantity || '?'} ${m.unit || ''}${m.room ? ' en ' + m.room : ''}`).join('\\n') || '(sin materiales declarados)';\n\nconst design = project.design_option || {};\nconst briefing = project.briefing || {};\n\nconst prompt_user = `Proyecto: ${project.project_name}\nTipo: ${project.project_type} (${project.property_type})\nUbicacion: ${project.location_address || ''}, ${project.location_city || ''} (${project.location_province})\nSuperficie: ${project.property_area_m2} m2 utiles\nBudget: ${project.budget_target || '?'} EUR\n\nDESIGN OPTION SELECCIONADA:\nTitulo: ${design.title || '(no seleccionada)'}\nDescripcion: ${design.description || '-'}\nLogica intervencion: ${design.intervention_logic || '-'}\nNotas tecnicas: ${design.technical_notes || '-'}\n\nBRIEFING:\nResumen: ${briefing.summary || '-'}\nObjetivos: ${JSON.stringify(briefing.objectives || [])}\nConstraints: ${JSON.stringify(briefing.constraints || [])}\nRooms_affected: ${JSON.stringify(briefing.rooms_affected || [])}\n\nMATERIALES APROBADOS:\n${materialSummary}\n\nMETADATA:\n${JSON.stringify(project.metadata || {}, null, 2)}\n\n---\nGenera tu evaluacion energetica en JSON segun el schema. Responde SOLO el JSON, sin texto adicional.`;\n\nreturn [{ json: {\n  agent_name:   'agent_energy_assessor',\n  prompt_system: promptRow.content,\n  prompt_user:  prompt_user,\n  model:        promptRow.model_recommended || 'gpt-4o',\n  temperature:  promptRow.temperature !== null ? Number(promptRow.temperature) : 0.2,\n  project_id:   project.project_id,\n  next_version: project.next_version\n}}];"
+      }
+    },
+    {
+      "id": "ea-08",
+      "name": "Call LLM",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        980,
+        220
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "JoKqGZ8pDzhJohV2",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ea-09",
+      "name": "Parse Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1220,
+        220
+      ],
+      "parameters": {
+        "jsCode": "const llm = $input.first().json;\nlet text = llm.text || llm.content || llm.response_text || '';\n// strip markdown code blocks if any\ntext = text.replace(/^```(?:json)?\\s*/i, '').replace(/```\\s*$/i, '').trim();\nlet parsed;\ntry {\n  parsed = JSON.parse(text);\n} catch (e) {\n  // fallback: try to extract first JSON object\n  const m = text.match(/\\{[\\s\\S]*\\}/);\n  if (m) {\n    try { parsed = JSON.parse(m[0]); } catch (_) {}\n  }\n}\nif (!parsed) {\n  parsed = {\n    zona_climatica: null,\n    demanda_calefaccion_kwh_m2_anyo: null,\n    demanda_refrigeracion_kwh_m2_anyo: null,\n    demanda_total_kwh_m2_anyo: null,\n    transmitancia_envolvente_global: null,\n    consumo_energia_primaria_kwh_m2_anyo: null,\n    emisiones_co2_kg_m2_anyo: null,\n    calificacion_demanda: null,\n    calificacion_emisiones: null,\n    cumple_he0: null,\n    cumple_he1: null,\n    analysis_summary: 'LLM no devolvio JSON valido. Revisar manualmente. Texto recibido: ' + text.substring(0, 200),\n    recomendaciones: [],\n    warnings: ['parse_failure']\n  };\n}\n// Coerce types\nconst num = (v) => v === null || v === undefined || v === '' ? null : Number(v);\nconst out = {\n  zona_climatica: parsed.zona_climatica || null,\n  demanda_calefaccion_kwh_m2_anyo: num(parsed.demanda_calefaccion_kwh_m2_anyo),\n  demanda_refrigeracion_kwh_m2_anyo: num(parsed.demanda_refrigeracion_kwh_m2_anyo),\n  demanda_total_kwh_m2_anyo: num(parsed.demanda_total_kwh_m2_anyo),\n  transmitancia_envolvente_global: num(parsed.transmitancia_envolvente_global),\n  consumo_energia_primaria_kwh_m2_anyo: num(parsed.consumo_energia_primaria_kwh_m2_anyo),\n  emisiones_co2_kg_m2_anyo: num(parsed.emisiones_co2_kg_m2_anyo),\n  calificacion_demanda: parsed.calificacion_demanda || null,\n  calificacion_emisiones: parsed.calificacion_emisiones || null,\n  cumple_he0: typeof parsed.cumple_he0 === 'boolean' ? parsed.cumple_he0 : null,\n  cumple_he1: typeof parsed.cumple_he1 === 'boolean' ? parsed.cumple_he1 : null,\n  analysis_summary: parsed.analysis_summary || '',\n  recomendaciones: Array.isArray(parsed.recomendaciones) ? parsed.recomendaciones : [],\n  warnings: Array.isArray(parsed.warnings) ? parsed.warnings : [],\n  llm_model: llm.model || 'gpt-4o',\n  llm_tokens_in: llm.tokens_in || llm.usage?.prompt_tokens || null,\n  llm_tokens_out: llm.tokens_out || llm.usage?.completion_tokens || null,\n  llm_cost_usd: llm.cost_usd || null\n};\nreturn [{ json: out }];"
+      }
+    },
+    {
+      "id": "ea-10",
+      "name": "Calculate Embedded Footprint",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1460,
+        220
+      ],
+      "parameters": {
+        "jsCode": "// Tabla embebida de huella de carbono CO2eq por unidad funcional. Fuente aproximada ITeC BEDEC.\n// Categorias coinciden con materials.category mas tipicas.\nconst CO2_FACTORS = {\n  // categoria  -> kg CO2eq / unit\n  'pavimento':       { porcelanico_m2: 18, ceramico_m2: 12, parquet_m2: 5, vinilico_m2: 8, microcemento_m2: 14 },\n  'sanitarios':      { lavabo: 35, inodoro: 45, ducha: 50, banera: 90, bidet: 30 },\n  'griferia':        { monomando: 15, termostatico: 25 },\n  'cocina':          { mueble_ml: 60, encimera_ml: 80, electrodomestico: 200 },\n  'carpinteria_int': { puerta_ud: 35, armario_ml: 70 },\n  'carpinteria_ext': { ventana_pvc_m2: 80, ventana_aluminio_m2: 130, ventana_madera_m2: 60 },\n  'pintura':         { plastica_m2: 1.2, esmalte_m2: 2.5 },\n  'aislamiento':     { lana_mineral_m2: 5, eps_m2: 7, xps_m2: 10, sate_m2: 25 },\n  'instalacion_electrica': { punto_luz: 8, toma_corriente: 6, cuadro: 50 },\n  'instalacion_fontaneria': { metro_per: 1.5, llave_corte: 3, calentador: 120 },\n  'climatizacion':   { split_ud: 250, suelo_radiante_m2: 25, radiador: 80 }\n};\n\nconst project = $('Validate Data').first().json;\nconst llmOut  = $input.first().json;\n\nconst breakdown = {};\nlet totalKg = 0;\n\n(project.materials || []).forEach(m => {\n  const cat = (m.category || '').toLowerCase();\n  const qty = Number(m.quantity) || 0;\n  if (!cat || qty <= 0) return;\n  // Heuristica: buscar mejor match por nombre/spec en CO2_FACTORS\n  const catFactors = CO2_FACTORS[cat];\n  if (!catFactors) return;\n  // Tomar el primer factor de la categoria como aproximacion\n  const firstKey = Object.keys(catFactors)[0];\n  const factor = catFactors[firstKey] || 0;\n  const kg = qty * factor;\n  totalKg += kg;\n  breakdown[cat] = (breakdown[cat] || 0) + kg;\n});\n\nreturn [{ json: {\n  ...llmOut,\n  huella_carbono_embebida_kg: Math.round(totalKg * 100) / 100,\n  huella_carbono_breakdown: breakdown\n}}];"
+      }
+    },
+    {
+      "id": "ea-11",
+      "name": "Insert Assessment",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1700,
+        220
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO energy_assessments (\n  project_id, version, zona_climatica,\n  demanda_calefaccion_kwh_m2_anyo, demanda_refrigeracion_kwh_m2_anyo, demanda_total_kwh_m2_anyo,\n  transmitancia_envolvente_global, consumo_energia_primaria_kwh_m2_anyo, emisiones_co2_kg_m2_anyo,\n  calificacion_demanda, calificacion_emisiones, cumple_he0, cumple_he1,\n  huella_carbono_embebida_kg, huella_carbono_breakdown,\n  analysis_summary, recomendaciones, warnings,\n  llm_model, llm_tokens_in, llm_tokens_out, llm_cost_usd\n) VALUES (\n  $1::uuid, $2::int, $3,\n  $4, $5, $6,\n  $7, $8, $9,\n  $10, $11, $12, $13,\n  $14, $15::jsonb,\n  $16, $17::jsonb, $18::jsonb,\n  $19, $20, $21, $22\n)\nRETURNING id, version, calificacion_demanda, calificacion_emisiones, demanda_total_kwh_m2_anyo, huella_carbono_embebida_kg;",
+        "options": {
+          "queryReplacement": "={{ [\n  $('Validate Data').first().json.project_id,\n  $('Validate Data').first().json.next_version,\n  $json.zona_climatica,\n  $json.demanda_calefaccion_kwh_m2_anyo,\n  $json.demanda_refrigeracion_kwh_m2_anyo,\n  $json.demanda_total_kwh_m2_anyo,\n  $json.transmitancia_envolvente_global,\n  $json.consumo_energia_primaria_kwh_m2_anyo,\n  $json.emisiones_co2_kg_m2_anyo,\n  $json.calificacion_demanda,\n  $json.calificacion_emisiones,\n  $json.cumple_he0,\n  $json.cumple_he1,\n  $json.huella_carbono_embebida_kg,\n  JSON.stringify($json.huella_carbono_breakdown || {}),\n  $json.analysis_summary,\n  JSON.stringify($json.recomendaciones || []),\n  JSON.stringify($json.warnings || []),\n  $json.llm_model,\n  $json.llm_tokens_in,\n  $json.llm_tokens_out,\n  $json.llm_cost_usd\n] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ea-12",
+      "name": "Build Notification",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1940,
+        220
+      ],
+      "parameters": {
+        "jsCode": "const inserted = $input.first().json;\nconst raw      = $('Calculate Embedded Footprint').first().json;\nconst project  = $('Validate Data').first().json;\n\nconst CALI_COLOR = { A:'#1f8a3a', B:'#3aaa49', C:'#a8c037', D:'#fece00', E:'#f29826', F:'#e8602b', G:'#d11919' };\nconst calCol = (c) => CALI_COLOR[c] || '#888';\nconst recos = (raw.recomendaciones || []).map(r => `<li><b>[${r.prioridad || 'media'}]</b> ${r.descripcion}${r.impacto_kwh_m2_anyo ? ' — impacto ~' + r.impacto_kwh_m2_anyo + ' kWh/m2/año' : ''}</li>`).join('');\nconst warns = (raw.warnings || []).map(w => '<li>' + w + '</li>').join('');\n\nconst html = `<div style=\"font-family:Arial,sans-serif;max-width:680px;margin:0 auto\">\n<h2 style=\"color:#2c3e50\">Evaluacion energetica generada</h2>\n<h3 style=\"color:#7f8c8d\">${project.project_name}</h3>\n<table style=\"width:100%;border-collapse:collapse;margin:16px 0\">\n  <tr><td style=\"padding:6px;background:#f3f4f6\"><b>Zona climatica</b></td><td style=\"padding:6px\">${raw.zona_climatica || '?'}</td></tr>\n  <tr><td style=\"padding:6px;background:#f3f4f6\"><b>Demanda total</b></td><td style=\"padding:6px\">${raw.demanda_total_kwh_m2_anyo || '?'} kWh/m² año (calef ${raw.demanda_calefaccion_kwh_m2_anyo || '?'} + refrig ${raw.demanda_refrigeracion_kwh_m2_anyo || '?'})</td></tr>\n  <tr><td style=\"padding:6px;background:#f3f4f6\"><b>U envolvente media</b></td><td style=\"padding:6px\">${raw.transmitancia_envolvente_global || '?'} W/m²K</td></tr>\n  <tr><td style=\"padding:6px;background:#f3f4f6\"><b>Emisiones</b></td><td style=\"padding:6px\">${raw.emisiones_co2_kg_m2_anyo || '?'} kg CO2/m² año</td></tr>\n  <tr><td style=\"padding:6px;background:#f3f4f6\"><b>Calificacion demanda</b></td><td style=\"padding:6px\"><span style=\"background:${calCol(raw.calificacion_demanda)};color:white;padding:4px 10px;border-radius:4px;font-weight:bold\">${raw.calificacion_demanda || '?'}</span></td></tr>\n  <tr><td style=\"padding:6px;background:#f3f4f6\"><b>Calificacion emisiones</b></td><td style=\"padding:6px\"><span style=\"background:${calCol(raw.calificacion_emisiones)};color:white;padding:4px 10px;border-radius:4px;font-weight:bold\">${raw.calificacion_emisiones || '?'}</span></td></tr>\n  <tr><td style=\"padding:6px;background:#f3f4f6\"><b>Cumple HE0/HE1</b></td><td style=\"padding:6px\">${raw.cumple_he0 === null ? 'n/d' : (raw.cumple_he0 ? '✅' : '❌')} HE0 / ${raw.cumple_he1 === null ? 'n/d' : (raw.cumple_he1 ? '✅' : '❌')} HE1</td></tr>\n  <tr><td style=\"padding:6px;background:#f3f4f6\"><b>Huella embebida (materiales)</b></td><td style=\"padding:6px\">${raw.huella_carbono_embebida_kg} kg CO2eq</td></tr>\n</table>\n<p><b>Analisis:</b> ${raw.analysis_summary || ''}</p>\n${recos ? '<h3>Recomendaciones</h3><ul>' + recos + '</ul>' : ''}\n${warns ? '<p style=\"background:#fff8e1;padding:10px;border-left:4px solid #fece00\"><b>Avisos:</b><ul>' + warns + '</ul></p>' : ''}\n<p style=\"font-size:11px;color:#95a5a6\">Estimacion automatica (no es certificado oficial CEE). Asessment ID: ${inserted.id}, version ${inserted.version}.</p>\n</div>`;\nreturn [{ json: { html_body: html, project_name: project.project_name, calificacion_demanda: raw.calificacion_demanda || '?' } }];"
+      }
+    },
+    {
+      "id": "ea-13",
+      "name": "Send Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        2180,
+        220
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $('Load Architect Email').first().json.value }}",
+        "subject": "=ArquitAI — Evaluacion energetica {{ $json.project_name }} (cal {{ $json.calificacion_demanda }})",
+        "emailType": "html",
+        "message": "={{ $json.html_body }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "cIma8ntTjZvIfU3H",
+          "name": "damian2botella"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "ea-14",
+      "name": "Return Success",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2420,
+        220
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "rs1",
+              "name": "status",
+              "value": "completed",
+              "type": "string"
+            },
+            {
+              "id": "rs2",
+              "name": "assessment_id",
+              "value": "={{ $('Insert Assessment').first().json.id }}",
+              "type": "string"
+            },
+            {
+              "id": "rs3",
+              "name": "calificacion_demanda",
+              "value": "={{ $('Insert Assessment').first().json.calificacion_demanda }}",
+              "type": "string"
+            },
+            {
+              "id": "rs4",
+              "name": "demanda_total_kwh_m2_anyo",
+              "value": "={{ $('Insert Assessment').first().json.demanda_total_kwh_m2_anyo }}",
+              "type": "number"
+            },
+            {
+              "id": "rs5",
+              "name": "huella_carbono_embebida_kg",
+              "value": "={{ $('Insert Assessment').first().json.huella_carbono_embebida_kg }}",
+              "type": "number"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ea-15",
+      "name": "Return Error",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        260,
+        460
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "re1",
+              "name": "status",
+              "value": "error",
+              "type": "string"
+            },
+            {
+              "id": "re2",
+              "name": "error",
+              "value": "={{ $json.error }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ea-00-wh",
+      "name": "Manual Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -700,
+        500
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "trigger-energy-assessor",
+        "responseMode": "responseNode",
+        "authentication": "headerAuth"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "Ba643jvuElTgMawr",
+          "name": "Webhook API Key (entrante)"
+        }
+      },
+      "webhookId": "73939fd0-d372-4a58-b3eb-aaffda0475fa"
+    },
+    {
+      "id": "ea-99-wh-resp",
+      "name": "Webhook Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        2660,
+        220
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status: $json.status, assessment_id: $json.assessment_id, calificacion_demanda: $json.calificacion_demanda, demanda_total_kwh_m2_anyo: $json.demanda_total_kwh_m2_anyo, huella_carbono_embebida_kg: $json.huella_carbono_embebida_kg}) }}",
+        "options": {
+          "responseCode": 200
+        }
+      }
+    },
+    {
+      "id": "ea-99-wh-resp-err",
+      "name": "Webhook Error Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        500,
+        580
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status: 'error', error: $json.error}) }}",
+        "options": {
+          "responseCode": 400
+        }
+      }
+    },
+    {
+      "id": "ea-norm",
+      "name": "Normalize Input",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -580,
+        400
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "ni1",
+              "name": "project_id",
+              "value": "={{ $json.project_id || $json.body?.project_id || '' }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Load Architect Email": {
+      "main": [
+        [
+          {
+            "node": "Load Project Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Project Data": {
+      "main": [
+        [
+          {
+            "node": "Validate Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Data": {
+      "main": [
+        [
+          {
+            "node": "Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid?": {
+      "main": [
+        [
+          {
+            "node": "Load Agent Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Agent Prompt": {
+      "main": [
+        [
+          {
+            "node": "Prepare LLM Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare LLM Payload": {
+      "main": [
+        [
+          {
+            "node": "Call LLM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call LLM": {
+      "main": [
+        [
+          {
+            "node": "Parse Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Response": {
+      "main": [
+        [
+          {
+            "node": "Calculate Embedded Footprint",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calculate Embedded Footprint": {
+      "main": [
+        [
+          {
+            "node": "Insert Assessment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Assessment": {
+      "main": [
+        [
+          {
+            "node": "Build Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Notification": {
+      "main": [
+        [
+          {
+            "node": "Send Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Email": {
+      "main": [
+        [
+          {
+            "node": "Return Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Return Success": {
+      "main": [
+        [
+          {
+            "node": "Webhook Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Return Error": {
+      "main": [
+        [
+          {
+            "node": "Webhook Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Receive Project": {
+      "main": [
+        [
+          {
+            "node": "Normalize Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Webhook": {
+      "main": [
+        [
+          {
+            "node": "Normalize Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Input": {
+      "main": [
+        [
+          {
+            "node": "Load Architect Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  }
+}

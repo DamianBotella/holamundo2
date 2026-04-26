@@ -1,0 +1,71 @@
+{
+  "name": "util_admin_notes_list",
+  "_n8n_id": "yL2a8zawMoQrZtRH",
+  "_purpose": "GET /webhook/admin-notes-list?project_id=<uuid> (header x-api-key). Si project_id se omite, devuelve todas las notas del estudio. Cierra el ciclo de project_notes (crear via util_admin_note + ver pinned en util_admin_project_view_html + toggle/delete via util_admin_note_toggle + listar via este).",
+  "_auth": "headerAuth credential 'Webhook API Key (entrante)'",
+  "_response": "{ project_id, count, notes: [{id, body, category, pinned, created_at, created_by, project_id, project_name}] } orden: pinned DESC, created_at DESC",
+  "nodes": [
+    {
+      "id": "nl-01",
+      "name": "Webhook GET",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-700, 300],
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "admin-notes-list",
+        "responseMode": "responseNode",
+        "authentication": "headerAuth"
+      },
+      "credentials": {
+        "httpHeaderAuth": { "id": "Ba643jvuElTgMawr", "name": "Webhook API Key (entrante)" }
+      },
+      "webhookId": "nl-trigger"
+    },
+    {
+      "id": "nl-02",
+      "name": "Load Notes",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [-460, 300],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH q AS (SELECT NULLIF(trim($1),'') AS pid)\nSELECT json_build_object(\n  'project_id', (SELECT pid FROM q),\n  'count', count(*),\n  'notes', json_agg(t.* ORDER BY t.pinned DESC, t.created_at DESC)\n) AS report FROM (\n  SELECT n.id, n.body, n.category, n.pinned, n.created_at, n.created_by,\n         p.id AS project_id, p.name AS project_name\n    FROM project_notes n\n    LEFT JOIN projects p ON p.id = n.project_id\n   WHERE (SELECT pid FROM q) IS NULL\n      OR n.project_id = (SELECT pid FROM q)::uuid\n) t;",
+        "options": {
+          "queryReplacement": "={{ [ ($('Webhook GET').first().json.query.project_id || '') ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" }
+      }
+    },
+    {
+      "id": "nl-03",
+      "name": "Respond JSON",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [-220, 300],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json.report) }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              { "name": "Cache-Control", "value": "no-store" }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook GET": { "main": [[{ "node": "Load Notes",   "type": "main", "index": 0 }]] },
+    "Load Notes":  { "main": [[{ "node": "Respond JSON", "type": "main", "index": 0 }]] }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner"
+  }
+}

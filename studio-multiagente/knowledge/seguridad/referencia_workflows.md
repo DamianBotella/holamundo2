@@ -30,6 +30,7 @@
 | `GET /webhook/admin-help` | `util_admin_help_html` (`x45X3jL6MWhTjjaA`) | Header X-API-Key | Página de ayuda con FAQ + endpoints + comandos |
 | `POST /webhook/admin-note` | `util_admin_note_create` (`8okwSwHgLtU4fUac`) | Header X-API-Key | Crear nota rápida en proyecto (body 3-2000 chars) |
 | `POST /webhook/admin-note-toggle` | `util_admin_note_toggle` (`FOLt1PzhD1wh9WhX`) | Header X-API-Key | Pin/unpin/delete una nota existente |
+| `GET /webhook/admin-notes-list?project_id=<uuid>` | `util_admin_notes_list` (`yL2a8zawMoQrZtRH`) | Header X-API-Key | Listar notas del estudio (filtra por proyecto si se pasa). Cierra ciclo notes. |
 
 ### Endpoints públicos (con security_check integrado)
 

@@ -2,6 +2,11 @@
 
 Histórico cronológico de hitos del sistema. Generado a partir de git log.
 
+## 2026-04-26 (post-bloque 6) — Bug fixes runtime
+
+- **Fix `cron_quote_expiry`**: IF "Has Expired?" tenía `typeValidation:"strict"` que rechazaba el `Number($json.expired_count)` (Postgres devuelve count como string). Cambiado a `"loose"`. Ahora el cron corre sin error y devuelve `{rows:null, expired_count:"0"}` cuando no hay quotes vencidos. Fix aplicado directamente en n8n (workflow no sincronizado en repo local — uno de los 43 huérfanos del AUDIT.md).
+
+
 ## 2026-04-26 — Sesiones de hardening y observabilidad (5 bloques, 10h)
 
 ### Bloque 5: bug fixes + ciclo de vida + workflow audit

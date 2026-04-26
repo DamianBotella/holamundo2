@@ -1,0 +1,113 @@
+{
+  "name": "cron_proposal_response_followup",
+  "nodes": [
+    {
+      "id": "pf-01",
+      "name": "Daily 11:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-700, 300],
+      "parameters": { "rule": { "interval": [{ "field": "cronExpression", "expression": "0 11 * * *" }] } }
+    },
+    {
+      "id": "pf-02",
+      "name": "Find Stale Proposals",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [-460, 300],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT json_build_object(\n  'count', count(*),\n  'proposals', json_agg(t.* ORDER BY t.sent_at)\n) AS report FROM (\n  SELECT pr.id, pr.title, pr.total_price, pr.sent_at,\n         EXTRACT(DAY FROM now() - pr.sent_at)::int AS days_waiting,\n         p.id AS project_id, p.name AS project_name,\n         c.name AS client_name, pii_decrypt(c.email_enc) AS client_email\n  FROM proposals pr\n  JOIN projects p ON p.id = pr.project_id\n  LEFT JOIN clients c ON c.id = p.client_id\n  WHERE pr.status = 'sent_to_client'\n    AND pr.sent_at < now() - INTERVAL '7 days'\n    AND pr.client_response_at IS NULL\n) t;",
+        "options": {}
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } }
+    },
+    {
+      "id": "pf-03",
+      "name": "Has Stale?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [-220, 300],
+      "parameters": {
+        "conditions": {
+          "options": { "version": 2, "leftValue": "", "caseSensitive": true, "typeValidation": "loose" },
+          "combinator": "and",
+          "conditions": [
+            { "id": "h1", "leftValue": "={{ Number($json.report.count) }}", "rightValue": 0, "operator": { "type": "number", "operation": "gt" } }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "pf-04",
+      "name": "Load Architect Email",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [20, 220],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT value FROM system_config WHERE key='architect_email'",
+        "options": {}
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } }
+    },
+    {
+      "id": "pf-05",
+      "name": "Build Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [260, 220],
+      "parameters": {
+        "jsCode": "const r = $('Find Stale Proposals').first().json.report || {};\nconst proposals = r.proposals || [];\nconst rows = proposals.map(p => '<tr><td style=\"padding:8px;border-bottom:1px solid #eee;font-size:13px\"><b>'+p.project_name+'</b><br><span style=\"color:#6b7280;font-size:12px\">'+(p.client_name||'?')+' &lt;'+(p.client_email||'?')+'&gt;</span></td><td style=\"padding:8px;border-bottom:1px solid #eee;font-size:13px;text-align:right\">'+Number(p.total_price||0).toLocaleString('es-ES')+' EUR</td><td style=\"padding:8px;border-bottom:1px solid #eee;font-size:13px;color:#dc2626;text-align:center\"><b>'+p.days_waiting+'d</b></td></tr>').join('');\nconst html = '<div style=\"font-family:Arial,sans-serif;max-width:680px;margin:0 auto;padding:20px;color:#1f2937\">' +\n'<h2 style=\"color:#e67e22\">'+r.count+' propuestas sin respuesta del cliente >7d</h2>' +\n'<p>Estas propuestas se enviaron hace mas de una semana y siguen sin respuesta del cliente. Considera enviar un follow-up manual o llamar.</p>' +\n'<table style=\"width:100%;border-collapse:collapse;background:white;border-radius:6px;overflow:hidden\"><thead style=\"background:#1f2937;color:white\"><tr><th style=\"padding:8px;text-align:left;font-size:11px\">Proyecto / Cliente</th><th style=\"padding:8px;text-align:right;font-size:11px\">Precio</th><th style=\"padding:8px;text-align:center;font-size:11px\">Espera</th></tr></thead><tbody>'+rows+'</tbody></table>' +\n'<p style=\"color:#94a3b8;font-size:11px;margin-top:24px\">cron_proposal_response_followup diario 11:00. Solo se envia si hay >0 stale.</p>' +\n'</div>';\nreturn [{ json: { html, subject: '[ArquitAI] '+r.count+' propuestas sin respuesta del cliente >7d' } }];"
+      }
+    },
+    {
+      "id": "pf-06",
+      "name": "Send Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [500, 220],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $('Load Architect Email').first().json.value }}",
+        "subject": "={{ $('Build Email').first().json.subject }}",
+        "emailType": "html",
+        "message": "={{ $('Build Email').first().json.html }}",
+        "options": { "appendAttribution": false }
+      },
+      "credentials": { "gmailOAuth2": { "id": "cIma8ntTjZvIfU3H", "name": "damian2botella" } },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "pf-07",
+      "name": "Log OK",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [20, 380],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (action, agent_name, details) VALUES ('proposal_followup_check_ok', 'cron_proposal_response_followup', $1::jsonb);",
+        "options": { "queryReplacement": "={{ [ JSON.stringify($json.report) ] }}" }
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } }
+    }
+  ],
+  "connections": {
+    "Daily 11:00":          { "main": [[{ "node": "Find Stale Proposals","type": "main", "index": 0 }]] },
+    "Find Stale Proposals": { "main": [[{ "node": "Has Stale?",          "type": "main", "index": 0 }]] },
+    "Has Stale?":           {
+      "main": [
+        [{ "node": "Load Architect Email","type": "main", "index": 0 }],
+        [{ "node": "Log OK",              "type": "main", "index": 0 }]
+      ]
+    },
+    "Load Architect Email": { "main": [[{ "node": "Build Email", "type": "main", "index": 0 }]] },
+    "Build Email":          { "main": [[{ "node": "Send Email",  "type": "main", "index": 0 }]] }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5"
+  }
+}

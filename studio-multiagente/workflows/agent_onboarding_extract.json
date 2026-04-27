@@ -1,0 +1,36 @@
+{
+  "name": "agent_onboarding_extract",
+  "_n8n_id": "mzGAxzoKPwVUFWcS",
+  "_purpose": "Extractor LLM. Recibe via executeWorkflow desde agent_onboarding cuando ready_to_close=true. Carga la transcripcion completa de onboarding_sessions + baseline de referencia, llama LLM con prompt 'extrae JSON estructurado segun schema' (8 secciones), parsea, INSERT en studio_profile (active=true, setup_source='onboarding_chat'), desactiva el baseline anterior, vincula la sesion (UPDATE studio_id + status='completed'), envia email al architect_email con resumen del nuevo perfil.",
+  "_triggers": "executeWorkflow desde agent_onboarding (input: session_id)",
+  "_calls": "util_llm_call (JoKqGZ8pDzhJohV2) con gpt-4o temperature=0.2 (deterministico)",
+  "_persists_to": "studio_profile (nueva fila active=true), onboarding_sessions (UPDATE studio_id + status)",
+  "_side_effects": "Desactiva el baseline (active=false) si existe + envia email notif al arquitecto.",
+  "nodes": [
+    { "id": "aoe-01", "name": "Receive Session",         "type": "n8n-nodes-base.executeWorkflowTrigger", "position": [-700, 300], "_input": "session_id (uuid)" },
+    { "id": "aoe-02", "name": "Load Session + Baseline", "type": "n8n-nodes-base.postgres",               "position": [-460, 300], "_query_summary": "JOIN onboarding_sessions con baseline studio_profile en una sola query" },
+    { "id": "aoe-03", "name": "Build Extract Prompt",    "type": "n8n-nodes-base.code",                   "position": [-220, 300], "_builds": "system prompt con schema EXACTO de 8 secciones + baseline como referencia; user prompt = transcripcion conversacion" },
+    { "id": "aoe-04", "name": "Call LLM Extractor",      "type": "n8n-nodes-base.executeWorkflow",        "position": [0, 300] },
+    { "id": "aoe-05", "name": "Parse Extracted JSON",    "type": "n8n-nodes-base.code",                   "position": [220, 300], "_extracts": "extrae 8 secciones JSON con fallback a {} o [] si falla; genera _profile_summary para el email" },
+    { "id": "aoe-06", "name": "Insert Studio Profile",   "type": "n8n-nodes-base.postgres",               "position": [440, 300], "_action": "INSERT studio_profile con setup_source='onboarding_chat' active=true" },
+    { "id": "aoe-07", "name": "Deactivate Baseline",     "type": "n8n-nodes-base.postgres",               "position": [660, 300], "_action": "UPDATE studio_profile SET active=false WHERE setup_source='baseline' AND studio_id <> nuevo" },
+    { "id": "aoe-08", "name": "Link Session To Profile", "type": "n8n-nodes-base.postgres",               "position": [880, 300], "_action": "UPDATE onboarding_sessions SET studio_id, status=completed" },
+    { "id": "aoe-09", "name": "Load Architect Email",    "type": "n8n-nodes-base.postgres",               "position": [1100, 300] },
+    { "id": "aoe-10", "name": "Build Notif Email",       "type": "n8n-nodes-base.code",                   "position": [1320, 300] },
+    { "id": "aoe-11", "name": "Send Notif",              "type": "n8n-nodes-base.gmail",                  "position": [1540, 300] },
+    { "id": "aoe-12", "name": "Return Result",           "type": "n8n-nodes-base.set",                    "position": [1760, 300] }
+  ],
+  "connections": {
+    "Receive Session":         { "main": [[{ "node": "Load Session + Baseline", "type": "main", "index": 0 }]] },
+    "Load Session + Baseline": { "main": [[{ "node": "Build Extract Prompt",    "type": "main", "index": 0 }]] },
+    "Build Extract Prompt":    { "main": [[{ "node": "Call LLM Extractor",      "type": "main", "index": 0 }]] },
+    "Call LLM Extractor":      { "main": [[{ "node": "Parse Extracted JSON",    "type": "main", "index": 0 }]] },
+    "Parse Extracted JSON":    { "main": [[{ "node": "Insert Studio Profile",   "type": "main", "index": 0 }]] },
+    "Insert Studio Profile":   { "main": [[{ "node": "Deactivate Baseline",     "type": "main", "index": 0 }]] },
+    "Deactivate Baseline":     { "main": [[{ "node": "Link Session To Profile", "type": "main", "index": 0 }]] },
+    "Link Session To Profile": { "main": [[{ "node": "Load Architect Email",    "type": "main", "index": 0 }]] },
+    "Load Architect Email":    { "main": [[{ "node": "Build Notif Email",       "type": "main", "index": 0 }]] },
+    "Build Notif Email":       { "main": [[{ "node": "Send Notif",              "type": "main", "index": 0 }]] },
+    "Send Notif":              { "main": [[{ "node": "Return Result",           "type": "main", "index": 0 }]] }
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "name": "agent_onboarding",
+  "_n8n_id": "aDEK08WPuDU5jVci",
+  "_purpose": "Workflow LLM conversacional ('pequeño cerebro') para el onboarding de un profesional que se da de alta en ArquitAI. POST /webhook/setup-onboarding-message {message, resume_token?, contact_email?, contact_name?} con header x-api-key. Si no hay resume_token crea sesion nueva en onboarding_sessions; si hay, la reanuda. Construye un prompt con todo el historial + sections_covered + baseline de referencia y llama util_llm_call. El LLM devuelve JSON con {message, sections_now_covered[], ready_to_close}. El workflow extrae secciones cubiertas, persiste todo en messages jsonb, y si ready_to_close=true dispara agent_onboarding_extract via executeWorkflow async (no espera). Devuelve al cliente {message, resume_token, sections_covered, ready_to_close}.",
+  "_triggers": "POST /webhook/setup-onboarding-message (header x-api-key)",
+  "_calls": "util_llm_call (JoKqGZ8pDzhJohV2) por cada mensaje + agent_onboarding_extract (mzGAxzoKPwVUFWcS) async cuando ready_to_close",
+  "_persists_to": "onboarding_sessions (messages, sections_covered, llm_total_cost_usd, etc)",
+  "_companion_doc": "studio-multiagente/docs/idea_onboarding_conversacional.md",
+  "_baseline": "Lee studio_profile WHERE setup_source='baseline' para ofrecer baseline al usuario que va perdido. Schema: 8 secciones (identity, tone, priorities, red_lines, visit_checklist, materials_pref, trades_pref, jurisdiction).",
+  "_design_notes": "El LLM mismo decide cuando cerrar (ready_to_close=true) — no usa pattern matching. Es una conversacion dirigida pero natural. Si todas las secciones cubiertas, el LLM resume y pide confirmacion antes de cerrar.",
+  "nodes": [
+    { "id": "ao-01", "name": "Webhook POST Message",     "type": "n8n-nodes-base.webhook",          "position": [-900, 300] },
+    { "id": "ao-02", "name": "Parse Input",              "type": "n8n-nodes-base.code",             "position": [-680, 300] },
+    { "id": "ao-03", "name": "Valid?",                   "type": "n8n-nodes-base.if",               "position": [-460, 300] },
+    { "id": "ao-04", "name": "Respond 400",              "type": "n8n-nodes-base.respondToWebhook", "position": [-220, 480] },
+    { "id": "ao-05", "name": "Get Or Create Session",    "type": "n8n-nodes-base.postgres",         "position": [-220, 220], "_query_summary": "WITH found AS (SELECT existing por resume_token AND status=in_progress), new_session AS (INSERT IF NOT EXISTS) SELECT * FROM found UNION ALL new_session" },
+    { "id": "ao-06", "name": "Load Baseline Profile",    "type": "n8n-nodes-base.postgres",         "position": [0, 220] },
+    { "id": "ao-07", "name": "Build LLM Prompt",         "type": "n8n-nodes-base.code",             "position": [220, 220], "_builds": "system prompt con sections_needed/covered + baseline JSON; user prompt = transcripcion completa de la conversacion" },
+    { "id": "ao-08", "name": "Call LLM",                 "type": "n8n-nodes-base.executeWorkflow",  "position": [440, 220], "_calls": "util_llm_call con model=gpt-4o, temperature=0.5" },
+    { "id": "ao-09", "name": "Parse LLM JSON",           "type": "n8n-nodes-base.code",             "position": [660, 220], "_extracts": "{message, sections_now_covered[], ready_to_close} del response.text del LLM. Fallback robusto si JSON falla." },
+    { "id": "ao-10", "name": "Update Session",           "type": "n8n-nodes-base.postgres",         "position": [880, 220] },
+    { "id": "ao-11", "name": "Should Extract?",          "type": "n8n-nodes-base.if",               "position": [1100, 220] },
+    { "id": "ao-12", "name": "Trigger Extract",          "type": "n8n-nodes-base.executeWorkflow",  "position": [1320, 80], "_calls": "agent_onboarding_extract (mzGAxzoKPwVUFWcS) async (waitForSubWorkflow=false)" },
+    { "id": "ao-13", "name": "Respond JSON",             "type": "n8n-nodes-base.respondToWebhook", "position": [1540, 220] }
+  ],
+  "connections": {
+    "Webhook POST Message":  { "main": [[{ "node": "Parse Input",            "type": "main", "index": 0 }]] },
+    "Parse Input":           { "main": [[{ "node": "Valid?",                 "type": "main", "index": 0 }]] },
+    "Valid?":                {
+      "main": [
+        [{ "node": "Get Or Create Session", "type": "main", "index": 0 }],
+        [{ "node": "Respond 400",           "type": "main", "index": 0 }]
+      ]
+    },
+    "Get Or Create Session": { "main": [[{ "node": "Load Baseline Profile", "type": "main", "index": 0 }]] },
+    "Load Baseline Profile": { "main": [[{ "node": "Build LLM Prompt",      "type": "main", "index": 0 }]] },
+    "Build LLM Prompt":      { "main": [[{ "node": "Call LLM",              "type": "main", "index": 0 }]] },
+    "Call LLM":              { "main": [[{ "node": "Parse LLM JSON",        "type": "main", "index": 0 }]] },
+    "Parse LLM JSON":        { "main": [[{ "node": "Update Session",        "type": "main", "index": 0 }]] },
+    "Update Session":        { "main": [[{ "node": "Should Extract?",       "type": "main", "index": 0 }]] },
+    "Should Extract?":       {
+      "main": [
+        [{ "node": "Trigger Extract", "type": "main", "index": 0 }],
+        [{ "node": "Respond JSON",    "type": "main", "index": 0 }]
+      ]
+    },
+    "Trigger Extract":       { "main": [[{ "node": "Respond JSON",          "type": "main", "index": 0 }]] }
+  }
+}

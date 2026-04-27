@@ -4,6 +4,11 @@ Histórico cronológico de hitos del sistema. Generado a partir de git log.
 
 ## 2026-04-27 — Bloques 20-25: Onboarding conversacional + studio_profile injection refactor + trade_quote_request templating
 
+### Bloque 25 — P3 (LISTA_TAREAS): red de seguridad ampliada (recomendacion D)
+- `cron_health_check` (`ztTrZupYJiQmkNGW`): query `Run Checks` ampliada con verificaciones nuevas — `get_active_studio_profile` añadida a expected_functions; `studio_profile`, `onboarding_sessions`, `design_options`, `materials`, `regulatory_tasks`, `accessibility_audits`, `safety_plans`, `agent_executions`, `agent_prompts`, `approvals`, `activity_log`, `project_intelligence` añadidas a expected_tables. Nuevos campos en report: `studio_profile_active_count`, `studio_profile_fn_returns_row`, `studio_profile_identity_complete`, `studio_profile_ok`. La condicion `All OK?` exige `studio_profile_ok=true`. Probado y devuelve OK.
+- `cron_agent_failure_rate` (`12u0TIcAxZOimSFo`, activo): cron diario 07:00 detecta agentes con failure_rate > 50% en ultimas 24h (umbral minimo 2 ejecuciones). Si encuentra alguno, email HTML con tabla detallada (agente/total/failed/completed/rate). Silente si todo OK. Complementa health_check (infra) con runtime real.
+- **Motivacion**: el bug de hoy (migration 042 sin aplicar, agentes fallando silenciosamente desde B23) habria sido detectado por cron_health_check en <24h. Juntos cubren ambos vectores: infra (sin trafico) y runtime (con trafico).
+
 ### Bloque 25 — Hallazgo critico: migration 042 nunca ejecutada en Supabase, aplicada via workflow MCP temporal
 - **Diagnostico**: durante P2 LISTA_TAREAS (validar baseline) se descubrio que la tabla `studio_profile`, `onboarding_sessions` y la funcion `get_active_studio_profile()` NO existian en Supabase. La migration 042 (B20) nunca llego a ejecutarse en produccion. Los 10 agentes refactorizados en B23-B24 con `Load Studio Profile` estaban fallando silenciosamente desde el merge — y trade_quote_request modificado en B25 P1 tambien.
 - **Accion**: workflow temporal `TEMP_apply_migration_043` (Postgres webhook) creado, ejecutado y borrado. Aplicacion en 3 pasos: (1) CREATE TABLE + indices, (2) CREATE FUNCTION + triggers, (3) INSERT baseline con identity ya corregido (Demo ArquitAI / Equipo ArquitAI) + tone.proveedores añadido.

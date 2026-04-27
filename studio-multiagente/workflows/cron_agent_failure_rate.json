@@ -1,0 +1,37 @@
+{
+  "name": "cron_agent_failure_rate",
+  "_n8n_id": "12u0TIcAxZOimSFo",
+  "_note": "Stub sincronizado 2026-04-27 (bloque 25 P3 D2). Para version completa: mcp__n8n__n8n_get_workflow id=12u0TIcAxZOimSFo mode=full",
+  "_purpose": "Cron diario 07:00 que detecta agentes del pipeline con tasa de fallo > 50% en las ultimas 24h (con minimo 2 ejecuciones para evitar ruido). Si encuentra alguno, envia email alerta al architect_email con tabla HTML detallada (agente, total, fallidas, completadas, %). Si todo va bien, no manda nada (silente). Complementa cron_health_check (infraestructura) con metricas de runtime real.",
+  "_triggers": "Schedule cron 0 7 * * * (diario 07:00)",
+  "_data_source": "agent_executions filtrado por started_at > NOW() - 24h, agrupado por agent_name",
+  "_threshold": "failure_rate > 0.5 AND total >= 2 ejecuciones",
+  "_complements": "cron_health_check (ztTrZupYJiQmkNGW) verifica infraestructura, este cron verifica runtime",
+  "_companion_to": "cron_unknown_agent_alert (3fNPnWuFjjcA7pBG) que detecta el bug A2 (agent_name nulo)",
+  "_motivacion": "Sesion B25 P2 descubrio que migration 042 no se aplico y los agentes con Load Studio Profile fallaban silenciosamente desde B23. Este cron habria detectado el problema en <24h una vez con trafico real. cron_health_check detecta el problema sin trafico (infraestructura). Juntos cubren ambos casos.",
+  "nodes": [
+    { "id": "afr-01", "name": "Daily 07:00",          "type": "n8n-nodes-base.scheduleTrigger", "position": [0, 300] },
+    { "id": "afr-02", "name": "Compute Rates",        "type": "n8n-nodes-base.postgres",        "position": [250, 300], "_query_summary": "agent_executions ultimas 24h, GROUP BY agent_name HAVING failed/total > 0.5" },
+    { "id": "afr-03", "name": "Has Failures?",        "type": "n8n-nodes-base.if",              "position": [500, 300] },
+    { "id": "afr-04", "name": "Build Email",          "type": "n8n-nodes-base.code",            "position": [750, 220], "_purpose": "Genera HTML con tabla agente/total/failed/completed/rate" },
+    { "id": "afr-05", "name": "Load Architect Email", "type": "n8n-nodes-base.postgres",        "position": [750, 380] },
+    { "id": "afr-06", "name": "Send Alert",           "type": "n8n-nodes-base.gmail",           "position": [1000, 300] },
+    { "id": "afr-07", "name": "Done",                 "type": "n8n-nodes-base.set",             "position": [1250, 300] }
+  ],
+  "connections": {
+    "Daily 07:00":          { "main": [[{ "node": "Compute Rates",  "type": "main", "index": 0 }]] },
+    "Compute Rates":        { "main": [[{ "node": "Has Failures?",  "type": "main", "index": 0 }]] },
+    "Has Failures?":        {
+      "main": [
+        [
+          { "node": "Build Email",          "type": "main", "index": 0 },
+          { "node": "Load Architect Email", "type": "main", "index": 0 }
+        ],
+        [{ "node": "Done", "type": "main", "index": 0 }]
+      ]
+    },
+    "Build Email":          { "main": [[{ "node": "Send Alert", "type": "main", "index": 0 }]] },
+    "Load Architect Email": { "main": [[{ "node": "Send Alert", "type": "main", "index": 0 }]] },
+    "Send Alert":           { "main": [[{ "node": "Done",       "type": "main", "index": 0 }]] }
+  }
+}

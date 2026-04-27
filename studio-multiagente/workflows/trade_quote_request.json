@@ -1,0 +1,49 @@
+{
+  "name": "trade_quote_request",
+  "_n8n_id": "C8LmBilsqMTGNFut",
+  "_note": "Stub sincronizado 2026-04-27 (bloque 25). Para version completa: mcp__n8n__n8n_get_workflow id=C8LmBilsqMTGNFut mode=full",
+  "_purpose": "POST /webhook/trade-quote-request con header API key. Inserta fila en trade_quotes con status='requested', genera webhook_token, manda email al supplier_email con el scope_description del trabajo + enlace para responder via formulario web (trade-quote-reply). El email se firma con identity.persona_principal + identity.nombre_estudio del studio_profile activo, y el tono (tutea/usted/formalidad) se ajusta segun tone.proveedores del perfil. CC al architect_email para tracking.",
+  "_triggers": "POST /webhook/trade-quote-request (header x-api-key + body json {project_id, supplier_name, supplier_email, scope_description, trade_request_id?, deadline_days?})",
+  "_persists_to": "trade_quotes (project_id, supplier_*, scope=notes, status='requested', webhook_token, request_email_id)",
+  "_chain": "agent_trades genera trade_assignments -> trade_quote_request envia RFQ -> trade_quote_reply (NmZApRC3Oj7nkRIS) recibe respuesta del oficio -> notifica a Damian",
+  "_studio_profile_used": "identity.nombre_estudio + identity.persona_principal (firma) + tone.proveedores.tutea + tone.proveedores.formalidad (saludo y verbos)",
+  "nodes": [
+    { "id": "tq-01",     "name": "Webhook",              "type": "n8n-nodes-base.webhook",           "position": [-700, 300] },
+    { "id": "tq-arch",   "name": "Load Architect Email", "type": "n8n-nodes-base.postgres",          "position": [-580, 300] },
+    { "id": "tq-02",     "name": "Validate",             "type": "n8n-nodes-base.code",              "position": [-460, 300] },
+    { "id": "tq-03",     "name": "Valid?",               "type": "n8n-nodes-base.if",                "position": [-220, 300] },
+    { "id": "tq-04",     "name": "Insert Quote",         "type": "n8n-nodes-base.postgres",          "position": [20, 220] },
+    { "id": "tq-05",     "name": "Load Project",         "type": "n8n-nodes-base.postgres",          "position": [240, 220] },
+    { "id": "tq-studio", "name": "Load Studio Profile",  "type": "n8n-nodes-base.postgres",          "position": [350, 380], "_purpose": "B25: carga studio_profile activo (identity + tone.proveedores) para personalizar email" },
+    { "id": "tq-06",     "name": "Build Email",          "type": "n8n-nodes-base.code",              "position": [460, 220], "_purpose": "Construye HTML del email. Aplica tone.proveedores: tutea por defecto (true), si formalidad=formal usa Estimado/a, sino Hola. Firma con identity.persona_principal + nombre_estudio." },
+    { "id": "tq-07",     "name": "Send Email",           "type": "n8n-nodes-base.gmail",             "position": [680, 220], "_purpose": "Envia con CC al architect_email. onError continueErrorOutput." },
+    { "id": "tq-08",     "name": "Update Email Sent",    "type": "n8n-nodes-base.postgres",          "position": [900, 220] },
+    { "id": "tq-09",     "name": "Respond 201",          "type": "n8n-nodes-base.respondToWebhook",  "position": [1120, 220] },
+    { "id": "tq-10",     "name": "Respond 400",          "type": "n8n-nodes-base.respondToWebhook",  "position": [20, 460] },
+    { "id": "tq-11",     "name": "Email Failed",         "type": "n8n-nodes-base.postgres",          "position": [680, 380] },
+    { "id": "tq-12",     "name": "Respond 502",          "type": "n8n-nodes-base.respondToWebhook",  "position": [900, 380] }
+  ],
+  "connections": {
+    "Webhook":              { "main": [[{ "node": "Load Architect Email", "type": "main", "index": 0 }]] },
+    "Load Architect Email": { "main": [[{ "node": "Validate",             "type": "main", "index": 0 }]] },
+    "Validate":             { "main": [[{ "node": "Valid?",               "type": "main", "index": 0 }]] },
+    "Valid?":               {
+      "main": [
+        [{ "node": "Insert Quote", "type": "main", "index": 0 }],
+        [{ "node": "Respond 400",  "type": "main", "index": 0 }]
+      ]
+    },
+    "Insert Quote":         { "main": [[{ "node": "Load Project",         "type": "main", "index": 0 }]] },
+    "Load Project":         { "main": [[{ "node": "Load Studio Profile",  "type": "main", "index": 0 }]] },
+    "Load Studio Profile":  { "main": [[{ "node": "Build Email",          "type": "main", "index": 0 }]] },
+    "Build Email":          { "main": [[{ "node": "Send Email",           "type": "main", "index": 0 }]] },
+    "Send Email":           {
+      "main": [
+        [{ "node": "Update Email Sent", "type": "main", "index": 0 }],
+        [{ "node": "Email Failed",      "type": "main", "index": 0 }]
+      ]
+    },
+    "Update Email Sent":    { "main": [[{ "node": "Respond 201",          "type": "main", "index": 0 }]] },
+    "Email Failed":         { "main": [[{ "node": "Respond 502",          "type": "main", "index": 0 }]] }
+  }
+}

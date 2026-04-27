@@ -2,7 +2,17 @@
 
 Histórico cronológico de hitos del sistema. Generado a partir de git log.
 
-## 2026-04-27 — Bloques 20-24: Onboarding conversacional + studio_profile injection refactor
+## 2026-04-27 — Bloques 20-25: Onboarding conversacional + studio_profile injection refactor + trade_quote_request templating
+
+### Bloque 25 — P1 (LISTA_TAREAS): trade_quote_request adaptado al studio_profile (sin LLM)
+- `trade_quote_request` (`C8LmBilsqMTGNFut`): añadido nodo `Load Studio Profile` entre `Load Project` y `Build Email`. El email RFQ a oficios ahora respeta:
+  - **Saludo**: si `tone.proveedores.formalidad ∈ {formal, profesional}` usa "Estimado/a [supplier]:", si no "Hola [supplier],".
+  - **Tuteo/usted**: `tone.proveedores.tutea` (default true) cambia "Te solicitamos / contesta a este email / Si prefieres" → "Le solicitamos / conteste / Si prefiere".
+  - **Firma**: `identity.persona_principal — identity.nombre_estudio` (con fallback "Damian — Estudio").
+- Cero coste LLM, solo template substitution. Se aplica a TODOS los proyectos automáticamente.
+- `agent_documents` (P1 también): **decisión consciente C — no se toca**. Estructura de carpetas Drive es invisible al cliente final, no requiere personalización.
+
+### Bloque 24 — refactor inyección studio_profile en 4 agentes finales + cron monitor onboarding (sesión autónoma sin Damián)
 
 ### Bloque 24 — refactor inyección studio_profile en 4 agentes finales + cron monitor onboarding (sesión autónoma sin Damián)
 - `agent_planner` (`lSUfNw61YfbERI8n`): Load Studio Profile + `_SP_PLAN` antes del systemPrompt. Las priorities del estudio orientan el orden y duración de las fases del plan.

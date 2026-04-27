@@ -4,6 +4,12 @@ Histórico cronológico de hitos del sistema. Generado a partir de git log.
 
 ## 2026-04-27 — Bloques 20-25: Onboarding conversacional + studio_profile injection refactor + trade_quote_request templating
 
+### Bloque 25 — Hallazgo critico: migration 042 nunca ejecutada en Supabase, aplicada via workflow MCP temporal
+- **Diagnostico**: durante P2 LISTA_TAREAS (validar baseline) se descubrio que la tabla `studio_profile`, `onboarding_sessions` y la funcion `get_active_studio_profile()` NO existian en Supabase. La migration 042 (B20) nunca llego a ejecutarse en produccion. Los 10 agentes refactorizados en B23-B24 con `Load Studio Profile` estaban fallando silenciosamente desde el merge — y trade_quote_request modificado en B25 P1 tambien.
+- **Accion**: workflow temporal `TEMP_apply_migration_043` (Postgres webhook) creado, ejecutado y borrado. Aplicacion en 3 pasos: (1) CREATE TABLE + indices, (2) CREATE FUNCTION + triggers, (3) INSERT baseline con identity ya corregido (Demo ArquitAI / Equipo ArquitAI) + tone.proveedores añadido.
+- **Migration 043** convertida en archivo de auditoria/registro (las tablas y baseline ya estan en BD).
+- **Verificado**: 1 fila baseline activa en studio_profile. `get_active_studio_profile()` devuelve datos. Todos los agentes con `Load Studio Profile` operativos.
+
 ### Bloque 25 — P1 (LISTA_TAREAS): trade_quote_request adaptado al studio_profile (sin LLM)
 - `trade_quote_request` (`C8LmBilsqMTGNFut`): añadido nodo `Load Studio Profile` entre `Load Project` y `Build Email`. El email RFQ a oficios ahora respeta:
   - **Saludo**: si `tone.proveedores.formalidad ∈ {formal, profesional}` usa "Estimado/a [supplier]:", si no "Hola [supplier],".

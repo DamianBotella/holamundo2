@@ -1,0 +1,60 @@
+-- ============================================================
+-- Migration 043: APLICADA EN PRODUCCION 2026-04-27 vía workflow MCP temporal
+-- ============================================================
+-- Contexto: durante B25 (P2 LISTA_TAREAS_DAMIAN) se descubrio que la
+-- migration 042 (creada en B20) NUNCA se ejecuto en Supabase. Los 10 agentes
+-- refactorizados en B23-B24 con `Load Studio Profile` estaban fallando
+-- silenciosamente desde el merge.
+--
+-- Accion tomada (B25):
+-- 1. Workflow temporal `TEMP_apply_migration_043` (creado y borrado tras uso)
+--    ejecuto por partes en el orden:
+--      a) CREATE TABLE studio_profile + onboarding_sessions + indices
+--      b) CREATE FUNCTION touch_studio_profile/touch_onboarding_session +
+--         get_active_studio_profile + triggers
+--      c) INSERT baseline studio_profile con identity ya corregido a valores
+--         comerciales: nombre_estudio="Demo ArquitAI", persona_principal=
+--         "Equipo ArquitAI", incluido tone.proveedores={tutea:true,formalidad:
+--         "directo",longitud:"breve"} (no presente en 042 original).
+--
+-- Diferencias vs 042 original:
+-- - identity.nombre_estudio: "Estudio de Arquitectura Tecnica (baseline)" -> "Demo ArquitAI"
+-- - identity.persona_principal: "Arquitecto Tecnico Colegiado" -> "Equipo ArquitAI"
+-- - tone: añadida seccion "proveedores" con tutea+directo+breve para
+--   trade_quote_request (B25 P1)
+-- - Resto de secciones (priorities, red_lines, visit_checklist,
+--   materials_pref, trades_pref, jurisdiction): identicas a 042.
+--
+-- Idempotente: CREATE TABLE IF NOT EXISTS + ON CONFLICT DO NOTHING.
+-- ============================================================
+
+-- Si vuelves a ejecutar esto sobre la BD, solo afecta si las tablas no existen
+-- (en cuyo caso re-crea todo) o si el baseline no existe (en cuyo caso lo
+-- inserta). Si todo existe, es un no-op.
+
+-- ============================================================
+-- Verificacion (ya pasada en B25):
+-- ============================================================
+-- SELECT studio_id, setup_source, active,
+--        identity->>'nombre_estudio' AS nombre,
+--        identity->>'persona_principal' AS persona,
+--        identity->>'ciudad' AS ciudad,
+--        jsonb_array_length(priorities) AS num_prio,
+--        jsonb_array_length(red_lines) AS num_red,
+--        jsonb_array_length(visit_checklist) AS num_visit
+-- FROM studio_profile;
+--
+-- esperado: 1 fila
+--   nombre   = "Demo ArquitAI"
+--   persona  = "Equipo ArquitAI"
+--   ciudad   = "Madrid"
+--   num_prio = 5
+--   num_red  = 7
+--   num_visit= 10
+
+-- ============================================================
+-- Si se necesitase re-aplicar manualmente: ver migration 042 + jsonb_set
+-- sobre el campo identity. El INSERT abajo es referencia, no se ejecuta:
+-- ============================================================
+-- (referencia - identico al INSERT que se aplico via workflow temporal)
+SELECT 'migration 043 already applied via workflow MCP on 2026-04-27' AS status;

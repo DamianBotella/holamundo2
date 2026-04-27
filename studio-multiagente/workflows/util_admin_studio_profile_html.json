@@ -1,0 +1,19 @@
+{
+  "name": "util_admin_studio_profile_html",
+  "_n8n_id": "oDnyTIxTn4A9DIMW",
+  "_purpose": "Dashboard HTML para ver el studio_profile activo + historico de profiles inactivos + sesiones de onboarding. GET /webhook/admin-studio-profile con header x-api-key. Renderiza el active_profile con las 8 secciones detalladas (identity, tone, priorities, red_lines, visit_checklist, materials_pref, trades_pref, jurisdiction). Tabla de sesiones con cobertura/8 + coste LLM. Tabla de profiles inactivos. CTAs a /webhook/setup-onboarding (chat) y al admin-index.",
+  "_triggers": "GET /webhook/admin-studio-profile (header x-api-key)",
+  "_data_source": "tabla studio_profile + tabla onboarding_sessions",
+  "_companion_to": "agent_onboarding (chat) + agent_onboarding_extract (extractor)",
+  "nodes": [
+    { "id": "asp-01", "name": "Webhook GET",             "type": "n8n-nodes-base.webhook",          "position": [-700, 300] },
+    { "id": "asp-02", "name": "Load Profile + Sessions", "type": "n8n-nodes-base.postgres",         "position": [-460, 300], "_query_summary": "json con active_profile (row_to_json) + inactive_profiles (top 10) + sessions (top 10) + session_in_progress count" },
+    { "id": "asp-03", "name": "Build HTML",              "type": "n8n-nodes-base.code",             "position": [-220, 300] },
+    { "id": "asp-04", "name": "Respond HTML",            "type": "n8n-nodes-base.respondToWebhook", "position": [20, 300] }
+  ],
+  "connections": {
+    "Webhook GET":             { "main": [[{ "node": "Load Profile + Sessions", "type": "main", "index": 0 }]] },
+    "Load Profile + Sessions": { "main": [[{ "node": "Build HTML",              "type": "main", "index": 0 }]] },
+    "Build HTML":              { "main": [[{ "node": "Respond HTML",            "type": "main", "index": 0 }]] }
+  }
+}

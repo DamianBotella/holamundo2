@@ -40,6 +40,9 @@
 | `GET /webhook/admin-aftercare-overview` | `util_admin_aftercare_overview_html` (`V1duL8iwHBBwLCR6`) | Header X-API-Key | Vista agregada postventa: por severidad/categoría + top 25 open + SLA breach destacado |
 | `GET /webhook/admin-invoices-overview` | `util_admin_invoices_overview_html` (`pvWPutYJLSQgyItV`) | Header X-API-Key | Vista agregada facturas: pending/approved/disputed por categoría y gremio |
 | `GET /webhook/admin-contracts-overview` | `util_admin_contracts_overview_html` (`Pl6oXMSLdWP1aAni`) | Header X-API-Key | Vista agregada contratos: por tipo + pendientes de acción priorizados por urgency |
+| `GET /webhook/admin-studio-profile` | `util_admin_studio_profile_html` (`oDnyTIxTn4A9DIMW`) | Header X-API-Key | Studio profile activo (8 secciones detalladas) + sesiones onboarding + profiles inactivos |
+| `GET /webhook/setup-onboarding` | `setup_wizard_chat_html` (`wVkQvzlaEWgygGTE`) | Header X-API-Key | Frontend chat responsive para onboarding del profesional (LLM conversacional) |
+| `POST /webhook/setup-onboarding-message` | `agent_onboarding` (`aDEK08WPuDU5jVci`) | Header X-API-Key | Endpoint del chat de onboarding. Acepta `{message, resume_token?, contact_email?, contact_name?}` y devuelve `{message, resume_token, sections_covered, ready_to_close}` |
 | `GET /webhook/qc-form?qc_id=<uuid>` | `qc_public_form` (`Pqod9AyvG0opCrLU`) | Header X-API-Key | Form HTML responsive móvil para marcar pass/fail/skip + comentario en items del qc_check (autosave via fetch al qc-complete existente) |
 
 ### Endpoints públicos (con security_check integrado)

@@ -1,0 +1,18 @@
+{
+  "name": "setup_wizard_chat_html",
+  "_n8n_id": "wVkQvzlaEWgygGTE",
+  "_purpose": "Frontend HTML responsive estilo chat para el onboarding del profesional. GET /webhook/setup-onboarding[?token=<resume>]. Renderiza pagina con header sticky + 8 pills de progreso (identity/tone/priorities/red_lines/visit/materials/trades/jurisdiction), area scroll para mensajes, input textarea autosize. JS hace fetch POST al endpoint /webhook/setup-onboarding-message con x-api-key (prompt + localStorage), bubbles user/assistant, indicador 'escribiendo...', actualiza pills cuando ready_to_close=true muestra banner verde.",
+  "_triggers": "GET /webhook/setup-onboarding (header x-api-key)",
+  "_calls_via_fetch": "POST /webhook/setup-onboarding-message (agent_onboarding aDEK08WPuDU5jVci)",
+  "_storage": "localStorage: arquitai_api_key (persiste header) + arquitai_resume_token (permite retomar tras refresh)",
+  "_design_notes": "Mobile-first. Sticky footer con textarea + send. Empty state con CTA 'escribe empezar para arrancar'. Banner verde + input disabled cuando completado.",
+  "nodes": [
+    { "id": "swc-01", "name": "Webhook GET",  "type": "n8n-nodes-base.webhook",          "position": [-460, 300] },
+    { "id": "swc-02", "name": "Build HTML",   "type": "n8n-nodes-base.code",             "position": [-220, 300] },
+    { "id": "swc-03", "name": "Respond HTML", "type": "n8n-nodes-base.respondToWebhook", "position": [20, 300] }
+  ],
+  "connections": {
+    "Webhook GET": { "main": [[{ "node": "Build HTML",   "type": "main", "index": 0 }]] },
+    "Build HTML":  { "main": [[{ "node": "Respond HTML", "type": "main", "index": 0 }]] }
+  }
+}

@@ -34,6 +34,35 @@ Fecha: 2026-04-26
 - `cron_post_phase_audits.json` (stub estructural — cron 30min auditorías post-fase)
 - `util_admin_llm_stats_html.json` (workflow NUEVO — dashboard de costes LLM con drill-down)
 
+**Bloque 24** (refactor 4 agentes finales con inyección studio_profile + cron monitor onboarding):
+- `agent_planner` (`lSUfNw61YfbERI8n`): Load Studio Profile + `_SP_PLAN` injection (priorities orientan plan de fases).
+- `agent_memory` (`gLxmy7M0UmC7Yzye`): Load Studio Profile + `_SP_MEM` injection (lessons_learned coherentes con priorities del estudio).
+- `agent_safety_plan` (`yRaR3V0j61R1g1jZ`): Load Studio Profile + `_SP_SAFE` injection (ponderación de riesgos según priorities; ítem 1 del estudio suele ser seguridad estructural).
+- `agent_accessibility` (`s7ctmUsITOWK7cRT`): Load Studio Profile + `_SP_ACC` injection (jurisdicción CCAA + DB-SUA + priorities para gravedad).
+- `cron_onboarding_session_review.json` (workflow NUEVO `zhLAVolNtA6gBgXR`, activo — cron lunes 09:00 detecta `onboarding_sessions` paradas >7d en `in_progress`, manda HTML con cobertura/8 + coste + enlace para retomar via resume_token via util_notification).
+- Total agentes con inyección studio_profile activa: **10/11 LLM-using** (briefing/design/regulatory/materials/costs/proposal/planner/memory/safety_plan/accessibility). agent_documents y agent_trades no usan LLM.
+
+**Bloque 23** (refactor 6 agentes nucleo con inyección studio_profile):
+- `agent_briefing` (`uq3GQWSdmoIV4ZdR`): `_STUDIO_CONTEXT` + visit_checklist→open_questions.
+- `agent_design` (`sMGf7e8CSnsBQa1q`): `_STUDIO_CONTEXT` + priorities.
+- `agent_regulatory` (`QbRMmQs0oyVHplgE`): `_SP_REG` con jurisdiction-heavy.
+- `agent_materials` (`SOJW7SgCrJebLRP8`): `_SP_MAT` con materials_pref.gama_default + marcas_preferidas.
+- `agent_costs` (`FhF8zelE1KehUD4Z`): `_SP_COST` con red_lines exclusión en breakdown.
+- `agent_proposal` (`Mqx8S6nR6exbRY86`): `_SP_PROP` con tone propagado al executive_summary + red_lines preflight.
+
+**Bloque 22** (documentación patrón inyección + cableado dry-run):
+- `studio-multiagente/docs/patron_inyeccion_studio_profile.md` (nuevo — patrón para 11 agentes núcleo, ~3.5h estimadas).
+- `agent_briefing` con Load Studio Profile añadido en dry-run (cargado pero aún no inyectado al systemPrompt).
+
+**Bloque 21** (frontend onboarding + admin):
+- `setup_wizard_chat_html.json` (workflow NUEVO `wVkQvzlaEWgygGTE`): GET `/webhook/setup-onboarding`, frontend HTML responsive estilo chat con 8 pills de progreso + textarea autosize.
+- `util_admin_studio_profile_html.json` (workflow NUEVO `oDnyTIxTn4A9DIMW`): GET `/webhook/admin-studio-profile`, dashboard con perfil activo + 8 secciones detalladas + sesiones onboarding + perfiles inactivos.
+
+**Bloque 20** (onboarding conversacional con LLM):
+- `agent_onboarding.json` (workflow NUEVO `aDEK08WPuDU5jVci`): POST `/webhook/setup-onboarding-message`, chat con LLM que conduce las 8 secciones del studio_profile preguntando al profesional con el tono de un asistente humano.
+- `agent_onboarding_extract.json` (workflow NUEVO `mzGAxzoKPwVUFWcS`): extrae estructura JSON desde la transcripción y crea/actualiza fila en studio_profile cuando hay >=70% cobertura.
+- Migration `042_studio_profile_onboarding.sql`: crea tablas `studio_profile` (8 jsonb sections) + `onboarding_sessions` + función `get_active_studio_profile()` + baseline seed.
+
 **Bloque 19** (2 overview dashboards finales + REPORTE_15H.md):
 - `util_admin_invoices_overview_html.json` (workflow NUEVO `pvWPutYJLSQgyItV`, activo — pending/approved/disputed por categoría/gremio)
 - `util_admin_contracts_overview_html.json` (workflow NUEVO `Pl6oXMSLdWP1aAni`, activo — por tipo + pendientes priorizados por urgency)

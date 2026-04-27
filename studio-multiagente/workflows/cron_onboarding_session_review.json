@@ -1,0 +1,35 @@
+{
+  "name": "cron_onboarding_session_review",
+  "_n8n_id": "zhLAVolNtA6gBgXR",
+  "_note": "Stub sincronizado 2026-04-27 (bloque 24). Para version completa: mcp__n8n__n8n_get_workflow id=zhLAVolNtA6gBgXR mode=full",
+  "_purpose": "Cron semanal (lunes 09:00) que detecta sesiones onboarding_sessions en status='in_progress' sin actividad >7 dias. Si las hay, genera tabla HTML con id, cobertura/8, coste, dias inactivos y enlace para retomar (token), y envia email a architect_email via util_notification. Sirve como salvaguarda para que los profesionales que abandonaron el chat de setup puedan retomarlo o que Damian decida cerrar manualmente la sesion.",
+  "_triggers": "Schedule cron 0 9 * * 1 (lunes 09:00)",
+  "_data_source": "tabla onboarding_sessions filtrada por status='in_progress' AND updated_at < NOW() - INTERVAL '7 days'",
+  "_calls": "util_notification (ks2CqrtJCxLJTPdV) para enviar email",
+  "_companion_to": "agent_onboarding (chat) + agent_onboarding_extract (extractor) + util_admin_studio_profile_html (dashboard)",
+  "nodes": [
+    { "id": "cor-01", "name": "Schedule Trigger",     "type": "n8n-nodes-base.scheduleTrigger", "position": [0, 300] },
+    { "id": "cor-02", "name": "Find Stuck Sessions",  "type": "n8n-nodes-base.postgres",        "position": [250, 300], "_query_summary": "SELECT id, resume_token, sections_covered, total_cost_usd, days_since_update FROM onboarding_sessions WHERE status='in_progress' AND updated_at < NOW() - 7d LIMIT 20" },
+    { "id": "cor-03", "name": "Has Sessions?",        "type": "n8n-nodes-base.if",              "position": [500, 300] },
+    { "id": "cor-04", "name": "Aggregate Sessions",   "type": "n8n-nodes-base.code",            "position": [750, 220], "_purpose": "Genera HTML con tabla de sesiones paradas y enlaces para retomar via resume_token" },
+    { "id": "cor-06", "name": "Find Architect Email", "type": "n8n-nodes-base.postgres",        "position": [750, 380] },
+    { "id": "cor-05", "name": "Send Email",           "type": "n8n-nodes-base.executeWorkflow", "position": [1000, 220], "_calls": "util_notification ks2CqrtJCxLJTPdV" },
+    { "id": "cor-07", "name": "Done",                 "type": "n8n-nodes-base.set",             "position": [1250, 300] }
+  ],
+  "connections": {
+    "Schedule Trigger":     { "main": [[{ "node": "Find Stuck Sessions",  "type": "main", "index": 0 }]] },
+    "Find Stuck Sessions":  { "main": [[{ "node": "Has Sessions?",        "type": "main", "index": 0 }]] },
+    "Has Sessions?":        {
+      "main": [
+        [
+          { "node": "Aggregate Sessions",   "type": "main", "index": 0 },
+          { "node": "Find Architect Email", "type": "main", "index": 0 }
+        ],
+        [{ "node": "Done", "type": "main", "index": 0 }]
+      ]
+    },
+    "Aggregate Sessions":   { "main": [[{ "node": "Send Email", "type": "main", "index": 0 }]] },
+    "Find Architect Email": { "main": [[{ "node": "Send Email", "type": "main", "index": 0 }]] },
+    "Send Email":           { "main": [[{ "node": "Done",       "type": "main", "index": 0 }]] }
+  }
+}

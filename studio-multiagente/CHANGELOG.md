@@ -2,6 +2,39 @@
 
 Histórico cronológico de hitos del sistema. Generado a partir de git log.
 
+## 2026-04-27 — Bloques 20-24: Onboarding conversacional + studio_profile injection refactor
+
+### Bloque 24 — refactor inyección studio_profile en 4 agentes finales + cron monitor onboarding (sesión autónoma sin Damián)
+- `agent_planner` (`lSUfNw61YfbERI8n`): Load Studio Profile + `_SP_PLAN` antes del systemPrompt. Las priorities del estudio orientan el orden y duración de las fases del plan.
+- `agent_memory` (`gLxmy7M0UmC7Yzye`): Load Studio Profile + `_SP_MEM`. Las lessons_learned se redactan coherentes con las priorities del estudio (no contradicen valores).
+- `agent_safety_plan` (`yRaR3V0j61R1g1jZ`): Load Studio Profile + `_SP_SAFE`. Riesgos ponderados según priorities (estudio que prioriza seguridad estructural eleva riesgos estructurales).
+- `agent_accessibility` (`s7ctmUsITOWK7cRT`): Load Studio Profile + `_SP_ACC`. Jurisdicción (CCAA) + DB-SUA del CTE + priorities para gravedad de issues.
+- `cron_onboarding_session_review` (`zhLAVolNtA6gBgXR`, activo): cron lunes 09:00 detecta sesiones onboarding_sessions paradas >7d en `in_progress`. Genera tabla HTML con cobertura/8, coste, días inactivos y enlace para retomar (via resume_token). Envía via util_notification al architect_email.
+- **Total**: 10/11 agentes LLM-using con inyección studio_profile activa (todos menos agent_documents y agent_trades, que no usan LLM).
+
+### Bloque 23 — refactor inyección studio_profile en 6 agentes núcleo
+- `agent_briefing`: `_STUDIO_CONTEXT` + fusión visit_checklist con `briefing.open_questions`.
+- `agent_design`: priorities (orden estricto al evaluar opciones).
+- `agent_regulatory`: `_SP_REG` jurisdiction-heavy (CCAA + ayuntamientos para filtrar tareas).
+- `agent_materials`: `_SP_MAT` con `materials_pref.gama_default` + `marcas_preferidas_por_categoria`.
+- `agent_costs`: `_SP_COST` aplica red_lines como exclusión en el breakdown.
+- `agent_proposal`: `_SP_PROP` propaga tone al executive_summary + red_lines preflight.
+
+### Bloque 22 — patrón documentado de inyección studio_profile
+- `studio-multiagente/docs/patron_inyeccion_studio_profile.md`: documentación del patrón (Load Studio Profile + prepend `_STUDIO_CONTEXT` block) con tabla agente→sección, esfuerzo estimado ~3.5h, cuándo activar (cuando el primer arquitecto real complete onboarding).
+- `agent_briefing`: Load Studio Profile añadido en dry-run (cargado pero NO inyectado al systemPrompt todavía).
+
+### Bloque 21 — frontend onboarding chat + admin studio_profile
+- `setup_wizard_chat_html` (`wVkQvzlaEWgygGTE`, activo): GET `/webhook/setup-onboarding`. Frontend HTML responsive estilo chat con 8 pills de progreso + textarea autosize + localStorage para resume_token. Mobile-first.
+- `util_admin_studio_profile_html` (`oDnyTIxTn4A9DIMW`, activo): GET `/webhook/admin-studio-profile`. Dashboard del perfil activo + 8 secciones detalladas + tabla sesiones onboarding + perfiles inactivos.
+
+### Bloque 20 — onboarding conversacional con LLM ("pequeño cerebro")
+- `agent_onboarding` (`aDEK08WPuDU5jVci`, activo): POST `/webhook/setup-onboarding-message`. Chat con LLM que conduce 8 secciones (identity/tone/priorities/red_lines/visit_checklist/materials_pref/trades_pref/jurisdiction) preguntando al profesional con tono humano.
+- `agent_onboarding_extract` (`mzGAxzoKPwVUFWcS`, activo): extrae estructura JSON desde la transcripción y crea/actualiza fila en `studio_profile` cuando hay >=70% cobertura.
+- Migration `042_studio_profile_onboarding.sql`: crea tablas `studio_profile` (8 jsonb sections) + `onboarding_sessions` + función `get_active_studio_profile()` + baseline seed para que el sistema arranque con un perfil genérico hasta que un profesional real complete el onboarding.
+
+
+
 ## 2026-04-26 — Bloques 7-19: Fase 2 completa + 5 overviews agregados + REPORTE_15H
 
 ### Bloque 19 (5 puntos): plan 5h — sesión autónoma de Damián descansando

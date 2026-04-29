@@ -2,6 +2,19 @@
 
 Histórico cronológico de hitos del sistema. Generado a partir de git log.
 
+## 2026-04-29 — Bloque 28: Anti-drift + Schema freeze v1 + Plan pre-interfaz Foxhole
+
+### Bloque 28 — preparacion solida pre-UI
+- **Auditoria comprehensiva schema drift**: 42/44 tablas, 15/17 columnas, 12/12 funciones present. Los 4 "faltantes" eran nombres incorrectos en mi auditoria (permit_records -> permit_applications/permit_status_history; site_monitor_visits -> site_reports; email_encrypted -> email_enc; phone_encrypted -> phone_enc). **Sin drift real**. Las 3 incidencias previas (042, 044, 045) eran las unicas reales.
+- **Migration 046 aplicada**: tabla `applied_migrations(filename PK, applied_at, applied_by, sha256, notes)` + indice. Bulk INSERT con las 45 migrations confirmadas (003-046, incluye dos 018 distintos). Verificado: total_registered=45.
+- **Script `scripts/check_migration_drift.py`** (NUEVO): compara `schemas/migrations/*.sql` (repo) vs tabla `applied_migrations` (BD) y reporta drift. Modo `--list` y `--check` (con `--json` para CI). Codigo salida: 0 OK, 1 drift, 2 error config.
+- **Schema FROZEN v1** (`docs/schema_v1_frozen.md`): contrato formal con las 44 tablas core + 12 funciones SQL + reglas duras (no rename sin alias, jsonb del studio_profile no se aplana, tenant_id presente, current_phase fuente de verdad, activity_log feed cronologico). A partir de aqui, cualquier cambio = nueva migration + registro.
+- **Plan pre-interfaz Foxhole** (`docs/plan_pre_interfaz_foxhole.md`): plan formal de 5 sesiones (X1-X5) con esfuerzo total ~36-43h antes de tocar UI. Orden: E2E real -> Orchestrator audit -> Multi-tenant RLS -> Auth -> API REST contractual. Cada sesion documentada con producto entregable y reglas de oro.
+
+**Bottom line**: backend declarado FROZEN v1 + mecanismo anti-drift activo. Listos para empezar X1 (E2E real) en proxima sesion.
+
+
+
 ## 2026-04-29 — Bloque 27: Reality Check + 2 fixes criticos de schema drift
 
 ### Bloque 27 — Reality Checker auditoria pipeline E2E + fixes inmediatos

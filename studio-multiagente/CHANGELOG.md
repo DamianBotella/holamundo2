@@ -4,7 +4,17 @@ Histórico cronológico de hitos del sistema. Generado a partir de git log.
 
 ## 2026-04-27 — Bloques 20-25: Onboarding conversacional + studio_profile injection refactor + trade_quote_request templating
 
-### Bloque 26 — agency-agents-main integrado: 10 agentes Claude Code instalados + auditoria Civil Engineer sobre agent_regulatory
+### Bloque 26 (P2) — auditoria Civil Engineer sobre agent_safety_plan + script PDF Document Generator
+- Auditoria documentada en `docs/auditoria_civil_engineer_agent_safety_plan.md`. Hallazgo: `agent_safety_plan` ya esta bien cubierto tecnicamente gracias al knowledge file `RD_1627_1997_resumen.md`. Las mejoras propuestas son incrementales (no urgentes):
+  - Anadir `code_references` por riesgo individual (trazabilidad normativa fina).
+  - Marcar fases con `applies_when_estructural`.
+  - Handoff explicito desde agent_regulatory (si task_type=estudio_seguridad_salud detectado, flag al input de safety_plan).
+  - Campos `pdf_layout_hints` para preparar terreno PDF nativo.
+  - Cualquier cambio de prompt requiere MCP n8n vivo (pendiente).
+- **Script `scripts/safety_plan_to_pdf.py`** (NUEVO, criterio Document Generator): convierte una fila de `safety_plans` en un PDF firmable profesional via weasyprint (HTML+CSS->PDF). 11 secciones + portada + firma + estilo CSS limpio. Usa identity del studio_profile activo. Reemplaza el paso humano "JSON->Google Doc->exportar PDF->firmar" por un solo comando.
+- `scripts/README.md` con instrucciones de uso, dependencias, integracion futura con n8n.
+
+### Bloque 26 (P1) — agency-agents-main integrado: 10 agentes Claude Code instalados + auditoria Civil Engineer sobre agent_regulatory
 - Carpeta `agency-agents-main/` (~200 agentes Claude Code en formato .md+YAML) inspeccionada. Top 10 instalados en `~/.claude/agents/`:
   - specialized-civil-engineer (Eurocodigos + CTE + multi-jurisdiccion)
   - specialized-document-generator (PDF/DOCX/XLSX/PPTX programaticos)

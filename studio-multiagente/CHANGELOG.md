@@ -2,6 +2,38 @@
 
 Histórico cronológico de hitos del sistema. Generado a partir de git log.
 
+## 2026-04-29 — Bloque 29: X1 intentado, 3 bugs descubiertos, 1 arreglado
+
+### Bloque 29 — X1 (E2E real) bloqueado por bugs runtime previamente invisibles
+Se intento disparar el pipeline E2E completo con un proyecto stub. Resultado: NO certificado. 3 bugs descubiertos:
+
+**Bug 1 (ARREGLADO via migration 047)**: `check_rate_limit` duplicada en BD.
+- Migration 008 (returns text) no fue DROPed cuando 029 introdujo la nueva firma (returns TABLE).
+- Postgres no podia resolver llamadas con 3 args. `init_new_project` y todos los webhooks que usaban `util_webhook_security` fallaban.
+- Migration 047 aplicada: DROP de la firma vieja. Solo queda la nueva.
+- `util_webhook_security` (`EipFM8h08uTX1mBn`) ajustado a llamar la firma nueva con max_per_hour = max_per_minute * 60 y mapear `allowed bool` a `'allowed'/'blocked' text`.
+
+**Bug 2 (PENDIENTE)**: `util_notification` devuelve array vacio y corta el flow.
+- Ejecucion 2049 de init_new_project: llego hasta `Call 'util_notification'` con itemsOutput=0. Los nodos siguientes (Trigger Orchestrator) no se ejecutaron.
+- Resultado: project + client + Drive creados, PERO main_orchestrator nunca recibe el trigger.
+- Fix necesario: util_notification debe devolver siempre objeto JSON, no array vacio.
+
+**Bug 3 (PENDIENTE)**: `main_orchestrator.Extract Input` no acepta input de sub-workflow.
+- Al intentar disparar via executeWorkflow con `{project_id}`, lanza `Error: project_id es obligatorio`.
+- El jsCode espera formato webhook (`body.project_id`) y no detecta sub-workflow input.
+- Fix: hacer Extract Input compatible con ambos formatos.
+
+**Lo que SI se logro**:
+- Migration 047 aplicada y verificada.
+- Confirmado que el patron "drift silencioso" se extiende mas alla del schema (este es el 4to incidente).
+- Documentado en `docs/x1_bugs_descubiertos_2026-04-29.md` con datos del proyecto stub creado para reutilizar (project_id `d5bdcc4f-76a3-47f2-a425-fe5ce776b045`).
+
+**Veredicto X1**: NOT PRODUCTION READY. Necesita X1 v2 en sesion dedicada con bugs 2 y 3 arreglados ANTES de reintentar pipeline.
+
+**Leccion operativa confirmada**: el Reality Checker dijo "absence of error != proof of success". B29 lo demuestra: health check verde + schema OK + workflows activos != pipeline funciona. Necesitamos `cron_e2e_smoke_test` que dispare proyecto stub periodicamente.
+
+
+
 ## 2026-04-29 — Bloque 28: Anti-drift + Schema freeze v1 + Plan pre-interfaz Foxhole
 
 ### Bloque 28 — preparacion solida pre-UI

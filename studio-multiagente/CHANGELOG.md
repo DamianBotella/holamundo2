@@ -2,6 +2,33 @@
 
 Histórico cronológico de hitos del sistema. Generado a partir de git log.
 
+## 2026-04-29 — Bloque 30: X1v2 ejecutado, 2/13 agentes E2E certificados, Bug 4 nuevo
+
+### Bloque 30 — X1v2: pipeline real arrancado con datos reales
+**De NOT PRODUCTION READY a NEEDS WORK con evidencia.** Por primera vez el pipeline arranca con un proyecto stub realista y procesa agentes en cascada con outputs persistidos en BD.
+
+**Bugs arreglados**:
+- Bug 2 (B29 pendiente): `util_notification` (`ks2CqrtJCxLJTPdV`) devolvia array vacio cortando init_new_project. Causa raiz: `Load Project Name` usaba `$json.project_id` pero el input precedente (`Load Architect Email`) sobrescribia el JSON. Fix: queryReplacement usa `$('Receive Notification Request').first().json.project_id || null` + COALESCE para garantizar siempre 1 fila.
+- Bug 3 era falsa alarma: `Extract Input` ya tenia fallback correcto.
+
+**Bug 4 NUEVO descubierto**: `agent_regulatory.Prepare Regulatory Prompt` lanza SyntaxError linea 73 (probablemente comilla mal escapada en el bloque `_SP_REG` inyectado en B23/B26). Implicacion: los 10 agentes con Studio Profile injection son sospechosos (solo briefing+design confirmados funcionales).
+
+**Pipeline real ejecutado** (proyecto `0a53d09f-d8f7-444a-a074-42a3305ef49b`):
+- ✅ agent_briefing: completed, briefing v1 con summary 175 chars
+- ✅ agent_design: completed, 3 design_options con 1 selected
+- ❌ agent_regulatory: failed (Bug 4)
+- 8 agentes restantes pendientes (bloqueados por Bug 4 en cascada)
+
+**Workaround Wait nodes**: SQL UPDATE manual para aprobar briefings/approvals/projects/agent_executions saltandose Wait nodes. Deja ejecuciones n8n colgadas hasta timeout 72h pero el flujo de datos avanza.
+
+**Cron de proteccion**: `cron_e2e_smoke_test` (`u1LyMpiDVECy1ABx`, activo) creado. Cron weekly lunes 03:00: dispara proyecto stub + espera 90s + verifica briefing + email alerta si falla. Cleanup automatico de proyectos SMOKE_E2E_* >30d. Detecta bugs runtime invisibles.
+
+**Documentado**: `docs/e2e_evidence_2026-04-29_x1v2.md` con estado completo + datos del project stub + plan X1v3.
+
+**Veredicto**: NEEDS WORK con confianza creciente. 2/13 agentes E2E certificados, 1/13 roto, 8/13 sin verificar pero sospechosos (Bug 4 podria afectarlos).
+
+
+
 ## 2026-04-29 — Bloque 29: X1 intentado, 3 bugs descubiertos, 1 arreglado
 
 ### Bloque 29 — X1 (E2E real) bloqueado por bugs runtime previamente invisibles

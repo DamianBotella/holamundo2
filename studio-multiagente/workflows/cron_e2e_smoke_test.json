@@ -1,0 +1,39 @@
+{
+  "name": "cron_e2e_smoke_test",
+  "_n8n_id": "u1LyMpiDVECy1ABx",
+  "_note": "Stub sincronizado 2026-04-29 (bloque 30 X1v2). Para version completa: mcp__n8n__n8n_get_workflow id=u1LyMpiDVECy1ABx mode=full",
+  "_purpose": "Cron weekly (lunes 03:00) que dispara un proyecto stub via init_new_project + espera 90s + verifica que se creo briefing + agent_briefing en agent_executions. Si falla, email alerta. Si pasa, log en activity_log. Cleanup automatico de proyectos SMOKE_E2E_* > 30 dias. Detecta bugs runtime invisibles a health checks.",
+  "_motivacion": "Reality Checker en B27 advirtio: 'absence of error != proof of success'. B29 lo confirmo: schema OK + workflows activos != pipeline funciona. Este cron dispara un proyecto real cada semana para detectar bugs en runtime que solo aparecen con trafico real (igual que el bug 042 + bug check_rate_limit dup + bug util_notification arreglados en B27-B30).",
+  "_triggers": "Schedule cron 0 3 * * 1 (lunes 03:00)",
+  "_data_source": "Pipeline real: init_new_project -> main_orchestrator -> agent_briefing",
+  "_validation": "Despues de 90s: SI hay >=1 row en briefings AND >=1 row en agent_executions con agent_name='agent_briefing' -> PASS. Else -> FAIL alerta email.",
+  "_cleanup": "Cada ejecucion borra proyectos SMOKE_E2E_* > 30 dias (activity_log + briefings + projects).",
+  "nodes": [
+    { "id": "es-01",   "name": "Weekly Mon 03:00",     "type": "n8n-nodes-base.scheduleTrigger", "position": [0, 300] },
+    { "id": "es-02",   "name": "Cleanup Old Smoke",    "type": "n8n-nodes-base.postgres",         "position": [220, 300] },
+    { "id": "es-03",   "name": "Fire Pipeline",        "type": "n8n-nodes-base.httpRequest",      "position": [440, 300], "_purpose": "POST a /webhook/new-project con auth Webhook API Key" },
+    { "id": "es-wait", "name": "Wait 90s",             "type": "n8n-nodes-base.wait",             "position": [660, 300] },
+    { "id": "es-04",   "name": "Verify Briefing",      "type": "n8n-nodes-base.postgres",         "position": [880, 300], "_query_summary": "Cuenta briefings + agent_executions del ultimo proyecto SMOKE_E2E*" },
+    { "id": "es-05",   "name": "All OK?",              "type": "n8n-nodes-base.if",               "position": [1100, 300] },
+    { "id": "es-06",   "name": "Log Smoke Pass",       "type": "n8n-nodes-base.postgres",         "position": [1320, 220] },
+    { "id": "es-07",   "name": "Load Architect Email", "type": "n8n-nodes-base.postgres",         "position": [1320, 380] },
+    { "id": "es-08",   "name": "Send Alert",           "type": "n8n-nodes-base.gmail",            "position": [1540, 380] },
+    { "id": "es-09",   "name": "Done",                 "type": "n8n-nodes-base.set",              "position": [1760, 300] }
+  ],
+  "connections": {
+    "Weekly Mon 03:00":   { "main": [[{ "node": "Cleanup Old Smoke",    "type": "main", "index": 0 }]] },
+    "Cleanup Old Smoke":  { "main": [[{ "node": "Fire Pipeline",        "type": "main", "index": 0 }]] },
+    "Fire Pipeline":      { "main": [[{ "node": "Wait 90s",             "type": "main", "index": 0 }]] },
+    "Wait 90s":           { "main": [[{ "node": "Verify Briefing",      "type": "main", "index": 0 }]] },
+    "Verify Briefing":    { "main": [[{ "node": "All OK?",              "type": "main", "index": 0 }]] },
+    "All OK?":            {
+      "main": [
+        [{ "node": "Log Smoke Pass",       "type": "main", "index": 0 }],
+        [{ "node": "Load Architect Email", "type": "main", "index": 0 }]
+      ]
+    },
+    "Log Smoke Pass":     { "main": [[{ "node": "Done",                 "type": "main", "index": 0 }]] },
+    "Load Architect Email": { "main": [[{ "node": "Send Alert",         "type": "main", "index": 0 }]] },
+    "Send Alert":         { "main": [[{ "node": "Done",                 "type": "main", "index": 0 }]] }
+  }
+}

@@ -2,6 +2,48 @@
 
 Histórico cronológico de hitos del sistema. Generado a partir de git log.
 
+## 2026-04-29 — Bloque 32 (X1v4): pipeline avanza a analysis_done, 3/13 agentes E2E certificados, 2 bugs nuevos
+
+### Bloque 32 — X1v4: regulatory CERTIFICADO E2E + 2 bugs cascada
+Re-disparado el pipeline tras fix syntax B31. agent_regulatory ahora corre OK pero al guardar surge Bug 5. Tras fix aplicado, regulatory completa exitosamente con 20 tasks creadas. Materials bloqueado por Bug 6 (fix aplicado, pendiente verificar).
+
+**Bug 5 (FIXED via migration 048)**: constraint regulatory_tasks_task_type_check no incluia los nuevos task_types del prompt v2 (B26).
+- LLM produce certificado_eficiencia_energetica/proyecto_tecnico/etc. correctamente
+- BD rechaza con "violates check constraint"
+- Migration 048: ALTER TABLE drop constraint viejo + add nuevo con 14 valores (los del prompt v2)
+- Verificacion: 5 ejecuciones de regulatory completaron, 20 regulatory_tasks creadas
+
+**Bug 6 (FIX APLICADO, pendiente verificar)**: agent_materials buscaba design_options.exec_status='confirmed' pero las aprobaciones SQL en X1v2 solo actualizaron is_selected=true.
+- UPDATE manual aplicado: SET exec_status='confirmed' a design_options/briefings/regulatory_tasks
+- Pattern detectado: hay 2 campos paralelos para "approved" (humano vs agente). Las aprobaciones manuales deben setear ambos.
+
+**Avance del pipeline** (proyecto 0a53d09f-...):
+- Phase: design_done → analysis_done ✅
+- agent_briefing: ✅ B30
+- agent_design: ✅ B30
+- agent_regulatory: ✅ B32 (NUEVO) - 20 regulatory_tasks con citation_source poblado
+- agent_materials: ❌ bloqueado Bug 6, fix aplicado, requiere re-trigger
+- 9 agentes restantes: pendientes
+
+**Total bugs encontrados/arreglados** en sesion (B26-B32):
+1. Migration 042 sin aplicar (B27 Reality Check)
+2. util_notification array vacio (B30)
+3. check_rate_limit duplicada (B27)
+4. SyntaxError SP injection x3 agentes (B31 audit)
+5. task_type constraint vs prompt (B32 X1v4) - este
+6. exec_status sync dual (B32 X1v4) - este
+
+**Veredicto**: NEEDS WORK con avance progresivo. Estimacion X1v5 + X1v6 para certificar 13/13.
+
+**Pendiente X1v5**:
+- Re-trigger pipeline desde analysis_done
+- Verificar materials + costs + proposal + planner + memory
+- Crear util_auto_approve para evitar UPDATE SQL manual con campos duales
+
+Doc completo: `docs/e2e_evidence_2026-04-29_x1v4.md`
+
+
+
 ## 2026-04-29 — Bloque 31 (X1v3): Audit SP injection 10 agentes, 3 bugs syntax arreglados
 
 ### Bloque 31 — X1v3: audit syntax sistematico de los 10 agentes con SP injection

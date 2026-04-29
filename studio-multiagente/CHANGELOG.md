@@ -4,6 +4,24 @@ Histórico cronológico de hitos del sistema. Generado a partir de git log.
 
 ## 2026-04-27 — Bloques 20-25: Onboarding conversacional + studio_profile injection refactor + trade_quote_request templating
 
+### Bloque 26 — agency-agents-main integrado: 10 agentes Claude Code instalados + auditoria Civil Engineer sobre agent_regulatory
+- Carpeta `agency-agents-main/` (~200 agentes Claude Code en formato .md+YAML) inspeccionada. Top 10 instalados en `~/.claude/agents/`:
+  - specialized-civil-engineer (Eurocodigos + CTE + multi-jurisdiccion)
+  - specialized-document-generator (PDF/DOCX/XLSX/PPTX programaticos)
+  - agents-orchestrator (patron quality gates + retry escalation)
+  - engineering-sre (red de seguridad)
+  - testing-reality-checker (E2E real vs sintetico)
+  - sales-proposal-strategist (propuesta venta ArquitAI)
+  - compliance-auditor
+  - engineering-incident-response-commander
+  - specialized-mcp-builder
+  - product-feedback-synthesizer
+- **Auditoria con criterio Civil Engineer**: el prompt v1 de `agent_regulatory` cubria solo capa administrativa (licencias, comunicacion previa, comunidades) y omitia la capa tecnica que la Administracion exige (CTE-DB, Eurocodigos, EHE-08, RD 1627/1997, REBT, RITE, RD 105/2008, RD 235/2013).
+- **Migration 044** (`044_agent_regulatory_prompt_v2.sql`): UPDATE del prompt en `agent_prompts` con marco tecnico espanol completo + nuevos task_types (proyecto_tecnico, ESS, EBSS, gestion_rcd, certificado_eficiencia_energetica, boletines_instalaciones, cumplimiento_db_sua_accesibilidad, cedula_compatibilidad_urbanistica) + campos opcionales `documentation_required` y `code_references` por tarea + "regla de oro" para afectacion estructural (5 entregables coexistentes).
+- `prompts/agent_prompts.md` AGENT_REGULATORY actualizado a v2 (fuente de verdad historica).
+- Documento `docs/auditoria_civil_engineer_agent_regulatory.md` con TL;DR + huecos detectados + propuesta + riesgo del cambio.
+- Pendiente: aplicar migration 044 en Supabase (cuando MCP n8n vuelva, o manualmente).
+
 ### Bloque 25 — P3 (LISTA_TAREAS): red de seguridad ampliada (recomendacion D)
 - `cron_health_check` (`ztTrZupYJiQmkNGW`): query `Run Checks` ampliada con verificaciones nuevas — `get_active_studio_profile` añadida a expected_functions; `studio_profile`, `onboarding_sessions`, `design_options`, `materials`, `regulatory_tasks`, `accessibility_audits`, `safety_plans`, `agent_executions`, `agent_prompts`, `approvals`, `activity_log`, `project_intelligence` añadidas a expected_tables. Nuevos campos en report: `studio_profile_active_count`, `studio_profile_fn_returns_row`, `studio_profile_identity_complete`, `studio_profile_ok`. La condicion `All OK?` exige `studio_profile_ok=true`. Probado y devuelve OK.
 - `cron_agent_failure_rate` (`12u0TIcAxZOimSFo`, activo): cron diario 07:00 detecta agentes con failure_rate > 50% en ultimas 24h (umbral minimo 2 ejecuciones). Si encuentra alguno, email HTML con tabla detallada (agente/total/failed/completed/rate). Silente si todo OK. Complementa health_check (infra) con runtime real.

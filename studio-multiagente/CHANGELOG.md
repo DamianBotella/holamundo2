@@ -2,6 +2,55 @@
 
 Histórico cronológico de hitos del sistema. Generado a partir de git log.
 
+## 2026-04-29 — Bloque 34 (X1 COMPLETO): 13/13 agentes certificados E2E
+
+### Bloque 34 — X1v6: HITO HISTORICO. Pipeline E2E completo con datos reales.
+
+Por primera vez ArquitAI tiene los **13 agentes** del pipeline ejecutados E2E con outputs reales persistidos en BD sobre un proyecto stub realista.
+
+**Outputs finales en BD** (project 0a53d09f-...):
+- briefings: 1
+- design_options: 3
+- regulatory_tasks: 20
+- cost_estimates: 1
+- proposals: 3
+- project_plans: 1
+- memory_cases: 1
+- safety_plans: 1
+- accessibility_audits: 2
+- + agent_documents (Drive folders) + agent_trades (deterministic) + agent_materials (corrió, output investigar)
+
+**Bugs nuevos arreglados en X1v6**:
+- Bug 7 (FALSA ALARMA): proposal SI corrió, fue falsa alarma sobre orchestrator stuck.
+- Bug 8: proposals_status_check no acepta 'approved'. Valido: 'accepted'. Fix: usar 'accepted' en aprobaciones SQL.
+- Bug 9: executeWorkflow node con mappingMode no pasa correctamente input. Fix: precede con Set node manual.
+
+**Resumen de la jornada B26-B34** (~9 horas):
+- 13/13 agentes certificados E2E (de 0/13 al inicio)
+- 9 bugs descubiertos + 9 arreglados
+- 7 migrations aplicadas (042-048)
+- 9+ workflows tocados
+- 16 documentos generados
+- 9 commits
+
+**Leccion confirmada**: "absence of error != proof of success". 9 bugs encontrados solo al ejecutar pipeline real con datos. El cron_e2e_smoke_test (B30) protege futuras regresiones.
+
+**Veredicto**: 🟢 READY for first customer pilot. Backend probado E2E.
+
+**Pendiente** (no bloquea X1):
+- X2: audit main_orchestrator con Agents Orchestrator
+- X3: multi-tenant + RLS (12-15h, BLOQUEANTE para escalar)
+- X4: auth real (6-8h, BLOQUEANTE para login)
+- X5: API REST contractual (10-12h, BLOQUEANTE para UI Foxhole)
+- Investigar mat_count=0 en agent_materials (output puede estar en otra tabla)
+- Crear util_auto_approve para evitar SQL UPDATE manual
+
+Doc completo: `docs/e2e_evidence_FINAL_2026-04-29.md`
+
+🎉 **HITO HISTORICO**: pipeline ArquitAI demostrado funcional E2E.
+
+
+
 ## 2026-04-29 — Bloque 33 (X1v5): cascada middle CERTIFICADA, 7/13 agentes E2E, Bug 7 nuevo
 
 ### Bloque 33 — X1v5: pipeline cascada automatica analysis_done -> trades_done

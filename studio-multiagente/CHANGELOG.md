@@ -2,6 +2,35 @@
 
 Histórico cronológico de hitos del sistema. Generado a partir de git log.
 
+## 2026-04-29 — Bloque 31 (X1v3): Audit SP injection 10 agentes, 3 bugs syntax arreglados
+
+### Bloque 31 — X1v3: audit syntax sistematico de los 10 agentes con SP injection
+Tras descubrir Bug 4 (SyntaxError en agent_regulatory) en X1v2 / B30, audite los 10 agentes que recibieron Studio Profile injection en B23-B26 para verificar si compartian el mismo problema.
+
+**Metodologia**: get_workflow filtered de cada agente, extraer jsCode del nodo Build/Prepare Prompt, validar con `node --check` localmente. Detectar patron roto `(agentPrompt.content || '...'.,` (parentesis abierto sin cerrar antes de la coma).
+
+**Resultados**:
+- ✅ agent_briefing OK (verificado E2E en B30)
+- ✅ agent_design OK (verificado E2E en B30)
+- 🔧 agent_regulatory: parentesis sin cerrar → ARREGLADO B30 manual + B31 confirmado
+- 🔧 agent_materials: mismo bug → ARREGLADO B31
+- 🔧 agent_costs: mismo bug → ARREGLADO B31
+- ✅ agent_proposal OK (patron correcto desde B23)
+- ✅ agent_planner OK (patron correcto desde B24)
+- ✅ agent_memory OK (patron correcto desde B24)
+- ✅ agent_safety_plan OK (patron correcto desde B24)
+- ✅ agent_accessibility OK (patron correcto desde B24)
+
+**3 fixes aplicados** via patchNodeField: cambio `.',\n  prompt_user:` por `.'),\n  prompt_user:` en cada uno.
+
+**Veredicto syntax**: 10/10 agentes con SP injection ahora compilan correctamente.
+
+**Doc**: `docs/audit_sp_injection_2026-04-29_x1v3.md` con tabla completa, patron roto vs correcto, leccion operativa.
+
+**Pendiente X1v4**: reanudar cascada del pipeline sobre proyecto stub `0a53d09f-...` (design_done). Re-trigger orchestrator → verificar regulatory + materials + costs corren E2E + continuar hasta proposal_done.
+
+
+
 ## 2026-04-29 — Bloque 30: X1v2 ejecutado, 2/13 agentes E2E certificados, Bug 4 nuevo
 
 ### Bloque 30 — X1v2: pipeline real arrancado con datos reales

@@ -16,6 +16,13 @@
 -- Idempotente: usa UPDATE (no INSERT) sobre la fila activa.
 -- ============================================================
 
+-- ============================================================
+-- APLICADA EN PRODUCCION 2026-04-29 via workflow MCP temporal.
+-- NOTA: la tabla agent_prompts NO tiene columna updated_at en este schema
+-- (descubierto al aplicar). Los UPDATE/INSERT a esta tabla deben omitir
+-- updated_at hasta que se anada via migration separada si se necesita.
+-- ============================================================
+
 UPDATE agent_prompts
 SET content = $$Eres el Agente de Normativa y Tramitacion de un estudio de arquitectura tecnica especializado en reformas de vivienda en Espana. Asistes al/la profesional como su segundo en normativa: detectas tramites administrativos Y los requisitos tecnicos que la Administracion exigira para autorizar cada uno.
 
@@ -75,8 +82,7 @@ PARA CADA TRAMITE, anade en el output:
 
 La normativa autonomica (jurisdiction.normativa_autonomica del studio_profile inyectado) y los ayuntamientos habituales del estudio se aplican ENCIMA de la estatal. Algunas CCAA tienen leyes propias de habitabilidad, suelo o seguridad.
 
-Responde EXCLUSIVAMENTE con un objeto JSON valido.$$,
-    updated_at = NOW()
+Responde EXCLUSIVAMENTE con un objeto JSON valido.$$
 WHERE agent_name = 'agent_regulatory'
   AND prompt_type = 'system'
   AND is_active = true;

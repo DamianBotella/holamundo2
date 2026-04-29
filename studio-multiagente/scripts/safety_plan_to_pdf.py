@@ -342,27 +342,194 @@ def render_pdf(row: dict, output_path: Path) -> None:
     HTML(string=html_str).write_pdf(str(output_path), stylesheets=[CSS(string=CSS_STYLE)])
 
 
+DEMO_ROW = {
+    "plan_id": "demo-plan-id",
+    "document_type": "EBSS",
+    "project_name": "Reforma integral piso Embajadores (DEMO)",
+    "property_area_m2": 72,
+    "location": "Calle Sombrereria 14, 4A, Madrid, Madrid",
+    "client_name": "Maria Garcia Lopez",
+    "studio": {
+        "identity": {
+            "nombre_estudio": "Demo ArquitAI",
+            "persona_principal": "Equipo ArquitAI",
+        }
+    },
+    "content_json": {
+        "document_type": "EBSS",
+        "document_type_justification": (
+            "Presupuesto de ejecucion material estimado < 450.000 EUR, duracion < 30 dias laborables, "
+            "menos de 20 trabajadores simultaneos. No concurren los supuestos del articulo 4.1 "
+            "del RD 1627/1997 que obligarian a redactar Estudio de Seguridad y Salud completo."
+        ),
+        "project_summary": (
+            "Reforma integral de vivienda de 72 m2 en planta 4 con ascensor. Apertura cocina-salon "
+            "(muro no portante), conversion banera-ducha, renovacion pavimentos y pintura en 2 dormitorios. "
+            "Cambio de instalacion de calefaccion a suelo radiante. No hay afectacion estructural mayor."
+        ),
+        "applicable_regulations": [
+            "RD 1627/1997 (Seguridad y salud en obras de construccion)",
+            "Ley 31/1995 (Prevencion de Riesgos Laborales)",
+            "RD 171/2004 (Coordinacion actividades empresariales)",
+            "RD 486/1997 (Lugares de trabajo)",
+            "RD 773/1997 (Equipos de proteccion individual)",
+            "REBT (RD 842/2002)",
+            "RITE (RD 1027/2007)",
+        ],
+        "phases_with_risks": [
+            {
+                "phase_name": "Demolicion parcial (tabique cocina-salon)",
+                "phase_order": 1,
+                "workers_simultaneous": 2,
+                "specific_risks": [
+                    {
+                        "risk": "Caida a distinto nivel",
+                        "severity": "alta",
+                        "probability": "baja",
+                        "code_references": ["RD 1627/1997 Anexo IV.A", "UNE-EN 363", "UNE-EN 397"],
+                        "preventive_measures": [
+                            "Acordonado de zona de demolicion",
+                            "Verificacion previa estado del forjado",
+                            "Demolicion progresiva sin sobrecargar zonas perimetrales",
+                        ],
+                        "collective_protections": ["Barandillas perimetrales en huecos > 2m"],
+                        "epis_required": ["Casco UNE-EN 397", "Calzado S3", "Gafas UNE-EN 166", "Guantes anticorte"],
+                    },
+                    {
+                        "risk": "Inhalacion de polvo (silice / posible amianto si edificio pre-2002)",
+                        "severity": "alta",
+                        "probability": "media",
+                        "code_references": ["RD 396/2006 (amianto)", "RD 374/2001 (agentes quimicos)"],
+                        "preventive_measures": [
+                            "Inspeccion previa del inmueble por riesgo amianto",
+                            "Si sospecha de amianto: DETENER y contratar empresa RERA autorizada",
+                            "Humidificar escombros para reducir polvo",
+                            "Sellado de zona y ventilacion forzada al exterior",
+                        ],
+                        "collective_protections": ["Plasticos de sellado en accesos a zona en obra"],
+                        "epis_required": ["Mascarilla FFP3", "Gafas estancas", "Mono desechable categoria III"],
+                    },
+                ],
+            },
+            {
+                "phase_name": "Instalacion electrica (REBT)",
+                "phase_order": 2,
+                "workers_simultaneous": 1,
+                "specific_risks": [
+                    {
+                        "risk": "Contactos electricos directos / indirectos",
+                        "severity": "alta",
+                        "probability": "media",
+                        "code_references": ["REBT (RD 842/2002)", "ITC-BT-24"],
+                        "preventive_measures": [
+                            "Desconectar y bloquear cuadro general antes de manipular",
+                            "Comprobar ausencia de tension con polimetro antes de tocar",
+                            "Solo personal cualificado IBTE para instalaciones",
+                            "Boletin certificado por instalador autorizado al finalizar",
+                        ],
+                        "collective_protections": ["Senalizacion de cuadro en mantenimiento"],
+                        "epis_required": ["Guantes dielectricos BT", "Calzado dielectrico", "Casco dielectrico"],
+                    },
+                ],
+            },
+            {
+                "phase_name": "Solado y alicatado",
+                "phase_order": 3,
+                "workers_simultaneous": 2,
+                "specific_risks": [
+                    {
+                        "risk": "Cortes con radial / inhalacion polvo ceramica",
+                        "severity": "media",
+                        "probability": "alta",
+                        "code_references": ["RD 1311/2005 (vibraciones)", "RD 286/2006 (ruido)"],
+                        "preventive_measures": [
+                            "Corte de piezas en zona ventilada o con aspiracion",
+                            "Uso de radial con disco diamante refrigerado por agua",
+                            "Pausas activas para reducir exposicion a vibraciones",
+                        ],
+                        "collective_protections": ["Aspiracion localizada en zona de corte"],
+                        "epis_required": ["Mascarilla FFP1", "Gafas integrales", "Protector facial radial", "Rodilleras"],
+                    },
+                ],
+            },
+        ],
+        "general_collective_protections": [
+            "Senalizacion de obra en acceso vivienda y portal",
+            "Plasticos protectores en pavimentos no afectados",
+            "Iluminacion provisional minima 200 lux en zonas de trabajo",
+            "Botiquin de primeros auxilios visible y senalizado",
+        ],
+        "general_epis": [
+            "Casco UNE-EN 397 (obligatorio en todas las fases)",
+            "Calzado de seguridad S3",
+            "Ropa de trabajo de alta visibilidad",
+            "Gafas de proteccion UNE-EN 166",
+            "Guantes (anticorte, dielectricos o quimicos segun fase)",
+        ],
+        "emergency_protocol": {
+            "medical_center": "Centro de Salud Embajadores - C/ Mesón de Paredes 39 - 91 528 88 81",
+            "procedure": (
+                "1) Asistencia inmediata al accidentado. 2) Llamada al 112 si gravedad. "
+                "3) Parte a mutua patronal. 4) Comunicacion al Coordinador de Seguridad y Salud "
+                "para investigacion + acciones correctoras. 5) Notificacion al promotor."
+            ),
+        },
+        "hygiene_facilities": [
+            "Aseos disponibles en la propia vivienda durante la obra (vivienda vacia)",
+            "Vestuario improvisado en habitacion no afectada",
+            "Agua potable en cocina (preservar suministro durante obra)",
+        ],
+        "simultaneous_activities": [
+            "Electricidad y fontaneria simultaneas: coordinar para no inutilizar circuitos en uso",
+            "Solado y carpinteria: proteger pavimentos terminados con plasticos",
+            "Pintura: ultima fase, requiere terminacion del resto de gremios",
+        ],
+        "training_required": [
+            "Charla de acogida al iniciar obra (10 min) firmada por todos los trabajadores",
+            "Formacion especifica electricistas: IBTE actualizada",
+            "Formacion en trabajos en altura (>2m): superada en empresa contratista",
+        ],
+        "medical_surveillance": (
+            "Reconocimiento medico previo segun riesgo (electricista alta tension, expuestos polvo). "
+            "Reconocimientos periodicos en mutua patronal de cada empresa contratista. "
+            "Vigilancia especifica si exposicion a amianto (RD 396/2006)."
+        ),
+        "recommendations_to_architect": [
+            "Verificar antes del inicio de obra que todas las empresas contratistas tienen RC profesional vigente y al dia con SS",
+            "Designar Coordinador de Seguridad y Salud (CSS) por escrito antes del inicio. Habitualmente lo asume el arquitecto tecnico DEO.",
+            "Si la inspeccion previa detecta posibilidad de amianto en bajantes o cubierta, DETENER la obra y contratar empresa RERA autorizada antes de continuar.",
+            "Comunicar a la comunidad de propietarios fechas de obra y horarios permitidos para evitar conflictos.",
+            "Solicitar a cada gremio el Plan de Seguridad y Salud especifico de sus tareas, basado en este EBSS.",
+        ],
+    },
+}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Genera PDF firmable de un safety_plan")
     g = parser.add_mutually_exclusive_group(required=True)
     g.add_argument("--plan-id", help="UUID de la fila safety_plans")
     g.add_argument("--project-id", help="UUID del proyecto (toma el ultimo plan)")
+    g.add_argument("--demo", action="store_true", help="Modo demo: usa datos dummy embebidos (no toca Supabase)")
     parser.add_argument("--output", help="Ruta del PDF de salida")
     args = parser.parse_args()
 
     load_dotenv()
 
-    conn = psycopg2.connect(
-        host=os.environ["SUPABASE_DB_HOST"],
-        port=os.getenv("SUPABASE_DB_PORT", "5432"),
-        dbname=os.environ["SUPABASE_DB_NAME"],
-        user=os.environ["SUPABASE_DB_USER"],
-        password=os.environ["SUPABASE_DB_PASSWORD"],
-    )
-    try:
-        row = fetch_safety_plan(conn, args.plan_id, args.project_id)
-    finally:
-        conn.close()
+    if args.demo:
+        row = DEMO_ROW
+    else:
+        conn = psycopg2.connect(
+            host=os.environ["SUPABASE_DB_HOST"],
+            port=os.getenv("SUPABASE_DB_PORT", "5432"),
+            dbname=os.environ["SUPABASE_DB_NAME"],
+            user=os.environ["SUPABASE_DB_USER"],
+            password=os.environ["SUPABASE_DB_PASSWORD"],
+        )
+        try:
+            row = fetch_safety_plan(conn, args.plan_id, args.project_id)
+        finally:
+            conn.close()
 
     if args.output:
         out = Path(args.output)

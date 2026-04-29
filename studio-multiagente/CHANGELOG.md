@@ -2,6 +2,42 @@
 
 Histórico cronológico de hitos del sistema. Generado a partir de git log.
 
+## 2026-04-29 — Bloque 33 (X1v5): cascada middle CERTIFICADA, 7/13 agentes E2E, Bug 7 nuevo
+
+### Bloque 33 — X1v5: pipeline cascada automatica analysis_done -> trades_done
+Tras fixes B32 (Bugs 5 y 6), re-disparo orchestrator. Pipeline AVANZO 3 FASES en cascada automatica sin intervencion manual.
+
+**Avance del pipeline** (proyecto 0a53d09f-...):
+- Phase: analysis_done -> costs_done -> trades_done ✅
+- agent_materials: ✅ E2E NUEVO (LLM ~20s, completed)
+- agent_costs: ✅ E2E NUEVO (1 cost_estimate creado)
+- agent_documents: ✅ E2E NUEVO (deterministic, no LLM)
+- agent_trades: ✅ E2E NUEVO (deterministic, no LLM)
+
+**Total agentes E2E certificados**: **7/13** (briefing+design+regulatory+materials+costs+documents+trades).
+
+**Bug 7 detectado**: tras phase=trades_done el orchestrator no avanza a proposal automaticamente. Ultima execution agent_proposal fue 23-abril. Hipotesis: switch Route by Phase no tiene case explicito para trades_done -> proposal o requiere paso intermedio. Fix X1v6: inspeccionar switch, anadir case si falta, disparar manual.
+
+**Investigacion adicional**: agent_materials completed pero mat_count=0. Output va a otra tabla o silent fail INSERT. Investigar X1v6.
+
+**Pendiente X1v6**:
+- Arreglar Bug 7 + certificar proposal con auto-approval doble (status + exec_status)
+- Verificar planner + memory en cascada final
+- Investigar mat_count=0
+- Crear util_auto_approve workflow
+- Capturar evidence_FINAL.md con 13/13
+
+**Logros acumulados** del dia (B26-B33):
+- 8 bugs descubiertos (7 cerrados + Bug 7 pendiente)
+- 7 migrations aplicadas (042-048)
+- 9+ workflows creados/modificados
+- 5 documentos de evidence generados
+- De 0/13 agentes certificados (Reality Checker B27) a 7/13 (X1v5)
+
+Doc: `docs/e2e_evidence_2026-04-29_x1v5.md`
+
+
+
 ## 2026-04-29 — Bloque 32 (X1v4): pipeline avanza a analysis_done, 3/13 agentes E2E certificados, 2 bugs nuevos
 
 ### Bloque 32 — X1v4: regulatory CERTIFICADO E2E + 2 bugs cascada

@@ -2,6 +2,18 @@
 
 Histórico cronológico de hitos del sistema. Generado a partir de git log.
 
+## 2026-04-29 — Bloque 27: Reality Check + 2 fixes criticos de schema drift
+
+### Bloque 27 — Reality Checker auditoria pipeline E2E + fixes inmediatos
+- **Migration 044 aplicada en Supabase**: prompt v2 de agent_regulatory ahora activo en BD (5509 chars vs ~1500 v1). Hallazgo lateral: tabla agent_prompts no tiene columna updated_at. Documentado en cabecera de la migration para evitar bug futuro.
+- **Reality Checker (subagente)** auditoria del pipeline E2E. Veredicto: NOT PRODUCTION READY. Detecto MISMA CLASE DE BUG que migration 042 silenciosa: schema drift afectando 6+ crons activos.
+- **Migration 045 aplicada**: ALTER TABLE activity_log ADD COLUMN details jsonb + indice GIN. Causa raiz de 6 crons fallando todos los dias (cron_health_check, cron_proposal_response_followup, cron_backup_verify, cron_db_size_check, cron_data_integrity, cron_normativa_freshness). cron_health_check IRONICAMENTE pasaba sus checks pero fallaba al loggear el OK -> ciegos a fallos reales.
+- **cron_pathology_review (tFYGrFmo3zBwirre) arreglado**: query usaba `pf.type`, `pf.cost_min`, `pf.cost_max` pero las columnas reales son `pathology_type`, `estimated_intervention_cost_min`, `estimated_intervention_cost_max`. Aplicado SELECT aliasing para no tocar el JS de Build Email. Verificado con SELECT que devuelve report sin error.
+- `docs/reality_check_2026-04-29.md` con findings completos + pendientes priorizados.
+- **Veredicto post-fixes**: NEEDS WORK. Pendiente E2E real con proyecto stub para certificar los 13 agentes. Pendiente decidir mecanismo anti-drift recurrente (3 incidentes ya: 042, 044, 045).
+
+
+
 ## 2026-04-27 — Bloques 20-25: Onboarding conversacional + studio_profile injection refactor + trade_quote_request templating
 
 ### Bloque 26 (P2) — auditoria Civil Engineer sobre agent_safety_plan + script PDF Document Generator

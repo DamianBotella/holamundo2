@@ -3,22 +3,28 @@
 safety_plan_to_pdf.py — Convierte una fila de safety_plans (Supabase) en PDF firmable.
 
 Generado en B26 con criterio del agente Document Generator de agency-agents-main.
-Reemplaza el paso humano "JSON → Google Doc → exportar PDF → firmar" por un solo comando.
+Reescrito en B26 P4 con reportlab (Python puro, sin libs nativas) tras incidentes
+con weasyprint+Docker en Windows. Reemplaza el paso humano "JSON -> Google Doc ->
+exportar PDF -> firmar" por un solo comando.
 
 Uso:
+    # Modo demo (no requiere Supabase, datos dummy embebidos)
+    python safety_plan_to_pdf.py --demo
+
     # Por safety_plan_id directo
     python safety_plan_to_pdf.py --plan-id 8a3f2b1c-...
 
     # Por project_id (toma el ultimo plan del proyecto)
     python safety_plan_to_pdf.py --project-id 5c230fc9-...
 
-    # Output a fichero concreto (default: ./output/EBSS_<project>_<date>.pdf)
+    # Output a fichero concreto
     python safety_plan_to_pdf.py --plan-id 8a3f2b1c-... --output mi_ebss.pdf
 
 Dependencias:
-    pip install weasyprint psycopg2-binary jinja2 python-dotenv
+    pip install reportlab
+    pip install psycopg2-binary python-dotenv  (solo si NO usas --demo)
 
-Variables de entorno (en .env):
+Variables de entorno (en .env, solo si NO usas --demo):
     SUPABASE_DB_HOST=db.xxx.supabase.co
     SUPABASE_DB_PORT=5432
     SUPABASE_DB_NAME=postgres
@@ -37,231 +43,355 @@ import sys
 from pathlib import Path
 
 try:
-    import psycopg2
-    from psycopg2.extras import RealDictCursor
-    from jinja2 import Template
-    from weasyprint import HTML, CSS
-    from dotenv import load_dotenv
-except ImportError as e:
-    print(f"ERROR: falta dependencia: {e}", file=sys.stderr)
-    print("Instalar con: pip install weasyprint psycopg2-binary jinja2 python-dotenv", file=sys.stderr)
+    from reportlab.lib import colors
+    from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY, TA_LEFT
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.lib.units import cm, mm
+    from reportlab.platypus import (
+        BaseDocTemplate, Frame, KeepTogether, PageBreak, PageTemplate,
+        Paragraph, Spacer, Table, TableStyle,
+    )
+except ImportError:
+    print("ERROR: falta reportlab. Instala con: pip install reportlab", file=sys.stderr)
     sys.exit(1)
 
 
 # ─────────────────────────────────────────────────────────────────
-# Plantilla HTML del EBSS / PSS
+# Estilos
 # ─────────────────────────────────────────────────────────────────
-HTML_TEMPLATE = """<!DOCTYPE html>
-<html lang="es">
-<head>
-<meta charset="UTF-8">
-<title>{{ document_type }} - {{ project.name }}</title>
-</head>
-<body>
+PRIMARY = colors.HexColor("#1a3a5c")
+GRAY_DARK = colors.HexColor("#444444")
+GRAY = colors.HexColor("#666666")
+GRAY_LIGHT = colors.HexColor("#f3f4f6")
+RED = colors.HexColor("#dc2626")
+ORANGE = colors.HexColor("#f59e0b")
+GREEN = colors.HexColor("#16a34a")
 
-<div class="cover">
-  <div class="cover-header">
-    <div class="studio-name">{{ studio.nombre_estudio }}</div>
-    <div class="studio-persona">{{ studio.persona_principal }}</div>
-  </div>
-
-  <h1 class="doc-title">{{ document_type_full }}</h1>
-
-  <div class="cover-info">
-    <div><span class="label">Proyecto:</span> {{ project.name }}</div>
-    <div><span class="label">Direccion:</span> {{ project.location }}</div>
-    <div><span class="label">Promotor / Cliente:</span> {{ project.client_name }}</div>
-    <div><span class="label">Tecnico redactor:</span> {{ studio.persona_principal }}</div>
-    <div><span class="label">Fecha:</span> {{ today }}</div>
-  </div>
-
-  <p class="legal-notice">
-    Documento redactado conforme al Real Decreto 1627/1997 de 24 de octubre,
-    por el que se establecen disposiciones minimas de seguridad y salud en las
-    obras de construccion. {% if document_type == 'EBSS' %}Estudio Basico
-    redactado al no concurrir los supuestos del articulo 4.1 que obligarian a
-    Estudio de Seguridad y Salud completo.{% else %}Estudio de Seguridad y
-    Salud redactado por concurrir al menos uno de los supuestos del articulo
-    4.1.{% endif %}
-  </p>
-</div>
-
-<div class="page-break"></div>
-
-<h2>1. Memoria descriptiva</h2>
-<p>{{ project_summary }}</p>
-
-<h3>1.1 Tipo de obra y emplazamiento</h3>
-<p>Reforma sobre inmueble existente en {{ project.location }}. Superficie aproximada {{ project.area_m2 }} m2.</p>
-
-<h3>1.2 Justificacion del tipo de documento ({{ document_type }})</h3>
-<p>{{ document_type_justification }}</p>
-
-<h3>1.3 Normativa aplicable</h3>
-<ul>
-{% for r in applicable_regulations %}
-  <li>{{ r }}</li>
-{% endfor %}
-</ul>
-
-<div class="page-break"></div>
-
-<h2>2. Identificacion de riesgos por fase</h2>
-{% for phase in phases_with_risks %}
-<div class="phase">
-  <h3>2.{{ loop.index }} {{ phase.phase_name }}</h3>
-  <div class="phase-meta">
-    <span>Orden de ejecucion: {{ phase.phase_order }}</span>
-    <span>Trabajadores simultaneos: {{ phase.workers_simultaneous or '-' }}</span>
-  </div>
-
-  {% for risk in phase.specific_risks %}
-  <div class="risk severity-{{ risk.severity }}">
-    <div class="risk-header">
-      <span class="risk-name">{{ risk.risk }}</span>
-      <span class="risk-tags">
-        Severidad: <b>{{ risk.severity }}</b> ·
-        Probabilidad: <b>{{ risk.probability }}</b>
-      </span>
-    </div>
-
-    {% if risk.code_references %}
-    <div class="risk-codes">
-      <span class="label">Normativa:</span>
-      {{ risk.code_references | join(' · ') }}
-    </div>
-    {% endif %}
-
-    <div class="risk-block">
-      <div class="block-title">Medidas preventivas</div>
-      <ul>{% for m in risk.preventive_measures %}<li>{{ m }}</li>{% endfor %}</ul>
-    </div>
-
-    {% if risk.collective_protections %}
-    <div class="risk-block">
-      <div class="block-title">Protecciones colectivas</div>
-      <ul>{% for p in risk.collective_protections %}<li>{{ p }}</li>{% endfor %}</ul>
-    </div>
-    {% endif %}
-
-    {% if risk.epis_required %}
-    <div class="risk-block">
-      <div class="block-title">EPIs requeridos</div>
-      <ul>{% for e in risk.epis_required %}<li>{{ e }}</li>{% endfor %}</ul>
-    </div>
-    {% endif %}
-  </div>
-  {% endfor %}
-</div>
-{% endfor %}
-
-<div class="page-break"></div>
-
-<h2>3. Protecciones colectivas generales</h2>
-<ul>{% for p in general_collective_protections %}<li>{{ p }}</li>{% endfor %}</ul>
-
-<h2>4. EPIs generales obligatorios</h2>
-<ul>{% for e in general_epis %}<li>{{ e }}</li>{% endfor %}</ul>
-
-<h2>5. Protocolo de emergencia</h2>
-{% if emergency_protocol %}
-<p><b>Telefono emergencias:</b> 112</p>
-<p><b>Centro de salud mas cercano:</b> {{ emergency_protocol.medical_center or 'A determinar in situ' }}</p>
-<p><b>Botiquin obligatorio</b> en obra (RD 486/1997 Anexo VI).</p>
-<p><b>Procedimiento accidente:</b> {{ emergency_protocol.procedure or 'Asistencia inmediata + parte mutua + comunicacion CSS' }}</p>
-{% endif %}
-
-<h2>6. Instalaciones de higiene y bienestar</h2>
-{% if hygiene_facilities %}
-<ul>{% for h in hygiene_facilities %}<li>{{ h }}</li>{% endfor %}</ul>
-{% else %}
-<p>Aseos y vestuarios disponibles en la propia vivienda durante la obra (reforma habitada / vacia).</p>
-{% endif %}
-
-<h2>7. Concurrencia de actividades (art. 24 LPRL + RD 171/2004)</h2>
-{% if simultaneous_activities %}
-<ul>{% for s in simultaneous_activities %}<li>{{ s }}</li>{% endfor %}</ul>
-{% endif %}
-<p>El Coordinador de Seguridad y Salud (CSS) coordinara las actividades concurrentes.</p>
-
-<h2>8. Formacion e informacion</h2>
-<ul>{% for t in training_required %}<li>{{ t }}</li>{% endfor %}</ul>
-
-<h2>9. Vigilancia de la salud</h2>
-<p>{{ medical_surveillance }}</p>
-
-<h2>10. Recomendaciones al arquitecto / promotor</h2>
-<ul>{% for r in recommendations_to_architect %}<li>{{ r }}</li>{% endfor %}</ul>
-
-<div class="page-break"></div>
-
-<h2>11. Firma</h2>
-
-<div class="signature-blocks">
-  <div class="signature-block">
-    <div class="signature-role">Tecnico redactor del {{ document_type }}</div>
-    <div class="signature-line"></div>
-    <div class="signature-name">{{ studio.persona_principal }}</div>
-    <div class="signature-meta">{{ studio.nombre_estudio }} · {{ today }}</div>
-  </div>
-
-  <div class="signature-block">
-    <div class="signature-role">Conformidad del promotor</div>
-    <div class="signature-line"></div>
-    <div class="signature-name">{{ project.client_name }}</div>
-    <div class="signature-meta">Fecha: ____ / ____ / ________</div>
-  </div>
-</div>
-
-</body>
-</html>
-"""
+SEVERITY_COLOR = {"alta": RED, "media": ORANGE, "baja": GREEN}
 
 
-CSS_STYLE = """
-@page { size: A4; margin: 2.5cm 2cm; @bottom-center { content: counter(page) " / " counter(pages); font-size: 9pt; color: #666; } }
-body { font-family: Helvetica, Arial, sans-serif; font-size: 10.5pt; line-height: 1.5; color: #222; }
-h1, h2, h3 { color: #1a3a5c; }
-h1 { font-size: 22pt; margin: 1em 0 0.3em; }
-h2 { font-size: 14pt; border-bottom: 2px solid #1a3a5c; padding-bottom: 4px; margin-top: 1.5em; }
-h3 { font-size: 11pt; margin-top: 1em; }
-.cover { padding: 2cm 0; text-align: center; }
-.cover-header { margin-bottom: 4cm; }
-.studio-name { font-size: 18pt; font-weight: bold; color: #1a3a5c; }
-.studio-persona { font-size: 11pt; color: #666; margin-top: 4px; }
-.doc-title { font-size: 26pt; margin: 2cm 0; color: #1a3a5c; }
-.cover-info { text-align: left; margin: 2cm auto; max-width: 14cm; }
-.cover-info div { margin: 6px 0; }
-.label { font-weight: bold; color: #444; }
-.legal-notice { font-size: 9pt; color: #555; margin-top: 3cm; padding: 12px; border-left: 3px solid #1a3a5c; text-align: justify; }
-.page-break { page-break-after: always; }
-.phase { margin: 1em 0 2em; }
-.phase-meta { font-size: 9pt; color: #666; margin-bottom: 8px; }
-.phase-meta span { margin-right: 16px; }
-.risk { border: 1px solid #ddd; border-radius: 4px; padding: 10px 14px; margin: 8px 0; page-break-inside: avoid; }
-.risk.severity-alta { border-left: 4px solid #dc2626; }
-.risk.severity-media { border-left: 4px solid #f59e0b; }
-.risk.severity-baja { border-left: 4px solid #16a34a; }
-.risk-header { display: flex; justify-content: space-between; margin-bottom: 6px; }
-.risk-name { font-weight: bold; }
-.risk-tags { font-size: 9pt; color: #666; }
-.risk-codes { font-size: 9pt; color: #555; margin: 4px 0 8px; padding: 4px 8px; background: #f3f4f6; border-radius: 3px; }
-.risk-block { margin-top: 6px; }
-.block-title { font-size: 9.5pt; font-weight: bold; color: #444; margin-bottom: 2px; }
-.risk-block ul { margin: 0 0 4px 0; padding-left: 22px; font-size: 9.5pt; }
-ul { margin: 4px 0; padding-left: 22px; }
-li { margin: 2px 0; }
-.signature-blocks { display: flex; gap: 2cm; margin-top: 3cm; }
-.signature-block { flex: 1; }
-.signature-role { font-weight: bold; color: #1a3a5c; margin-bottom: 1.5cm; }
-.signature-line { border-top: 1px solid #222; height: 0; margin-bottom: 8px; }
-.signature-name { font-size: 10pt; }
-.signature-meta { font-size: 9pt; color: #666; margin-top: 4px; }
-"""
+def build_styles() -> dict:
+    base = getSampleStyleSheet()
+    styles = {
+        "h1": ParagraphStyle("h1", parent=base["Heading1"], fontSize=22, leading=26,
+                              textColor=PRIMARY, spaceBefore=12, spaceAfter=8),
+        "h2": ParagraphStyle("h2", parent=base["Heading2"], fontSize=14, leading=18,
+                              textColor=PRIMARY, spaceBefore=18, spaceAfter=10,
+                              borderPadding=4),
+        "h3": ParagraphStyle("h3", parent=base["Heading3"], fontSize=11, leading=14,
+                              textColor=PRIMARY, spaceBefore=12, spaceAfter=6),
+        "body": ParagraphStyle("body", parent=base["BodyText"], fontSize=10.5, leading=14,
+                                textColor=GRAY_DARK, alignment=TA_JUSTIFY,
+                                spaceBefore=4, spaceAfter=4),
+        "bullet": ParagraphStyle("bullet", parent=base["BodyText"], fontSize=10, leading=13,
+                                  textColor=GRAY_DARK, alignment=TA_LEFT,
+                                  leftIndent=14, bulletIndent=4,
+                                  spaceBefore=2, spaceAfter=2),
+        "caption": ParagraphStyle("caption", parent=base["BodyText"], fontSize=9, leading=11,
+                                   textColor=GRAY, alignment=TA_LEFT),
+        "cover_studio": ParagraphStyle("cover_studio", parent=base["Title"], fontSize=18,
+                                        leading=22, alignment=TA_CENTER,
+                                        textColor=PRIMARY, spaceAfter=4),
+        "cover_persona": ParagraphStyle("cover_persona", parent=base["BodyText"], fontSize=11,
+                                         leading=14, alignment=TA_CENTER,
+                                         textColor=GRAY, spaceAfter=80),
+        "cover_title": ParagraphStyle("cover_title", parent=base["Title"], fontSize=26,
+                                       leading=32, alignment=TA_CENTER,
+                                       textColor=PRIMARY, spaceAfter=40),
+        "legal": ParagraphStyle("legal", parent=base["BodyText"], fontSize=9, leading=12,
+                                 textColor=GRAY, alignment=TA_JUSTIFY,
+                                 leftIndent=12, rightIndent=12, borderPadding=12),
+        "risk_name": ParagraphStyle("risk_name", parent=base["BodyText"], fontSize=10.5,
+                                     leading=13, fontName="Helvetica-Bold",
+                                     textColor=GRAY_DARK),
+        "risk_meta": ParagraphStyle("risk_meta", parent=base["BodyText"], fontSize=9,
+                                     leading=11, textColor=GRAY, alignment=TA_LEFT),
+        "block_title": ParagraphStyle("block_title", parent=base["BodyText"], fontSize=9.5,
+                                       leading=12, fontName="Helvetica-Bold",
+                                       textColor=GRAY_DARK, spaceBefore=4, spaceAfter=2),
+        "small_bullet": ParagraphStyle("small_bullet", parent=base["BodyText"], fontSize=9.5,
+                                        leading=12, textColor=GRAY_DARK,
+                                        leftIndent=12, bulletIndent=2,
+                                        spaceBefore=1, spaceAfter=1),
+    }
+    return styles
 
 
-def fetch_safety_plan(conn, plan_id: str | None, project_id: str | None) -> dict:
-    """Lee la fila objetivo de safety_plans + datos relacionados de projects/clients/studio_profile."""
+def _bullets(items, style):
+    return [Paragraph(f"• {item}", style) for item in items]
+
+
+def _on_page(canvas, doc):
+    canvas.saveState()
+    canvas.setFont("Helvetica", 9)
+    canvas.setFillColor(GRAY)
+    canvas.drawCentredString(A4[0] / 2.0, 1 * cm, f"{doc.page}")
+    canvas.restoreState()
+
+
+def render_pdf(row: dict, output_path: Path) -> None:
+    content = row["content_json"]
+    if isinstance(content, str):
+        content = json.loads(content)
+
+    studio = row.get("studio") or {}
+    if isinstance(studio, str):
+        studio = json.loads(studio)
+    identity = studio.get("identity") or {}
+
+    document_type = (row.get("document_type") or content.get("document_type") or "EBSS").upper()
+    document_type_full = (
+        "Estudio Básico de Seguridad y Salud (EBSS)"
+        if document_type == "EBSS"
+        else "Estudio de Seguridad y Salud (ESS)"
+    )
+
+    studio_name = os.getenv("STUDIO_NAME") or identity.get("nombre_estudio") or "Estudio"
+    persona = os.getenv("STUDIO_PERSONA") or identity.get("persona_principal") or "Técnico redactor"
+    project_name = row.get("project_name") or "Proyecto"
+    location = row.get("location") or "Dirección no especificada"
+    client_name = row.get("client_name") or "Promotor"
+    area_m2 = row.get("property_area_m2") or "-"
+    today = dt.date.today().strftime("%d/%m/%Y")
+
+    s = build_styles()
+
+    doc = BaseDocTemplate(
+        str(output_path),
+        pagesize=A4,
+        leftMargin=2 * cm, rightMargin=2 * cm,
+        topMargin=2.5 * cm, bottomMargin=2.5 * cm,
+        title=f"{document_type} {project_name}",
+        author=studio_name,
+    )
+    frame = Frame(doc.leftMargin, doc.bottomMargin,
+                  doc.width, doc.height, id="main")
+    doc.addPageTemplates([PageTemplate(id="default", frames=[frame], onPage=_on_page)])
+
+    story = []
+
+    # ─── PORTADA ───
+    story.append(Spacer(1, 2 * cm))
+    story.append(Paragraph(studio_name, s["cover_studio"]))
+    story.append(Paragraph(persona, s["cover_persona"]))
+    story.append(Paragraph(document_type_full, s["cover_title"]))
+
+    cover_data = [
+        ["Proyecto:", project_name],
+        ["Dirección:", location],
+        ["Promotor / Cliente:", client_name],
+        ["Superficie:", f"{area_m2} m²"],
+        ["Técnico redactor:", persona],
+        ["Fecha:", today],
+    ]
+    cover_tbl = Table(cover_data, colWidths=[4.5 * cm, 11 * cm])
+    cover_tbl.setStyle(TableStyle([
+        ("FONT", (0, 0), (0, -1), "Helvetica-Bold", 10.5),
+        ("FONT", (1, 0), (1, -1), "Helvetica", 10.5),
+        ("TEXTCOLOR", (0, 0), (0, -1), GRAY_DARK),
+        ("TEXTCOLOR", (1, 0), (1, -1), GRAY_DARK),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+    ]))
+    story.append(cover_tbl)
+    story.append(Spacer(1, 2 * cm))
+
+    legal = (
+        "Documento redactado conforme al Real Decreto 1627/1997 de 24 de octubre, "
+        "por el que se establecen disposiciones mínimas de seguridad y salud en las "
+        "obras de construcción. "
+    )
+    if document_type == "EBSS":
+        legal += ("Estudio Básico redactado al no concurrir los supuestos del artículo 4.1 "
+                  "que obligarían a Estudio de Seguridad y Salud completo.")
+    else:
+        legal += ("Estudio de Seguridad y Salud redactado por concurrir al menos uno de "
+                  "los supuestos del artículo 4.1.")
+
+    story.append(Paragraph(legal, s["legal"]))
+    story.append(PageBreak())
+
+    # ─── 1. MEMORIA ───
+    story.append(Paragraph("1. Memoria descriptiva", s["h2"]))
+    story.append(Paragraph(content.get("project_summary", ""), s["body"]))
+
+    story.append(Paragraph("1.1 Tipo de obra y emplazamiento", s["h3"]))
+    story.append(Paragraph(
+        f"Reforma sobre inmueble existente en {location}. Superficie aproximada {area_m2} m².",
+        s["body"]))
+
+    story.append(Paragraph(f"1.2 Justificación del tipo de documento ({document_type})", s["h3"]))
+    story.append(Paragraph(content.get("document_type_justification", ""), s["body"]))
+
+    story.append(Paragraph("1.3 Normativa aplicable", s["h3"]))
+    story.extend(_bullets(content.get("applicable_regulations", []), s["bullet"]))
+    story.append(PageBreak())
+
+    # ─── 2. RIESGOS POR FASE ───
+    story.append(Paragraph("2. Identificación de riesgos por fase", s["h2"]))
+
+    for i, phase in enumerate(content.get("phases_with_risks", []), start=1):
+        phase_block = []
+        phase_block.append(Paragraph(f"2.{i} {phase.get('phase_name', 'Fase')}", s["h3"]))
+        phase_meta = (
+            f"Orden: {phase.get('phase_order', '-')} · "
+            f"Trabajadores simultáneos: {phase.get('workers_simultaneous', '-')}"
+        )
+        phase_block.append(Paragraph(phase_meta, s["caption"]))
+        phase_block.append(Spacer(1, 4))
+
+        for risk in phase.get("specific_risks", []):
+            severity = (risk.get("severity") or "media").lower()
+            sev_color = SEVERITY_COLOR.get(severity, ORANGE)
+
+            risk_rows = []
+            header = (
+                f"<b>{risk.get('risk', '')}</b>  "
+                f"<font size=8 color='#666666'>· Severidad: <b>{severity}</b> "
+                f"· Probabilidad: <b>{risk.get('probability', '-')}</b></font>"
+            )
+            risk_rows.append([Paragraph(header, s["risk_name"])])
+
+            if risk.get("code_references"):
+                refs = " · ".join(risk["code_references"])
+                risk_rows.append([Paragraph(
+                    f"<font size=9 color='#555555'><b>Normativa:</b> {refs}</font>",
+                    s["risk_meta"])])
+
+            if risk.get("preventive_measures"):
+                risk_rows.append([Paragraph("Medidas preventivas:", s["block_title"])])
+                for m in risk["preventive_measures"]:
+                    risk_rows.append([Paragraph(f"• {m}", s["small_bullet"])])
+
+            if risk.get("collective_protections"):
+                risk_rows.append([Paragraph("Protecciones colectivas:", s["block_title"])])
+                for p in risk["collective_protections"]:
+                    risk_rows.append([Paragraph(f"• {p}", s["small_bullet"])])
+
+            if risk.get("epis_required"):
+                risk_rows.append([Paragraph("EPIs requeridos:", s["block_title"])])
+                for e in risk["epis_required"]:
+                    risk_rows.append([Paragraph(f"• {e}", s["small_bullet"])])
+
+            risk_tbl = Table(risk_rows, colWidths=[doc.width - 0.5 * cm])
+            risk_tbl.setStyle(TableStyle([
+                ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#dddddd")),
+                ("LINEBEFORE", (0, 0), (0, -1), 3, sev_color),
+                ("BACKGROUND", (0, 0), (0, 0), colors.HexColor("#fafafa")),
+                ("LEFTPADDING", (0, 0), (-1, -1), 12),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ]))
+            phase_block.append(risk_tbl)
+            phase_block.append(Spacer(1, 6))
+
+        # Mantener cada fase junta si cabe
+        story.append(KeepTogether(phase_block))
+        story.append(Spacer(1, 8))
+
+    story.append(PageBreak())
+
+    # ─── 3-10. SECCIONES SIMPLES ───
+    simple_sections = [
+        ("3. Protecciones colectivas generales", content.get("general_collective_protections", []), True),
+        ("4. EPIs generales obligatorios", content.get("general_epis", []), True),
+    ]
+    for title, items, is_list in simple_sections:
+        story.append(Paragraph(title, s["h2"]))
+        if items:
+            story.extend(_bullets(items, s["bullet"]))
+        else:
+            story.append(Paragraph("(no especificado)", s["caption"]))
+
+    # 5. Protocolo de emergencia
+    ep = content.get("emergency_protocol") or {}
+    story.append(Paragraph("5. Protocolo de emergencia", s["h2"]))
+    story.append(Paragraph("<b>Teléfono emergencias:</b> 112", s["body"]))
+    story.append(Paragraph(
+        f"<b>Centro de salud más cercano:</b> {ep.get('medical_center', 'A determinar in situ')}",
+        s["body"]))
+    story.append(Paragraph("<b>Botiquín obligatorio</b> en obra (RD 486/1997 Anexo VI).", s["body"]))
+    story.append(Paragraph(
+        f"<b>Procedimiento accidente:</b> {ep.get('procedure', 'Asistencia inmediata + parte mutua + comunicación CSS')}",
+        s["body"]))
+
+    # 6-10
+    other_sections = [
+        ("6. Instalaciones de higiene y bienestar",
+         content.get("hygiene_facilities") or
+         ["Aseos y vestuarios disponibles en la propia vivienda durante la obra."]),
+        ("7. Concurrencia de actividades (art. 24 LPRL + RD 171/2004)",
+         content.get("simultaneous_activities", []) +
+         ["El Coordinador de Seguridad y Salud (CSS) coordinará las actividades concurrentes."]),
+        ("8. Formación e información", content.get("training_required", [])),
+    ]
+    for title, items in other_sections:
+        story.append(Paragraph(title, s["h2"]))
+        if items:
+            story.extend(_bullets(items, s["bullet"]))
+        else:
+            story.append(Paragraph("(no especificado)", s["caption"]))
+
+    # 9. Vigilancia salud
+    story.append(Paragraph("9. Vigilancia de la salud", s["h2"]))
+    story.append(Paragraph(
+        content.get("medical_surveillance") or "Reconocimiento previo + periódicos según riesgos.",
+        s["body"]))
+
+    # 10. Recomendaciones
+    story.append(Paragraph("10. Recomendaciones al arquitecto / promotor", s["h2"]))
+    story.extend(_bullets(content.get("recommendations_to_architect", []), s["bullet"]))
+
+    story.append(PageBreak())
+
+    # ─── 11. FIRMAS ───
+    story.append(Paragraph("11. Firma", s["h2"]))
+    story.append(Spacer(1, 1 * cm))
+
+    sig_data = [
+        [Paragraph("<b>Técnico redactor del " + document_type + "</b>", s["risk_name"]),
+         Paragraph("<b>Conformidad del promotor</b>", s["risk_name"])],
+        [Spacer(1, 2 * cm), Spacer(1, 2 * cm)],
+        [Paragraph("___________________________", s["body"]),
+         Paragraph("___________________________", s["body"])],
+        [Paragraph(persona, s["body"]),
+         Paragraph(client_name, s["body"])],
+        [Paragraph(f"<font size=9 color='#666666'>{studio_name} · {today}</font>", s["caption"]),
+         Paragraph("<font size=9 color='#666666'>Fecha: ____ / ____ / ________</font>", s["caption"])],
+    ]
+    sig_tbl = Table(sig_data, colWidths=[(doc.width - 1 * cm) / 2, (doc.width - 1 * cm) / 2])
+    sig_tbl.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 12),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 12),
+        ("TOPPADDING", (0, 0), (-1, -1), 8),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+    ]))
+    story.append(sig_tbl)
+
+    doc.build(story)
+
+
+def fetch_safety_plan(plan_id, project_id):
+    try:
+        import psycopg2
+        from psycopg2.extras import RealDictCursor
+        from dotenv import load_dotenv
+    except ImportError:
+        print("ERROR: para usar contra Supabase instala: pip install psycopg2-binary python-dotenv",
+              file=sys.stderr)
+        sys.exit(1)
+
+    load_dotenv()
+    conn = psycopg2.connect(
+        host=os.environ["SUPABASE_DB_HOST"],
+        port=os.getenv("SUPABASE_DB_PORT", "5432"),
+        dbname=os.environ["SUPABASE_DB_NAME"],
+        user=os.environ["SUPABASE_DB_USER"],
+        password=os.environ["SUPABASE_DB_PASSWORD"],
+    )
     where = "sp.id = %s::uuid" if plan_id else "sp.project_id = %s::uuid"
     target_id = plan_id or project_id
 
@@ -285,61 +415,15 @@ def fetch_safety_plan(conn, plan_id: str | None, project_id: str | None) -> dict
         ORDER BY sp.created_at DESC
         LIMIT 1;
     """
-    with conn.cursor(cursor_factory=RealDictCursor) as cur:
-        cur.execute(sql, (target_id,))
-        row = cur.fetchone()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(sql, (target_id,))
+            row = cur.fetchone()
+    finally:
+        conn.close()
     if not row:
-        raise SystemExit(f"No se encontro safety_plan para {target_id}")
+        raise SystemExit(f"No se encontró safety_plan para {target_id}")
     return dict(row)
-
-
-def render_pdf(row: dict, output_path: Path) -> None:
-    content = row["content_json"]
-    if isinstance(content, str):
-        content = json.loads(content)
-
-    studio = row.get("studio") or {}
-    if isinstance(studio, str):
-        studio = json.loads(studio)
-    identity = studio.get("identity") or {}
-
-    document_type = (row.get("document_type") or content.get("document_type") or "EBSS").upper()
-    document_type_full = (
-        "Estudio Basico de Seguridad y Salud (EBSS)"
-        if document_type == "EBSS"
-        else "Estudio de Seguridad y Salud (ESS)"
-    )
-
-    ctx = {
-        "document_type": document_type,
-        "document_type_full": document_type_full,
-        "document_type_justification": content.get("document_type_justification", ""),
-        "project_summary": content.get("project_summary", ""),
-        "applicable_regulations": content.get("applicable_regulations", ["RD 1627/1997", "Ley 31/1995"]),
-        "phases_with_risks": content.get("phases_with_risks", []),
-        "general_collective_protections": content.get("general_collective_protections", []),
-        "general_epis": content.get("general_epis", []),
-        "emergency_protocol": content.get("emergency_protocol", {}),
-        "hygiene_facilities": content.get("hygiene_facilities", []),
-        "simultaneous_activities": content.get("simultaneous_activities", []),
-        "training_required": content.get("training_required", []),
-        "medical_surveillance": content.get("medical_surveillance", "Reconocimiento previo + periodicos segun riesgos."),
-        "recommendations_to_architect": content.get("recommendations_to_architect", []),
-        "project": {
-            "name": row.get("project_name") or "Proyecto",
-            "location": row.get("location") or "Direccion no especificada",
-            "client_name": row.get("client_name") or "Promotor",
-            "area_m2": row.get("property_area_m2") or "-",
-        },
-        "studio": {
-            "nombre_estudio": os.getenv("STUDIO_NAME") or identity.get("nombre_estudio") or "Estudio",
-            "persona_principal": os.getenv("STUDIO_PERSONA") or identity.get("persona_principal") or "Tecnico redactor",
-        },
-        "today": dt.date.today().strftime("%d/%m/%Y"),
-    }
-
-    html_str = Template(HTML_TEMPLATE).render(**ctx)
-    HTML(string=html_str).write_pdf(str(output_path), stylesheets=[CSS(string=CSS_STYLE)])
 
 
 DEMO_ROW = {
@@ -358,77 +442,77 @@ DEMO_ROW = {
     "content_json": {
         "document_type": "EBSS",
         "document_type_justification": (
-            "Presupuesto de ejecucion material estimado < 450.000 EUR, duracion < 30 dias laborables, "
-            "menos de 20 trabajadores simultaneos. No concurren los supuestos del articulo 4.1 "
-            "del RD 1627/1997 que obligarian a redactar Estudio de Seguridad y Salud completo."
+            "Presupuesto de ejecución material estimado < 450.000 €, duración < 30 días laborables, "
+            "menos de 20 trabajadores simultáneos. No concurren los supuestos del artículo 4.1 "
+            "del RD 1627/1997 que obligarían a redactar Estudio de Seguridad y Salud completo."
         ),
         "project_summary": (
-            "Reforma integral de vivienda de 72 m2 en planta 4 con ascensor. Apertura cocina-salon "
-            "(muro no portante), conversion banera-ducha, renovacion pavimentos y pintura en 2 dormitorios. "
-            "Cambio de instalacion de calefaccion a suelo radiante. No hay afectacion estructural mayor."
+            "Reforma integral de vivienda de 72 m² en planta 4 con ascensor. Apertura cocina-salón "
+            "(muro no portante), conversión bañera-ducha, renovación pavimentos y pintura en 2 dormitorios. "
+            "Cambio de instalación de calefacción a suelo radiante. No hay afectación estructural mayor."
         ),
         "applicable_regulations": [
-            "RD 1627/1997 (Seguridad y salud en obras de construccion)",
-            "Ley 31/1995 (Prevencion de Riesgos Laborales)",
-            "RD 171/2004 (Coordinacion actividades empresariales)",
+            "RD 1627/1997 (Seguridad y salud en obras de construcción)",
+            "Ley 31/1995 (Prevención de Riesgos Laborales)",
+            "RD 171/2004 (Coordinación actividades empresariales)",
             "RD 486/1997 (Lugares de trabajo)",
-            "RD 773/1997 (Equipos de proteccion individual)",
+            "RD 773/1997 (Equipos de protección individual)",
             "REBT (RD 842/2002)",
             "RITE (RD 1027/2007)",
         ],
         "phases_with_risks": [
             {
-                "phase_name": "Demolicion parcial (tabique cocina-salon)",
+                "phase_name": "Demolición parcial (tabique cocina-salón)",
                 "phase_order": 1,
                 "workers_simultaneous": 2,
                 "specific_risks": [
                     {
-                        "risk": "Caida a distinto nivel",
+                        "risk": "Caída a distinto nivel",
                         "severity": "alta",
                         "probability": "baja",
                         "code_references": ["RD 1627/1997 Anexo IV.A", "UNE-EN 363", "UNE-EN 397"],
                         "preventive_measures": [
-                            "Acordonado de zona de demolicion",
-                            "Verificacion previa estado del forjado",
-                            "Demolicion progresiva sin sobrecargar zonas perimetrales",
+                            "Acordonado de zona de demolición",
+                            "Verificación previa estado del forjado",
+                            "Demolición progresiva sin sobrecargar zonas perimetrales",
                         ],
                         "collective_protections": ["Barandillas perimetrales en huecos > 2m"],
                         "epis_required": ["Casco UNE-EN 397", "Calzado S3", "Gafas UNE-EN 166", "Guantes anticorte"],
                     },
                     {
-                        "risk": "Inhalacion de polvo (silice / posible amianto si edificio pre-2002)",
+                        "risk": "Inhalación de polvo (sílice / posible amianto si edificio pre-2002)",
                         "severity": "alta",
                         "probability": "media",
-                        "code_references": ["RD 396/2006 (amianto)", "RD 374/2001 (agentes quimicos)"],
+                        "code_references": ["RD 396/2006 (amianto)", "RD 374/2001 (agentes químicos)"],
                         "preventive_measures": [
-                            "Inspeccion previa del inmueble por riesgo amianto",
+                            "Inspección previa del inmueble por riesgo amianto",
                             "Si sospecha de amianto: DETENER y contratar empresa RERA autorizada",
-                            "Humidificar escombros para reducir polvo",
-                            "Sellado de zona y ventilacion forzada al exterior",
+                            "Humedecer escombros para reducir polvo",
+                            "Sellado de zona y ventilación forzada al exterior",
                         ],
-                        "collective_protections": ["Plasticos de sellado en accesos a zona en obra"],
-                        "epis_required": ["Mascarilla FFP3", "Gafas estancas", "Mono desechable categoria III"],
+                        "collective_protections": ["Plásticos de sellado en accesos a zona en obra"],
+                        "epis_required": ["Mascarilla FFP3", "Gafas estancas", "Mono desechable categoría III"],
                     },
                 ],
             },
             {
-                "phase_name": "Instalacion electrica (REBT)",
+                "phase_name": "Instalación eléctrica (REBT)",
                 "phase_order": 2,
                 "workers_simultaneous": 1,
                 "specific_risks": [
                     {
-                        "risk": "Contactos electricos directos / indirectos",
+                        "risk": "Contactos eléctricos directos / indirectos",
                         "severity": "alta",
                         "probability": "media",
                         "code_references": ["REBT (RD 842/2002)", "ITC-BT-24"],
                         "preventive_measures": [
                             "Desconectar y bloquear cuadro general antes de manipular",
-                            "Comprobar ausencia de tension con polimetro antes de tocar",
+                            "Comprobar ausencia de tensión con polímetro antes de tocar",
                             "Solo personal cualificado IBTE para instalaciones",
-                            "Boletin certificado por instalador autorizado al finalizar",
+                            "Boletín certificado por instalador autorizado al finalizar",
                         ],
-                        "collective_protections": ["Senalizacion de cuadro en mantenimiento"],
-                        "epis_required": ["Guantes dielectricos BT", "Calzado dielectrico", "Casco dielectrico"],
+                        "collective_protections": ["Señalización de cuadro en mantenimiento"],
+                        "epis_required": ["Guantes dieléctricos BT", "Calzado dieléctrico", "Casco dieléctrico"],
                     },
                 ],
             },
@@ -438,68 +522,68 @@ DEMO_ROW = {
                 "workers_simultaneous": 2,
                 "specific_risks": [
                     {
-                        "risk": "Cortes con radial / inhalacion polvo ceramica",
+                        "risk": "Cortes con radial / inhalación polvo cerámica",
                         "severity": "media",
                         "probability": "alta",
                         "code_references": ["RD 1311/2005 (vibraciones)", "RD 286/2006 (ruido)"],
                         "preventive_measures": [
-                            "Corte de piezas en zona ventilada o con aspiracion",
+                            "Corte de piezas en zona ventilada o con aspiración",
                             "Uso de radial con disco diamante refrigerado por agua",
-                            "Pausas activas para reducir exposicion a vibraciones",
+                            "Pausas activas para reducir exposición a vibraciones",
                         ],
-                        "collective_protections": ["Aspiracion localizada en zona de corte"],
+                        "collective_protections": ["Aspiración localizada en zona de corte"],
                         "epis_required": ["Mascarilla FFP1", "Gafas integrales", "Protector facial radial", "Rodilleras"],
                     },
                 ],
             },
         ],
         "general_collective_protections": [
-            "Senalizacion de obra en acceso vivienda y portal",
-            "Plasticos protectores en pavimentos no afectados",
-            "Iluminacion provisional minima 200 lux en zonas de trabajo",
-            "Botiquin de primeros auxilios visible y senalizado",
+            "Señalización de obra en acceso vivienda y portal",
+            "Plásticos protectores en pavimentos no afectados",
+            "Iluminación provisional mínima 200 lux en zonas de trabajo",
+            "Botiquín de primeros auxilios visible y señalizado",
         ],
         "general_epis": [
             "Casco UNE-EN 397 (obligatorio en todas las fases)",
             "Calzado de seguridad S3",
             "Ropa de trabajo de alta visibilidad",
-            "Gafas de proteccion UNE-EN 166",
-            "Guantes (anticorte, dielectricos o quimicos segun fase)",
+            "Gafas de protección UNE-EN 166",
+            "Guantes (anticorte, dieléctricos o químicos según fase)",
         ],
         "emergency_protocol": {
             "medical_center": "Centro de Salud Embajadores - C/ Mesón de Paredes 39 - 91 528 88 81",
             "procedure": (
                 "1) Asistencia inmediata al accidentado. 2) Llamada al 112 si gravedad. "
-                "3) Parte a mutua patronal. 4) Comunicacion al Coordinador de Seguridad y Salud "
-                "para investigacion + acciones correctoras. 5) Notificacion al promotor."
+                "3) Parte a mutua patronal. 4) Comunicación al Coordinador de Seguridad y Salud "
+                "para investigación + acciones correctoras. 5) Notificación al promotor."
             ),
         },
         "hygiene_facilities": [
-            "Aseos disponibles en la propia vivienda durante la obra (vivienda vacia)",
-            "Vestuario improvisado en habitacion no afectada",
+            "Aseos disponibles en la propia vivienda durante la obra (vivienda vacía)",
+            "Vestuario improvisado en habitación no afectada",
             "Agua potable en cocina (preservar suministro durante obra)",
         ],
         "simultaneous_activities": [
-            "Electricidad y fontaneria simultaneas: coordinar para no inutilizar circuitos en uso",
-            "Solado y carpinteria: proteger pavimentos terminados con plasticos",
-            "Pintura: ultima fase, requiere terminacion del resto de gremios",
+            "Electricidad y fontanería simultáneas: coordinar para no inutilizar circuitos en uso",
+            "Solado y carpintería: proteger pavimentos terminados con plásticos",
+            "Pintura: última fase, requiere terminación del resto de gremios",
         ],
         "training_required": [
             "Charla de acogida al iniciar obra (10 min) firmada por todos los trabajadores",
-            "Formacion especifica electricistas: IBTE actualizada",
-            "Formacion en trabajos en altura (>2m): superada en empresa contratista",
+            "Formación específica electricistas: IBTE actualizada",
+            "Formación en trabajos en altura (>2m): superada en empresa contratista",
         ],
         "medical_surveillance": (
-            "Reconocimiento medico previo segun riesgo (electricista alta tension, expuestos polvo). "
-            "Reconocimientos periodicos en mutua patronal de cada empresa contratista. "
-            "Vigilancia especifica si exposicion a amianto (RD 396/2006)."
+            "Reconocimiento médico previo según riesgo (electricista alta tensión, expuestos polvo). "
+            "Reconocimientos periódicos en mutua patronal de cada empresa contratista. "
+            "Vigilancia específica si exposición a amianto (RD 396/2006)."
         ),
         "recommendations_to_architect": [
-            "Verificar antes del inicio de obra que todas las empresas contratistas tienen RC profesional vigente y al dia con SS",
-            "Designar Coordinador de Seguridad y Salud (CSS) por escrito antes del inicio. Habitualmente lo asume el arquitecto tecnico DEO.",
-            "Si la inspeccion previa detecta posibilidad de amianto en bajantes o cubierta, DETENER la obra y contratar empresa RERA autorizada antes de continuar.",
+            "Verificar antes del inicio de obra que todas las empresas contratistas tienen RC profesional vigente y al día con SS",
+            "Designar Coordinador de Seguridad y Salud (CSS) por escrito antes del inicio. Habitualmente lo asume el arquitecto técnico DEO.",
+            "Si la inspección previa detecta posibilidad de amianto en bajantes o cubierta, DETENER la obra y contratar empresa RERA autorizada antes de continuar.",
             "Comunicar a la comunidad de propietarios fechas de obra y horarios permitidos para evitar conflictos.",
-            "Solicitar a cada gremio el Plan de Seguridad y Salud especifico de sus tareas, basado en este EBSS.",
+            "Solicitar a cada gremio el Plan de Seguridad y Salud específico de sus tareas, basado en este EBSS.",
         ],
     },
 }
@@ -509,34 +593,19 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Genera PDF firmable de un safety_plan")
     g = parser.add_mutually_exclusive_group(required=True)
     g.add_argument("--plan-id", help="UUID de la fila safety_plans")
-    g.add_argument("--project-id", help="UUID del proyecto (toma el ultimo plan)")
+    g.add_argument("--project-id", help="UUID del proyecto (toma el último plan)")
     g.add_argument("--demo", action="store_true", help="Modo demo: usa datos dummy embebidos (no toca Supabase)")
     parser.add_argument("--output", help="Ruta del PDF de salida")
     args = parser.parse_args()
 
-    load_dotenv()
-
-    if args.demo:
-        row = DEMO_ROW
-    else:
-        conn = psycopg2.connect(
-            host=os.environ["SUPABASE_DB_HOST"],
-            port=os.getenv("SUPABASE_DB_PORT", "5432"),
-            dbname=os.environ["SUPABASE_DB_NAME"],
-            user=os.environ["SUPABASE_DB_USER"],
-            password=os.environ["SUPABASE_DB_PASSWORD"],
-        )
-        try:
-            row = fetch_safety_plan(conn, args.plan_id, args.project_id)
-        finally:
-            conn.close()
+    row = DEMO_ROW if args.demo else fetch_safety_plan(args.plan_id, args.project_id)
 
     if args.output:
         out = Path(args.output)
     else:
         out_dir = Path("output")
         out_dir.mkdir(exist_ok=True)
-        slug = (row.get("project_name") or "proyecto").replace(" ", "_")[:40]
+        slug = (row.get("project_name") or "proyecto").replace(" ", "_").replace("(", "").replace(")", "")[:40]
         date = dt.date.today().isoformat()
         out = out_dir / f"{row.get('document_type','EBSS').upper()}_{slug}_{date}.pdf"
 

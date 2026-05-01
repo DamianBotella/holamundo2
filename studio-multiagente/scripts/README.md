@@ -4,7 +4,46 @@ Scripts Python que se ejecutan localmente o en CI, complementando los workflows
 n8n. Útiles cuando lo deseado no es trivial o no es posible en n8n
 (generación de PDFs nativos, procesamiento batch, exports).
 
-## Contenido
+## Catálogo
+
+| Script | Propósito | Cuándo usar |
+|---|---|---|
+| `check_migration_drift.py` | Detecta migrations en repo no aplicadas en BD (o viceversa). | Inicio de cada sesión de trabajo. |
+| `safety_plan_to_pdf.py` | Genera EBSS/PSS PDF desde una fila de `safety_plans`. | Cuando un proyecto necesita el plan de seguridad firmable. |
+| `snapshot_workflows.py` | Exporta workflows de producción n8n al repo (anti-drift PA-6). | Semanal vía cron o manual. **Requiere `pip install requests`.** |
+| `apply_x3_migrations.py` | Aplica migrations multi-tenant + RLS con verificación guiada. | Sesión X3 cuando todo lo demás esté listo. **Requiere `pip install psycopg[binary]`.** |
+
+## Workflow típico de sesión
+
+```bash
+# 1. Verificar drift cero al empezar
+python scripts/check_migration_drift.py --check
+
+# 2. Hacer el trabajo de la sesión...
+
+# 3. Si se modificaron workflows en producción, snapshear
+python scripts/snapshot_workflows.py --critical
+
+# 4. Si se aplicó migration nueva, registrarla en applied_migrations
+#    (o usar apply_x3_migrations.py para flujos guiados).
+
+# 5. Cerrar sesión con drift cero confirmado
+python scripts/check_migration_drift.py --check
+```
+
+## Cron sugerido (post-X4)
+
+```cron
+# Snapshot semanal de workflows críticos
+0 3 * * 1 cd /path/to/repo && python studio-multiagente/scripts/snapshot_workflows.py --critical >> /var/log/arquitai-snapshot.log 2>&1
+
+# Drift check diario
+0 6 * * * cd /path/to/repo && python studio-multiagente/scripts/check_migration_drift.py --check
+```
+
+---
+
+## Detalles por script
 
 ### `safety_plan_to_pdf.py`
 

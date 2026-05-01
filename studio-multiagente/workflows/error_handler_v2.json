@@ -1,0 +1,171 @@
+{
+  "name": "error_handler_v2",
+  "_description": "Error handler refactorizado para usar details jsonb (migration 045) + tenant_id (post-X3). Reemplaza error_handler v1.",
+  "_status": "DRAFT - importar tras 045 (details column) aplicada. Referenciar como errorWorkflow en main_orchestrator + agentes despues.",
+  "_changelog": [
+    "v2 (B42): usa details jsonb para meta-info estructurada en lugar de output_summary plano.",
+    "v2 (B42): resuelve tenant_id desde project_id antes de log (post-X3 necesario).",
+    "v2 (B42): mejor categorizacion (anade 'rls_violation', 'tenant_missing').",
+    "v2 (B42): exposicion explicita de payload del error en details para debugging.",
+    "v2 (B42): Sentry integration via HTTP Request opcional."
+  ],
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [240, 300],
+      "id": "ehv2-001",
+      "name": "On Workflow Error"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const error = $input.first().json;\n\n// === Meta del workflow + execution ===\nconst workflowName = error.workflow?.name      || 'unknown_workflow';\nconst workflowId   = error.workflow?.id        || null;\nconst executionId  = error.execution?.id       || 'unknown_execution';\nconst errorNode    = error.execution?.lastNodeExecuted || 'unknown_node';\nconst timestamp    = new Date().toISOString();\nconst errorObj     = error.execution?.error || error.error || {};\nconst errorMessage = errorObj.message || 'Error desconocido';\nconst errorStack   = errorObj.stack   || null;\nconst errorName    = errorObj.name    || 'Error';\n\n// === Resolver project_id desde el runData ===\nlet projectId = null;\nlet projectIdSource = null;\ntry {\n  const execData = error.execution?.data?.resultData?.runData;\n  if (execData) {\n    for (const nodeName of Object.keys(execData)) {\n      const nodeRuns = execData[nodeName];\n      if (!nodeRuns?.[0]?.data?.main?.[0]?.[0]?.json) continue;\n      const j = nodeRuns[0].data.main[0][0].json;\n      const candidates = [j.project_id, j.body?.project_id, j.params?.id];\n      for (const c of candidates) {\n        if (typeof c === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(c)) {\n          projectId = c;\n          projectIdSource = nodeName;\n          break;\n        }\n      }\n      if (projectId) break;\n    }\n  }\n} catch(e) {}\n\n// === Categorizacion ampliada ===\nconst em = errorMessage.toLowerCase();\nlet category = 'unknown';\nif (em.match(/(timeout|etimedout|socket hang up|econnreset|enetunreach)/)) category = 'network';\nelse if (em.match(/(row.level.security|rls|policy.*violates|new row violates row.level security)/)) category = 'rls_violation';\nelse if (em.match(/(tenant_id .* null|current_tenant.*null|app\\.current_tenant)/)) category = 'tenant_missing';\nelse if (em.match(/(postgres|relation .* does not exist|column .* does not exist|syntax error|constraint|unique violation|foreign key)/)) category = 'database';\nelse if (em.match(/(openai|anthropic|rate limit|insufficient_quota|model_not_found|context_length|api[_ ]key)/)) category = 'llm';\nelse if (em.match(/(unauthorized|forbidden|invalid token|jwt|auth)/)) category = 'auth';\nelse if (em.match(/(json|parse|invalid expression|unmatched)/)) category = 'parse';\n\n// === Severity ===\nconst criticalWorkflows = ['main_orchestrator', 'agent_proposal', 'agent_trades', 'init_new_project'];\nconst criticalCategories = ['rls_violation', 'tenant_missing'];\nconst isCritical = criticalWorkflows.includes(workflowName) || criticalCategories.includes(category);\n\n// === Hash de error (dedup) ===\nlet h = 5381;\nconst hashInput = workflowName + '|' + errorNode + '|' + (errorMessage.slice(0, 200));\nfor (let i = 0; i < hashInput.length; i++) { h = ((h << 5) + h) + hashInput.charCodeAt(i); h = h & h; }\nconst errorHash = Math.abs(h).toString(16).slice(0, 12);\n\n// === Silent workflows ===\nconst silentPattern = /(_TEMP$|^debug|^test_|TEMP|migration_)/i;\nconst isSilent = silentPattern.test(workflowName);\n\n// === details jsonb (lo nuevo en v2) ===\nconst details = {\n  workflow_id:       workflowId,\n  workflow_name:     workflowName,\n  execution_id:      executionId,\n  error_node:        errorNode,\n  error_name:        errorName,\n  error_message:     errorMessage.slice(0, 2000),\n  error_stack:       errorStack ? errorStack.slice(0, 2000) : null,\n  error_category:    category,\n  error_hash:        errorHash,\n  is_critical:       isCritical,\n  project_id_source: projectIdSource,\n  url_to_execution:  workflowId ? ('https://n8n-n8n.zzeluw.easypanel.host/workflow/' + workflowId + '/executions/' + executionId) : null\n};\n\nreturn [{\n  json: {\n    workflow_name: workflowName,\n    project_id:    projectId,\n    error_message: errorMessage.slice(0, 500),\n    error_summary: '[' + workflowName + '] ' + errorNode + ' ' + category + ': ' + errorMessage.slice(0, 200),\n    is_critical:   isCritical,\n    is_silent:     isSilent,\n    error_hash:    errorHash,\n    error_category: category,\n    timestamp,\n    details\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 300],
+      "id": "ehv2-002",
+      "name": "Extract Error Details v2"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, status, output_summary, details, error_message) VALUES ($1::uuid, $2, 'workflow_error', 'error', $3, $4::jsonb, $5)",
+        "options": {
+          "queryReplacement": "={{ [$json.project_id, $json.workflow_name, $json.error_summary, JSON.stringify($json.details), $json.error_message] }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "PLACEHOLDER_POSTGRES_ID", "name": "Postgres account" }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [720, 300],
+      "id": "ehv2-003",
+      "name": "Log Error con details jsonb"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT count(*)::int AS recent_count FROM activity_log WHERE action = 'workflow_error' AND created_at > now() - INTERVAL '60 minutes' AND details->>'error_hash' = $1",
+        "options": {
+          "queryReplacement": "={{ [$('Extract Error Details v2').first().json.error_hash] }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "PLACEHOLDER_POSTGRES_ID", "name": "Postgres account" }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [960, 300],
+      "id": "ehv2-004",
+      "name": "Count Same Hash 60min"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "version": 2, "leftValue": "", "caseSensitive": false, "typeValidation": "loose" },
+          "combinator": "and",
+          "conditions": [
+            { "id": "ehv2-04-c1",
+              "leftValue": "={{ $('Extract Error Details v2').first().json.is_silent }}",
+              "rightValue": false,
+              "operator": { "type": "boolean", "operation": "false", "singleValue": true } },
+            { "id": "ehv2-04-c2",
+              "leftValue": "={{ Number($json.recent_count) || 0 }}",
+              "rightValue": 1,
+              "operator": { "type": "number", "operation": "lte" } }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1200, 300],
+      "id": "ehv2-005",
+      "name": "Should Email?"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "version": 2, "leftValue": "", "caseSensitive": false, "typeValidation": "strict" },
+          "combinator": "and",
+          "conditions": [
+            { "id": "ehv2-06-c1",
+              "leftValue": "={{ $('Extract Error Details v2').first().json.is_critical }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true", "singleValue": true } }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1440, 200],
+      "id": "ehv2-006",
+      "name": "Critical?"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $('Extract Error Details v2').first().json.recipient || 'botelladesdeel98@gmail.com' }}",
+        "subject": "=[CRÍTICO] {{ $('Extract Error Details v2').first().json.workflow_name }} | {{ $('Extract Error Details v2').first().json.error_category }}",
+        "emailType": "html",
+        "message": "=<div style=\"font-family: -apple-system, system-ui, Arial; max-width: 720px; background:#0F1418; color:#E8EBED; padding:24px;\">\n  <div style=\"border-left: 4px solid #C25450; padding-left: 12px;\">\n    <h2 style=\"margin:0 0 4px 0; color:#C25450;\">⚠ Error CRÍTICO</h2>\n    <p style=\"margin:0; color:#A4B0BA; font-family: monospace; font-size: 13px;\">{{ $('Extract Error Details v2').first().json.timestamp }}</p>\n  </div>\n  <table style=\"width:100%; border-collapse: collapse; margin-top: 16px; font-family: monospace; font-size: 13px;\">\n    <tr><td style=\"padding:6px 0; color:#A4B0BA;\">Workflow</td><td style=\"padding:6px 0; color:#7FA650;\">{{ $('Extract Error Details v2').first().json.workflow_name }}</td></tr>\n    <tr><td style=\"padding:6px 0; color:#A4B0BA;\">Categoría</td><td style=\"padding:6px 0;\">{{ $('Extract Error Details v2').first().json.error_category }}</td></tr>\n    <tr><td style=\"padding:6px 0; color:#A4B0BA;\">Nodo</td><td style=\"padding:6px 0;\">{{ $('Extract Error Details v2').first().json.details.error_node }}</td></tr>\n    <tr><td style=\"padding:6px 0; color:#A4B0BA;\">Hash</td><td style=\"padding:6px 0;\">{{ $('Extract Error Details v2').first().json.error_hash }}</td></tr>\n    <tr><td style=\"padding:6px 0; color:#A4B0BA;\">Proyecto</td><td style=\"padding:6px 0;\">{{ $('Extract Error Details v2').first().json.project_id || '—' }}</td></tr>\n    <tr><td style=\"padding:6px 0; color:#A4B0BA;\">Execution ID</td><td style=\"padding:6px 0;\">{{ $('Extract Error Details v2').first().json.details.execution_id }}</td></tr>\n  </table>\n  <pre style=\"background: #161C22; padding: 16px; margin-top: 16px; font-size: 12px; color: #D4A24C; white-space: pre-wrap; border-radius: 4px;\">{{ $('Extract Error Details v2').first().json.error_message }}</pre>\n  <p style=\"margin-top: 20px;\"><a href=\"{{ $('Extract Error Details v2').first().json.details.url_to_execution }}\" style=\"background:#C25450; color:white; padding:10px 18px; text-decoration:none; border-radius:4px; font-family: monospace;\">Ver ejecución →</a></p>\n</div>",
+        "options": {}
+      },
+      "credentials": {
+        "gmailOAuth2": { "id": "PLACEHOLDER_GMAIL_ID", "name": "Gmail Notifications" }
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [1680, 100],
+      "id": "ehv2-007",
+      "name": "Send Critical Alert"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $('Extract Error Details v2').first().json.recipient || 'botelladesdeel98@gmail.com' }}",
+        "subject": "=[ERROR] {{ $('Extract Error Details v2').first().json.workflow_name }} falló",
+        "emailType": "html",
+        "message": "=<div style=\"font-family: -apple-system, system-ui, Arial; max-width: 720px; background:#0F1418; color:#E8EBED; padding:24px;\">\n  <div style=\"border-left: 4px solid #D4A24C; padding-left: 12px;\">\n    <h2 style=\"margin:0 0 4px 0; color:#D4A24C;\">⚠ Error en workflow</h2>\n    <p style=\"margin:0; color:#A4B0BA; font-family: monospace; font-size: 13px;\">{{ $('Extract Error Details v2').first().json.timestamp }}</p>\n  </div>\n  <table style=\"width:100%; border-collapse: collapse; margin-top: 16px; font-family: monospace; font-size: 13px;\">\n    <tr><td style=\"padding:6px 0; color:#A4B0BA;\">Workflow</td><td style=\"padding:6px 0; color:#7FA650;\">{{ $('Extract Error Details v2').first().json.workflow_name }}</td></tr>\n    <tr><td style=\"padding:6px 0; color:#A4B0BA;\">Categoría</td><td style=\"padding:6px 0;\">{{ $('Extract Error Details v2').first().json.error_category }}</td></tr>\n    <tr><td style=\"padding:6px 0; color:#A4B0BA;\">Nodo</td><td style=\"padding:6px 0;\">{{ $('Extract Error Details v2').first().json.details.error_node }}</td></tr>\n    <tr><td style=\"padding:6px 0; color:#A4B0BA;\">Proyecto</td><td style=\"padding:6px 0;\">{{ $('Extract Error Details v2').first().json.project_id || '—' }}</td></tr>\n  </table>\n  <pre style=\"background: #161C22; padding: 16px; margin-top: 16px; font-size: 12px; color: #D4A24C; white-space: pre-wrap; border-radius: 4px;\">{{ $('Extract Error Details v2').first().json.error_message }}</pre>\n  <p style=\"margin-top: 20px;\"><a href=\"{{ $('Extract Error Details v2').first().json.details.url_to_execution }}\" style=\"background:#D4A24C; color:white; padding:10px 18px; text-decoration:none; border-radius:4px;\">Ver ejecución →</a></p>\n</div>",
+        "options": {}
+      },
+      "credentials": {
+        "gmailOAuth2": { "id": "PLACEHOLDER_GMAIL_ID", "name": "Gmail Notifications" }
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [1680, 320],
+      "id": "ehv2-008",
+      "name": "Send Error Notice"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [1440, 600],
+      "id": "ehv2-009",
+      "name": "Suppressed (silent OR dup)"
+    }
+  ],
+  "connections": {
+    "On Workflow Error":      { "main": [[{ "node": "Extract Error Details v2", "type": "main", "index": 0 }]] },
+    "Extract Error Details v2":{ "main": [[{ "node": "Log Error con details jsonb","type": "main", "index": 0 }]] },
+    "Log Error con details jsonb": { "main": [[{ "node": "Count Same Hash 60min","type": "main", "index": 0 }]] },
+    "Count Same Hash 60min":  { "main": [[{ "node": "Should Email?",            "type": "main", "index": 0 }]] },
+    "Should Email?":          { "main": [
+      [{ "node": "Critical?",                  "type": "main", "index": 0 }],
+      [{ "node": "Suppressed (silent OR dup)", "type": "main", "index": 0 }]
+    ]},
+    "Critical?":              { "main": [
+      [{ "node": "Send Critical Alert", "type": "main", "index": 0 }],
+      [{ "node": "Send Error Notice",   "type": "main", "index": 0 }]
+    ]}
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": ""
+  },
+  "pinData": {}
+}

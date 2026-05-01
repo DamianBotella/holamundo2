@@ -149,14 +149,25 @@
 
 ---
 
-### Sesión X6 — Empezar interfaz Foxhole (~varias sesiones)
+### Sesión X6 — Empezar interfaz Foxhole (~5-6 semanas full-time) — DISEÑO COMPLETO (B40)
 
-Una vez X1-X5 completos:
-- Decidir stack frontend (React + Vite + TanStack Query + Tailwind, o equivalente).
-- Wireframes: vista mapa global + zoom táctico de proyecto.
-- Sistema de design: colores, tipografía, iconografía militar/técnica.
-- Componentes core: project card, phase indicator, alert badge, timeline event, drill-down panel.
-- Iterar contra la API.
+**Estado**: 📐 diseño completo en [`docs/x6_foxhole_ui_design.md`](x6_foxhole_ui_design.md). Implementación pendiente cuando X1-X5 cerrados.
+
+**Decisiones tomadas**:
+- 2 vistas principales: Mapa Global (`/`) + Zoom Táctico (`/projects/{id}`).
+- Stack: React 19 + Vite + TanStack Router/Query + Tailwind + shadcn/ui + lucide + recharts.
+- Paleta oscura técnica (verdes oliva Foxhole, ámbar warning, rojo critical).
+- Tipografía Inter Variable + JetBrains Mono.
+- 14 tabs en Zoom Táctico (Resumen, Briefing, Diseño, Normativa, Materiales, Costes, Oficios, Propuesta, Plan, Seguridad, Accesibilidad, Timeline, Alertas, Logs).
+
+**Roadmap M1-M5** (~27 días):
+- M1 Foundation (5d): setup + login + tokens.
+- M2 Mapa Global (5d): KPIs, PhaseColumnView, ProjectCard, filtros.
+- M3 Zoom Táctico (7d): PhasePipeline + 4 tabs prioritarias.
+- M4 Tabs restantes (7d): 10 tabs adicionales + acciones.
+- M5 Polish + ship (3d): skeleton, error boundaries, deploy.
+
+**Open questions para Damián** documentadas en sec. 10 (dominio, tenant switch, mobile read-only, tema claro, i18n, branding).
 
 ---
 
@@ -169,7 +180,7 @@ Una vez X1-X5 completos:
 | X3 | Multi-tenant + RLS | 12-15h | 🔴 | 📐 diseño DRAFT (B35) | Backend multi-cliente |
 | X4 | Auth + sesiones | 6-8h | 🔴 | 📐 diseño completo (B38) | Login + roles |
 | X5 | API REST contractual | 10-12h | 🔴 | 📐 contract v0.2 + 4 workflows pre-built (B38) | Contrato estable para UI |
-| X6+ | Foxhole UI | varias sesiones | — | pendiente | Producto vendible visualmente |
+| X6+ | Foxhole UI | 5-6 semanas | — | 📐 diseño completo (B40) | Producto vendible visualmente |
 
 **Total backend pre-UI**: ~36-43h.
 **Total con UI completa**: ~80-120h adicionales.

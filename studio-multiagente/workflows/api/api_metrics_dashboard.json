@@ -1,0 +1,131 @@
+{
+  "name": "api_metrics_dashboard",
+  "_description": "GET /api/v1/metrics/dashboard - KPIs del tenant para vista mapa global Foxhole. Lee v_dashboard_metrics. Cacheable 60s.",
+  "_status": "DRAFT - importar tras X3 + X4 + 052_api_views aplicada.",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "api/v1/metrics/dashboard",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "id": "api-metrics-webhook",
+      "name": "GET /metrics/dashboard"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const auth = $input.first().json.headers?.authorization || '';\nif (!auth.startsWith('Bearer ')) return [{ json: { _error: 'AUTH_MISSING_TOKEN', _status: 401 } }];\nconst token = auth.slice(7);\ntry {\n  const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'));\n  if (!payload.sub) throw new Error('No sub');\n  if (payload.exp && Date.now()/1000 > payload.exp) throw new Error('JWT expired');\n  return [{ json: {\n    user_id:    payload.sub,\n    tenant_id:  payload.tenant_id || null,\n    role:       payload.role || 'architect',\n    request_id: 'req_' + Math.random().toString(36).slice(2, 10)\n  }}];\n} catch (e) {\n  return [{ json: { _error: 'AUTH_INVALID_TOKEN', _status: 401, _details: e.message } }];\n}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 300],
+      "id": "api-metrics-decode",
+      "name": "Decode JWT"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            { "id": "check-error", "leftValue": "={{ $json._error }}", "rightValue": "", "operator": { "type": "string", "operation": "exists" } }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [720, 300],
+      "id": "api-metrics-if-auth",
+      "name": "Auth OK?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details || $json._error, request_id: 'req_' + Date.now() } }) }}",
+        "options": { "responseCode": "={{ $json._status || 401 }}" }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [960, 460],
+      "id": "api-metrics-respond-401",
+      "name": "Respond 401"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT set_session_context($1::uuid, $2::uuid, $3)",
+        "options": { "queryReplacement": "={{ [$json.user_id, $json.tenant_id, $json.role] }}" }
+      },
+      "credentials": { "postgres": { "id": "PLACEHOLDER_POSTGRES_ID", "name": "Postgres account" } },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [960, 200],
+      "id": "api-metrics-set-session",
+      "name": "Set Session Context"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM v_dashboard_metrics LIMIT 1",
+        "options": {}
+      },
+      "credentials": { "postgres": { "id": "PLACEHOLDER_POSTGRES_ID", "name": "Postgres account" } },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1200, 200],
+      "id": "api-metrics-query",
+      "name": "Query v_dashboard_metrics"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const m = $input.first()?.json || {};\nconst sess = $('Decode JWT').first().json;\nreturn [{ json: {\n  data: {\n    active_projects:        parseInt(m.active_projects) || 0,\n    projects_by_phase:      m.projects_by_phase || {},\n    critical_alerts:        parseInt(m.critical_alerts) || 0,\n    pending_approvals:      parseInt(m.pending_approvals) || 0,\n    revenue_pipeline_eur:   parseFloat(m.revenue_pipeline_eur) || 0,\n    avg_project_cycle_days: parseFloat(m.avg_project_cycle_days) || 0,\n    llm_cost_mtd_usd:       parseFloat(m.llm_cost_mtd_usd) || 0\n  },\n  meta: {\n    request_id: sess.request_id,\n    timestamp:  new Date().toISOString()\n  }\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1440, 200],
+      "id": "api-metrics-format",
+      "name": "Format Response"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              { "name": "Cache-Control", "value": "max-age=60" }
+            ]
+          }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1680, 200],
+      "id": "api-metrics-respond-200",
+      "name": "Respond 200"
+    }
+  ],
+  "connections": {
+    "GET /metrics/dashboard":   { "main": [[{ "node": "Decode JWT",            "type": "main", "index": 0 }]] },
+    "Decode JWT":               { "main": [[{ "node": "Auth OK?",              "type": "main", "index": 0 }]] },
+    "Auth OK?":                 { "main": [
+      [{ "node": "Respond 401",         "type": "main", "index": 0 }],
+      [{ "node": "Set Session Context", "type": "main", "index": 0 }]
+    ]},
+    "Set Session Context":      { "main": [[{ "node": "Query v_dashboard_metrics","type": "main", "index": 0 }]] },
+    "Query v_dashboard_metrics":{ "main": [[{ "node": "Format Response",       "type": "main", "index": 0 }]] },
+    "Format Response":          { "main": [[{ "node": "Respond 200",           "type": "main", "index": 0 }]] }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "PLACEHOLDER_ERROR_HANDLER_ID"
+  },
+  "pinData": {}
+}

@@ -1,18 +1,21 @@
 openapi: 3.1.0
 info:
   title: ArquitAI API
-  version: 0.1.0-draft
+  version: 0.2.0-draft
   description: |
     Contrato REST que la UI Foxhole consume. Implementado encima de n8n
     (cada endpoint es un workflow `api_*` con webhook + auth check + Postgres).
 
-    **Estado**: BOCETO. Endpoints aún no construidos. Esto es el contrato
-    que se negocia ANTES de empezar X5 para que UI y backend trabajen
-    contra el mismo target.
+    **Estado**: DRAFT v0.2 (B38). Endpoints aún no construidos.
 
     **Bloqueado por**: X3 (multi-tenant + RLS) y X4 (Supabase Auth).
-    Hasta que X3+X4 estén cerrados, todos los endpoints rechazan
-    requests sin tenant resuelto.
+
+    **Convenciones**:
+    - Todos los endpoints devuelven `{ data: ..., meta: ... }` (excepto errores).
+    - Listas usan paginación cursor (`?cursor=...&limit=...`) en lugar de page/per_page.
+    - Errores devuelven `{ error: { code, message, request_id, details? } }`.
+    - Timestamps en ISO 8601 UTC.
+    - IDs en UUID v4.
   contact:
     name: Damián
     email: botelladesdeel98@gmail.com
@@ -43,17 +46,43 @@ tags:
     description: KPIs del tenant para dashboard.
 
 paths:
+  # ============================================================
+  # AUTH & STUDIO
+  # ============================================================
+
   /me:
     get:
       tags: [auth]
       summary: Perfil del usuario logueado + tenant.
+      description: |
+        Devuelve la fila de `v_my_profile` correspondiente al `app.current_user`
+        de la sesión Postgres. Sin RLS activo, usa el JWT decoded del header.
       responses:
         '200':
           description: OK
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/UserProfile'
+                type: object
+                properties:
+                  data: { $ref: '#/components/schemas/UserProfile' }
+                  meta: { $ref: '#/components/schemas/ResponseMeta' }
+              examples:
+                damian:
+                  value:
+                    data:
+                      user_id: "a1b2c3d4-0000-0000-0000-000000000001"
+                      email: "botelladesdeel98@gmail.com"
+                      full_name: "Damián Martínez"
+                      role: "super_admin"
+                      tenant:
+                        id: "11111111-1111-1111-1111-111111111111"
+                        name: "Estudio Damián Martínez"
+                        slug: "damian-mtnz"
+                        subscription_tier: "enterprise"
+                    meta:
+                      request_id: "req_abc123"
+                      timestamp: "2026-05-01T16:30:00Z"
         '401':
           $ref: '#/components/responses/Unauthorized'
 
@@ -61,31 +90,98 @@ paths:
     get:
       tags: [studio]
       summary: Perfil del estudio activo (studio_profile baseline).
+      description: |
+        Lee `studio_profile` filtrado por `tenant_id = current_tenant_id()` y
+        `active = true`. Devuelve las 8 secciones jsonb tal cual.
       responses:
         '200':
           description: OK
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/StudioProfile'
+                type: object
+                properties:
+                  data: { $ref: '#/components/schemas/StudioProfile' }
+                  meta: { $ref: '#/components/schemas/ResponseMeta' }
+
+    patch:
+      tags: [studio]
+      summary: Actualizar parcialmente secciones del studio_profile.
+      description: |
+        Permite update parcial de cualquier sección jsonb (`identity`, `tone`, etc.).
+        El servidor hace merge `jsonb || $1` para preservar campos no enviados.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                identity:        { type: object }
+                tone:            { type: object }
+                priorities:      { type: object }
+                red_lines:       { type: object }
+                visit_checklist: { type: object }
+                materials_pref:  { type: object }
+                trades_pref:     { type: object }
+                jurisdiction:    { type: object }
+            examples:
+              update_tone:
+                value:
+                  tone:
+                    formality: "informal"
+                    pronoun: "tú"
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: '#/components/schemas/StudioProfile' }
+
+  # ============================================================
+  # PROJECTS
+  # ============================================================
 
   /projects:
     get:
       tags: [projects]
-      summary: Lista paginada de proyectos del tenant.
+      summary: Lista paginada de proyectos del tenant (cursor-based).
       parameters:
         - name: phase
           in: query
           schema:
             $ref: '#/components/schemas/ProjectPhase'
+          description: Filtrar por fase exacta.
+        - name: phase_in
+          in: query
+          schema:
+            type: string
+          description: |
+            Filtrar por múltiples fases separadas por coma.
+            Ej: `?phase_in=intake,briefing_done,design_done`
         - name: q
           in: query
           schema: { type: string }
-          description: Búsqueda full-text en project_name + client_name.
-        - name: page
+          description: Búsqueda full-text en `project_name`, `client_name`, `location_city`.
+        - name: status
           in: query
-          schema: { type: integer, default: 1, minimum: 1 }
-        - name: per_page
+          schema:
+            type: string
+            enum: [active, paused, blocked, completed]
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [created_desc, created_asc, updated_desc, updated_asc, alphabetical]
+            default: updated_desc
+        - name: cursor
+          in: query
+          schema: { type: string }
+          description: Cursor de paginación (base64 del último ID + timestamp).
+        - name: limit
           in: query
           schema: { type: integer, default: 25, maximum: 100 }
       responses:
@@ -98,10 +194,31 @@ paths:
                 properties:
                   data:
                     type: array
-                    items:
-                      $ref: '#/components/schemas/ProjectSummary'
-                  pagination:
-                    $ref: '#/components/schemas/Pagination'
+                    items: { $ref: '#/components/schemas/ProjectSummary' }
+                  meta: { $ref: '#/components/schemas/CursorPaginationMeta' }
+              examples:
+                three_projects:
+                  value:
+                    data:
+                      - id: "0a53d09f-d8f7-444a-a074-42a3305ef49b"
+                        name: "Reforma DEMO X1v2 E2E B30"
+                        client_name: "Maria García"
+                        current_phase: "planning_done"
+                        status: "active"
+                        budget_target: 48000
+                        location_city: "Madrid"
+                        created_at: "2026-04-29T10:00:00Z"
+                        updated_at: "2026-04-29T11:00:00Z"
+                        alerts_count: 0
+                        pending_approvals_count: 0
+                    meta:
+                      request_id: "req_abc124"
+                      timestamp: "2026-05-01T16:30:00Z"
+                      pagination:
+                        cursor_next: "eyJpZCI6IjBhNTNkMDlmIiwidHMiOiIyMDI2LTA0LTI5In0="
+                        cursor_prev: null
+                        has_more: false
+                        total_estimated: 1
 
     post:
       tags: [projects]
@@ -110,45 +227,82 @@ paths:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/ProjectCreateInput'
+            schema: { $ref: '#/components/schemas/ProjectCreateInput' }
+            examples:
+              reforma_basica:
+                value:
+                  client_name: "Test Client"
+                  client_email: "test@example.com"
+                  project_name: "Reforma piso Lavapiés"
+                  project_type: "reforma_integral"
+                  property_type: "piso"
+                  property_area_m2: 75
+                  location_city: "Madrid"
+                  budget_target: 50000
+                  architect_intake_notes: "Visita 2026-05-01..."
       responses:
         '201':
           description: Created
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Project'
+                type: object
+                properties:
+                  data: { $ref: '#/components/schemas/Project' }
+        '400':
+          $ref: '#/components/responses/BadRequest'
 
   /projects/{id}:
     get:
       tags: [projects]
-      summary: Detalle del proyecto con relaciones (briefing, design, etc.).
+      summary: Detalle del proyecto con relaciones.
       parameters:
         - $ref: '#/components/parameters/ProjectId'
+        - name: include
+          in: query
+          schema:
+            type: string
+            default: "all"
+          description: |
+            Comma-separated lista de relaciones a incluir.
+            Default `all`. Posibles: briefing,design,regulatory,materials,
+            costs,proposal,plan,safety,accessibility,timeline,agent_runs,alerts.
       responses:
         '200':
           description: OK
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ProjectDetail'
+                type: object
+                properties:
+                  data: { $ref: '#/components/schemas/ProjectDetail' }
+        '404':
+          $ref: '#/components/responses/NotFound'
 
   /projects/{id}/timeline:
     get:
       tags: [projects]
-      summary: Eventos cronológicos del activity_log del proyecto.
+      summary: Eventos cronológicos del activity_log.
       parameters:
         - $ref: '#/components/parameters/ProjectId'
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50, maximum: 500 }
+        - name: cursor
+          in: query
+          schema: { type: string }
       responses:
         '200':
           description: OK
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/TimelineEvent'
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/TimelineEvent' }
+                  meta: { $ref: '#/components/schemas/CursorPaginationMeta' }
 
   /projects/{id}/agent-runs:
     get:
@@ -156,15 +310,26 @@ paths:
       summary: Ejecuciones de agentes para el proyecto.
       parameters:
         - $ref: '#/components/parameters/ProjectId'
+        - name: agent_name
+          in: query
+          schema: { type: string }
+          description: Filtrar por nombre de agente (ej. `agent_briefing`).
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [running, completed, failed, timeout]
       responses:
         '200':
           description: OK
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/AgentRun'
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/AgentRun' }
 
   /projects/{id}/alerts:
     get:
@@ -172,15 +337,25 @@ paths:
       summary: Consultations + warnings + tareas críticas del proyecto.
       parameters:
         - $ref: '#/components/parameters/ProjectId'
+        - name: severity
+          in: query
+          schema:
+            type: string
+            enum: [info, warning, critical]
+        - name: resolved
+          in: query
+          schema: { type: boolean, default: false }
       responses:
         '200':
           description: OK
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/Alert'
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Alert' }
 
   /projects/{id}/approve/{approval_id}:
     post:
@@ -205,23 +380,54 @@ paths:
                   enum: [approved, rejected, accepted, revision_requested]
                 comment:
                   type: string
-      responses:
-        '200':
-          description: OK
-
-  /trades:
-    get:
-      tags: [trades]
-      summary: Oficios y trade_quotes del tenant.
+                  maxLength: 2000
+            examples:
+              approve:
+                value: { decision: "approved", comment: "OK adelante" }
+              request_revision:
+                value: { decision: "revision_requested", comment: "Falta detalle de cocina" }
       responses:
         '200':
           description: OK
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/TradeAssignment'
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      approval_id: { type: string, format: uuid }
+                      decision:    { type: string }
+                      decided_at:  { type: string, format: date-time }
+                      next_phase:  { type: string, nullable: true }
+
+  # ============================================================
+  # TRADES & MATERIALS
+  # ============================================================
+
+  /trades:
+    get:
+      tags: [trades]
+      summary: Oficios y trade_quotes del tenant.
+      parameters:
+        - name: trade_type
+          in: query
+          schema: { type: string }
+        - name: status
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/TradeAssignment' }
 
   /materials/{project_id}:
     get:
@@ -232,41 +438,95 @@ paths:
           in: path
           required: true
           schema: { type: string, format: uuid }
+        - name: category
+          in: query
+          schema: { type: string }
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [suggested, approved, rejected, ordered]
       responses:
         '200':
           description: OK
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/Material'
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Material'  }
+
+  # ============================================================
+  # ALERTS GLOBALES & METRICS
+  # ============================================================
 
   /alerts/global:
     get:
       tags: [alerts]
       summary: Feed de alertas de todos los proyectos del tenant.
+      parameters:
+        - name: severity
+          in: query
+          schema:
+            type: string
+            enum: [info, warning, critical]
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50 }
       responses:
         '200':
           description: OK
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/Alert'
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Alert' }
 
   /metrics/dashboard:
     get:
       tags: [metrics]
       summary: KPIs para vista global Foxhole (mapa portfolio).
+      description: |
+        Lee de las VIEWS SQL `v_dashboard_metrics`. Cacheable 60s
+        en el cliente (Cache-Control: max-age=60).
       responses:
         '200':
           description: OK
+          headers:
+            Cache-Control:
+              schema: { type: string, example: "max-age=60" }
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/DashboardMetrics'
+                type: object
+                properties:
+                  data: { $ref: '#/components/schemas/DashboardMetrics' }
+              examples:
+                dashboard_demo:
+                  value:
+                    data:
+                      active_projects: 5
+                      projects_by_phase:
+                        intake: 1
+                        briefing_done: 1
+                        design_done: 0
+                        analysis_done: 1
+                        costs_done: 0
+                        trades_done: 1
+                        proposal_done: 1
+                        approved: 0
+                        planning_done: 1
+                        completed: 0
+                      critical_alerts: 2
+                      pending_approvals: 3
+                      revenue_pipeline_eur: 245000
+                      avg_project_cycle_days: 42.5
+                      llm_cost_mtd_usd: 12.34
 
 components:
   securitySchemes:
@@ -275,9 +535,10 @@ components:
       scheme: bearer
       bearerFormat: JWT
       description: |
-        JWT emitido por Supabase Auth. Custom claims requeridas:
-        - `tenant_id` (uuid)
-        - `role` (architect | colaborador | super_admin)
+        JWT emitido por Supabase Auth. Custom claims requeridas (server-side):
+        - `tenant_id` (uuid) — añadido por Auth Hook tras login.
+        - `role` (architect | colaborador | super_admin).
+        Validación en cada request: firma JWT + expiración + active=true en user_profiles.
 
   parameters:
     ProjectId:
@@ -291,10 +552,77 @@ components:
       description: JWT inválido, expirado o sin tenant_id.
       content:
         application/json:
-          schema:
-            $ref: '#/components/schemas/Error'
+          schema: { $ref: '#/components/schemas/Error' }
+          examples:
+            invalid_token:
+              value:
+                error:
+                  code: "AUTH_INVALID_TOKEN"
+                  message: "JWT verification failed"
+                  request_id: "req_abc125"
+    BadRequest:
+      description: Payload inválido o falta de campos.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          examples:
+            missing_field:
+              value:
+                error:
+                  code: "VALIDATION_FAILED"
+                  message: "Falta campo requerido"
+                  request_id: "req_abc126"
+                  details:
+                    field: "project_name"
+                    constraint: "required"
+    NotFound:
+      description: Recurso no encontrado o sin permisos (RLS filtró).
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    RateLimited:
+      description: Rate limit excedido (vía check_rate_limit).
+      headers:
+        Retry-After:
+          schema: { type: integer, example: 60 }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
 
   schemas:
+    ResponseMeta:
+      type: object
+      required: [request_id, timestamp]
+      properties:
+        request_id: { type: string }
+        timestamp:  { type: string, format: date-time }
+
+    CursorPaginationMeta:
+      allOf:
+        - $ref: '#/components/schemas/ResponseMeta'
+        - type: object
+          properties:
+            pagination:
+              type: object
+              properties:
+                cursor_next:     { type: string, nullable: true }
+                cursor_prev:     { type: string, nullable: true }
+                has_more:        { type: boolean }
+                total_estimated: { type: integer }
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, request_id]
+          properties:
+            code:       { type: string, description: "ERROR_CODE_SCREAMING_SNAKE" }
+            message:    { type: string }
+            request_id: { type: string }
+            details:    { type: object }
+
     ProjectPhase:
       type: string
       enum:
@@ -310,137 +638,123 @@ components:
         - completed
         - archived
 
-    Pagination:
-      type: object
-      properties:
-        page: { type: integer }
-        per_page: { type: integer }
-        total: { type: integer }
-        total_pages: { type: integer }
-
-    Error:
-      type: object
-      required: [error]
-      properties:
-        error:
-          type: object
-          properties:
-            code: { type: string }
-            message: { type: string }
-            request_id: { type: string }
-
-    UserProfile:
-      type: object
-      properties:
-        user_id: { type: string, format: uuid }
-        email: { type: string, format: email }
-        full_name: { type: string }
-        role:
-          type: string
-          enum: [architect, colaborador, super_admin]
-        tenant:
-          $ref: '#/components/schemas/Tenant'
-
     Tenant:
       type: object
       properties:
-        id: { type: string, format: uuid }
-        name: { type: string }
+        id:                { type: string, format: uuid }
+        name:              { type: string }
+        slug:              { type: string }
         subscription_tier:
           type: string
           enum: [free, pro, enterprise]
 
+    UserProfile:
+      type: object
+      properties:
+        user_id:    { type: string, format: uuid }
+        email:      { type: string, format: email }
+        full_name:  { type: string }
+        role:
+          type: string
+          enum: [architect, colaborador, super_admin]
+        tenant: { $ref: '#/components/schemas/Tenant' }
+
     StudioProfile:
       type: object
-      description: Lectura del studio_profile baseline + campos onboarding.
       properties:
-        tenant_id: { type: string, format: uuid }
-        studio_name: { type: string }
-        team_signature: { type: string }
-        primary_city: { type: string }
-        primary_province: { type: string }
-        autonomic_community: { type: string }
-        license_number: { type: string }
-        specializations:
-          type: array
-          items: { type: string }
-        preferred_suppliers:
-          type: array
-          items: { type: string }
-        default_quality_tier: { type: string }
-        onboarding_completed: { type: boolean }
+        tenant_id:             { type: string, format: uuid }
+        studio_name:           { type: string }
+        team_signature:        { type: string }
+        primary_city:          { type: string }
+        primary_province:      { type: string }
+        autonomic_community:   { type: string }
+        license_number:        { type: string }
+        identity:              { type: object }
+        tone:                  { type: object }
+        priorities:            { type: object }
+        red_lines:             { type: object }
+        visit_checklist:       { type: object }
+        materials_pref:        { type: object }
+        trades_pref:           { type: object }
+        jurisdiction:          { type: object }
+        onboarding_completed:  { type: boolean }
+        active:                { type: boolean }
+        setup_source:
+          type: string
+          enum: [manual, onboarding_chat, admin_edit, baseline]
 
     ProjectCreateInput:
       type: object
       required: [client_name, project_name, project_type]
       properties:
-        client_email: { type: string, format: email }
-        client_name: { type: string }
-        client_phone: { type: string }
-        project_name: { type: string }
+        client_email:        { type: string, format: email }
+        client_name:         { type: string }
+        client_phone:        { type: string }
+        project_name:        { type: string }
         project_type:
           type: string
-          enum: [reforma_integral, reforma_parcial, ampliacion, obra_nueva, rehabilitacion]
+          enum: [reforma_integral, redistribucion, cambio_uso, adecuacion, apoyo_tecnico, otro]
         property_type:
           type: string
-          enum: [piso, casa, local, oficina]
-        property_area_m2: { type: number }
-        location_address: { type: string }
-        location_city: { type: string }
-        location_province: { type: string }
-        budget_target: { type: number }
-        architect_intake_notes: { type: string }
-        architect_observations: { type: string }
+          enum: [piso, casa, local, atico, bajo, duplex, otro]
+        property_area_m2:    { type: number }
+        location_address:    { type: string }
+        location_city:       { type: string }
+        location_province:   { type: string }
+        budget_target:       { type: number }
+        architect_intake_notes:    { type: string }
+        architect_observations:    { type: string }
         client_stated_preferences: { type: string }
         urgency:
           type: string
-          enum: [low, normal, high, urgent]
+          enum: [normal, alta, urgente]
 
     ProjectSummary:
       type: object
       properties:
-        id: { type: string, format: uuid }
-        name: { type: string }
-        client_name: { type: string }
-        current_phase: { $ref: '#/components/schemas/ProjectPhase' }
-        budget_target: { type: number }
-        location_city: { type: string }
-        created_at: { type: string, format: date-time }
-        updated_at: { type: string, format: date-time }
-        alerts_count: { type: integer }
-        pending_approvals_count: { type: integer }
+        id:                       { type: string, format: uuid }
+        name:                     { type: string }
+        client_name:              { type: string }
+        current_phase:            { $ref: '#/components/schemas/ProjectPhase' }
+        status:                   { type: string }
+        budget_target:            { type: number }
+        location_city:            { type: string }
+        created_at:               { type: string, format: date-time }
+        updated_at:               { type: string, format: date-time }
+        alerts_count:             { type: integer }
+        pending_approvals_count:  { type: integer }
 
     Project:
       allOf:
         - $ref: '#/components/schemas/ProjectSummary'
         - type: object
           properties:
-            client_email: { type: string }
-            client_phone: { type: string }
-            project_type: { type: string }
-            property_type: { type: string }
-            property_area_m2: { type: number }
-            location_address: { type: string }
+            client_email:      { type: string }
+            client_phone:      { type: string }
+            project_type:      { type: string }
+            property_type:     { type: string }
+            property_area_m2:  { type: number }
+            location_address:  { type: string }
             location_province: { type: string }
-            urgency: { type: string }
-            metadata: { type: object }
+            urgency:           { type: string }
+            metadata:          { type: object }
 
     ProjectDetail:
       allOf:
         - $ref: '#/components/schemas/Project'
         - type: object
           properties:
-            briefing: { type: object, nullable: true }
+            briefing:            { type: object, nullable: true }
             design_options:
               type: array
               items: { type: object }
             regulatory_tasks:
               type: array
               items: { type: object }
-            cost_estimate: { type: object, nullable: true }
-            proposal: { type: object, nullable: true }
-            project_plan: { type: object, nullable: true }
-            safety_plan: { type: object, nullable: true }
+            cost_estimate:       { type: object, nullable: true }
+            proposal:            { type: object, nullable: true }
+            project_plan:        { type: object, nullable: true }
+            safety_plan:         { type: object, nullable: true }
             accessibility_audits:
               type: array
               items: { type: object }
@@ -448,76 +762,78 @@ components:
     TimelineEvent:
       type: object
       properties:
-        id: { type: string, format: uuid }
-        timestamp: { type: string, format: date-time }
-        agent_name: { type: string }
-        event_type: { type: string }
-        message: { type: string }
-        details: { type: object }
+        id:             { type: string, format: uuid }
+        timestamp:      { type: string, format: date-time }
+        agent_name:     { type: string }
+        action:         { type: string }
+        status:         { type: string }
+        output_summary: { type: string }
+        details:        { type: object }
 
     AgentRun:
       type: object
       properties:
-        id: { type: string, format: uuid }
-        agent_name: { type: string }
+        id:           { type: string, format: uuid }
+        agent_name:   { type: string }
         status:
           type: string
           enum: [running, completed, failed, timeout]
-        started_at: { type: string, format: date-time }
-        finished_at: { type: string, format: date-time, nullable: true }
-        duration_ms: { type: integer }
-        cost_usd: { type: number, nullable: true }
-        tokens_in: { type: integer, nullable: true }
-        tokens_out: { type: integer, nullable: true }
-        error: { type: string, nullable: true }
+        started_at:   { type: string, format: date-time }
+        finished_at:  { type: string, format: date-time, nullable: true }
+        duration_ms:  { type: integer }
+        cost_usd:     { type: number, nullable: true }
+        tokens_in:    { type: integer, nullable: true }
+        tokens_out:   { type: integer, nullable: true }
+        error:        { type: string, nullable: true }
 
     Alert:
       type: object
       properties:
-        id: { type: string, format: uuid }
-        project_id: { type: string, format: uuid }
+        id:           { type: string, format: uuid }
+        project_id:   { type: string, format: uuid }
         type:
           type: string
           enum: [consultation, approval_pending, regulatory_warning, scope_creep, agent_failure, budget_warning]
         severity:
           type: string
           enum: [info, warning, critical]
-        title: { type: string }
-        message: { type: string }
-        created_at: { type: string, format: date-time }
-        resolved_at: { type: string, format: date-time, nullable: true }
+        title:        { type: string }
+        message:      { type: string }
+        created_at:   { type: string, format: date-time }
+        resolved_at:  { type: string, format: date-time, nullable: true }
 
     TradeAssignment:
       type: object
       properties:
-        id: { type: string, format: uuid }
-        project_id: { type: string, format: uuid }
-        trade_type: { type: string }
-        contractor_name: { type: string, nullable: true }
-        status: { type: string }
-        estimated_cost: { type: number, nullable: true }
-        scheduled_start: { type: string, format: date, nullable: true }
+        id:               { type: string, format: uuid }
+        project_id:       { type: string, format: uuid }
+        trade_type:       { type: string }
+        contractor_name:  { type: string, nullable: true }
+        status:           { type: string }
+        estimated_cost:   { type: number, nullable: true }
+        scheduled_start:  { type: string, format: date, nullable: true }
 
     Material:
       type: object
       properties:
-        id: { type: string, format: uuid }
-        project_id: { type: string, format: uuid }
-        category: { type: string }
-        item_name: { type: string }
-        unit_price: { type: number }
-        unit: { type: string }
-        quantity: { type: number }
-        source_url: { type: string, nullable: true }
+        id:           { type: string, format: uuid }
+        project_id:   { type: string, format: uuid }
+        category:     { type: string }
+        item_name:    { type: string }
+        unit_price:   { type: number }
+        unit:         { type: string }
+        quantity:     { type: number }
+        source_url:   { type: string, nullable: true }
 
     DashboardMetrics:
       type: object
       properties:
-        active_projects: { type: integer }
+        active_projects:       { type: integer }
         projects_by_phase:
           type: object
           additionalProperties: { type: integer }
-        critical_alerts: { type: integer }
-        pending_approvals: { type: integer }
-        revenue_pipeline_eur: { type: number }
+        critical_alerts:       { type: integer }
+        pending_approvals:     { type: integer }
+        revenue_pipeline_eur:  { type: number }
         avg_project_cycle_days: { type: number }
+        llm_cost_mtd_usd:      { type: number }

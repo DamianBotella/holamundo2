@@ -47,15 +47,24 @@
 
 ---
 
-### Sesión X2 — Auditoría main_orchestrator + cleanup workflows (~3h) 🟡
+### Sesión X2 — Auditoría main_orchestrator + cleanup workflows (~3h) 🟡 — AUDIT ESTÁTICO HECHO (2026-05-01)
 
-**Por qué aquí**: con el E2E fresco en cabeza, es el momento de auditar quality gates + retry logic. Se hace antes de multi-tenant para no auditar dos veces.
+**Estado**: 📋 audit estática completada en [`docs/x2_orchestrator_audit_2026-05-01.md`](x2_orchestrator_audit_2026-05-01.md). Pendiente audit sobre versión producción cuando MCP vuelva.
 
-**Qué hacer**:
-1. Lanzar agente `Agents Orchestrator` (ya instalado en `~/.claude/agents/`) sobre `main_orchestrator` (87 nodos).
-2. Aplicar findings críticos solamente. Lo demás documentar.
-3. Auditoría de workflows abandonados: detectar workflows `active=true` sin ejecuciones en >30d. Archivarlos.
-4. Aplicar mejoras incrementales a `agent_safety_plan` documentadas en B26 (`code_references` por riesgo, `applies_when_estructural`).
+**Hallazgos identificados del JSON repo (MVP v1, 19 nodos)**:
+- 🔴 PA-1: `pending_approvals` bloquea TODAS las fases globalmente (debe ser scoped por fase).
+- 🔴 PA-2: Bug 9 X1 (executeWorkflow input passthrough) probablemente afecta 12/13 agentes en producción.
+- 🟡 PA-3: sin error handling en sub-workflow calls → cliente cuelga si agente falla.
+- 🟡 PA-4: race condition con webhooks simultáneos.
+- 🟡 PA-5: INSERT activity_log no usa columna `details` jsonb (migration 045 no aprovechada).
+- 🟢 PA-6: drift severo repo (19 nodos) vs producción (87 nodos) — el repo no es source-of-truth.
+
+**Qué falta** (cuando MCP vuelva):
+1. `n8n_get_workflow({mode:"full"})` del orchestrator real → snapshot a `workflows/main_orchestrator.PROD_<fecha>.json`.
+2. Aplicar el checklist documentado (sección 4 del audit doc) sobre los 87 nodos.
+3. Fixes en orden: PA-2 → PA-3 → PA-1 → PA-5 → PA-4.
+4. Cleanup workflows abandonados (`active=true` sin ejecuciones >30d).
+5. Cron `cron_workflow_audit` semanal para evitar drift PA-6.
 
 **Producto**: pipeline limpio, sin nodos orfans, con quality gates claros.
 
@@ -144,7 +153,7 @@ Una vez X1-X5 completos:
 | # | Sesión | Esfuerzo | Bloqueante UI | Estado | Resultado |
 |---|---|---|---|---|---|
 | X1 | E2E real | 5h | 🔴 | ✅ B30-B34 | Confianza certificada — 13/13 agentes E2E |
-| X2 | Orchestrator audit + cleanup | 3h | 🟡 | pendiente | Pipeline limpio |
+| X2 | Orchestrator audit + cleanup | 3h | 🟡 | 📋 audit estático hecho (B36) | Pipeline limpio |
 | X3 | Multi-tenant + RLS | 12-15h | 🔴 | 📐 diseño DRAFT (B35) | Backend multi-cliente |
 | X4 | Auth + sesiones | 6-8h | 🔴 | pendiente | Login + roles |
 | X5 | API REST contractual | 10-12h | 🔴 | pendiente (boceto OpenAPI iniciado) | Contrato estable para UI |

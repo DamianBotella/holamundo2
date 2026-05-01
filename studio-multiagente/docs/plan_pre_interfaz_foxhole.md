@@ -91,18 +91,30 @@
 
 ---
 
-### Sesión X4 — Auth real con Supabase Auth (~6-8h) 🔴 BLOQUEANTE
+### Sesión X4 — Auth real con Supabase Auth (~6-8h) 🔴 BLOQUEANTE — DISEÑO COMPLETO (B38)
 
-**Por qué después de RLS**: auth necesita saber el `tenant_id` de la sesión para que RLS funcione. Sin RLS, auth no aporta protección real.
+**Estado**: 📐 diseño completo en [`docs/x4_auth_design.md`](x4_auth_design.md) + migration `053_auth_triggers.sql.draft`. Workflows pendientes de crear (necesita MCP).
 
-**Qué hacer**:
-1. Migration 048 — habilitar Supabase Auth (`auth.users` ya existe en Supabase nativo).
-2. Tabla `user_profiles(user_id, tenant_id, role, full_name, ...)` que linka `auth.users` con `tenants`.
-3. Roles: `architect` (full), `colaborador` (read-only), `super_admin` (cross-tenant — para Damián).
-4. JWT token incluye `tenant_id` y `role` en custom claims.
-5. Login UI mínimo (página HTML) y endpoint logout.
-6. Workflow n8n del primer endpoint protegido (ej: `GET /me`) que valida JWT, extrae `tenant_id`, lo setea en sesión Postgres, devuelve datos del usuario.
-7. Reset password via email (Supabase nativo).
+**Decisiones tomadas**:
+- Supabase Auth nativo (no custom auth en n8n).
+- Auth Hook server-side inyecta `tenant_id` + `role` como custom claims firmados.
+- Validación JWT vía HTTP a `/auth/v1/user` (más simple) o sub-workflow `util_jwt_verify`.
+- Roles: `architect` (full), `colaborador` (read-only), `super_admin` (cross-tenant Damián).
+- Signup por invitación únicamente (`pending_invitations` + magic link).
+
+**SQL listo (en draft)**:
+- Migration 051 (user_profiles + v_my_profile) — pendiente aplicar tras X3.
+- Migration 053 (pending_invitations + trigger on_auth_user_created + custom_access_token_hook) — nueva.
+
+**Workflows n8n pendientes** (cuando MCP vuelva):
+- `util_jwt_verify`, `api_auth_login`, `api_auth_logout`, `api_auth_refresh`, `api_auth_invite`, `login_html`.
+
+**Roadmap implementación** (Fase A-E, ~7h):
+- Pre-req: aplicar 051+053, habilitar email auth en Supabase.
+- Setup: registrar `custom_access_token_hook` en Supabase Dashboard manualmente.
+- Workflows: 6 archivos JSON.
+- UI mínima HTML: form login antes de Foxhole.
+- Smoke test: login → /me → /projects con 2 tenants → verify aislamiento.
 
 **Producto**: backend con auth + sesiones + roles. Ya seguro.
 
@@ -155,8 +167,8 @@ Una vez X1-X5 completos:
 | X1 | E2E real | 5h | 🔴 | ✅ B30-B34 | Confianza certificada — 13/13 agentes E2E |
 | X2 | Orchestrator audit + cleanup | 3h | 🟡 | 📋 audit estático hecho (B36) | Pipeline limpio |
 | X3 | Multi-tenant + RLS | 12-15h | 🔴 | 📐 diseño DRAFT (B35) | Backend multi-cliente |
-| X4 | Auth + sesiones | 6-8h | 🔴 | pendiente | Login + roles |
-| X5 | API REST contractual | 10-12h | 🔴 | pendiente (boceto OpenAPI iniciado) | Contrato estable para UI |
+| X4 | Auth + sesiones | 6-8h | 🔴 | 📐 diseño completo (B38) | Login + roles |
+| X5 | API REST contractual | 10-12h | 🔴 | 📐 contract v0.2 + 4 workflows pre-built (B38) | Contrato estable para UI |
 | X6+ | Foxhole UI | varias sesiones | — | pendiente | Producto vendible visualmente |
 
 **Total backend pre-UI**: ~36-43h.

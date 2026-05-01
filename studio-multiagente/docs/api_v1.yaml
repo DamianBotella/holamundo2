@@ -1,0 +1,523 @@
+openapi: 3.1.0
+info:
+  title: ArquitAI API
+  version: 0.1.0-draft
+  description: |
+    Contrato REST que la UI Foxhole consume. Implementado encima de n8n
+    (cada endpoint es un workflow `api_*` con webhook + auth check + Postgres).
+
+    **Estado**: BOCETO. Endpoints aún no construidos. Esto es el contrato
+    que se negocia ANTES de empezar X5 para que UI y backend trabajen
+    contra el mismo target.
+
+    **Bloqueado por**: X3 (multi-tenant + RLS) y X4 (Supabase Auth).
+    Hasta que X3+X4 estén cerrados, todos los endpoints rechazan
+    requests sin tenant resuelto.
+  contact:
+    name: Damián
+    email: botelladesdeel98@gmail.com
+
+servers:
+  - url: https://n8n-n8n.zzeluw.easypanel.host/webhook/api/v1
+    description: Producción (n8n self-hosted)
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: auth
+    description: Autenticación y sesión.
+  - name: studio
+    description: Perfil del estudio activo.
+  - name: projects
+    description: Proyectos — CRUD + drill-down.
+  - name: agents
+    description: Ejecuciones y outputs de los 13 agentes.
+  - name: alerts
+    description: Consultations + warnings + tareas críticas.
+  - name: trades
+    description: Oficios y trade_quotes.
+  - name: materials
+    description: Materiales por proyecto.
+  - name: metrics
+    description: KPIs del tenant para dashboard.
+
+paths:
+  /me:
+    get:
+      tags: [auth]
+      summary: Perfil del usuario logueado + tenant.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfile'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /studio-profile:
+    get:
+      tags: [studio]
+      summary: Perfil del estudio activo (studio_profile baseline).
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StudioProfile'
+
+  /projects:
+    get:
+      tags: [projects]
+      summary: Lista paginada de proyectos del tenant.
+      parameters:
+        - name: phase
+          in: query
+          schema:
+            $ref: '#/components/schemas/ProjectPhase'
+        - name: q
+          in: query
+          schema: { type: string }
+          description: Búsqueda full-text en project_name + client_name.
+        - name: page
+          in: query
+          schema: { type: integer, default: 1, minimum: 1 }
+        - name: per_page
+          in: query
+          schema: { type: integer, default: 25, maximum: 100 }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ProjectSummary'
+                  pagination:
+                    $ref: '#/components/schemas/Pagination'
+
+    post:
+      tags: [projects]
+      summary: Crear proyecto (equivalente a init_new_project).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectCreateInput'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+
+  /projects/{id}:
+    get:
+      tags: [projects]
+      summary: Detalle del proyecto con relaciones (briefing, design, etc.).
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectDetail'
+
+  /projects/{id}/timeline:
+    get:
+      tags: [projects]
+      summary: Eventos cronológicos del activity_log del proyecto.
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TimelineEvent'
+
+  /projects/{id}/agent-runs:
+    get:
+      tags: [agents]
+      summary: Ejecuciones de agentes para el proyecto.
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AgentRun'
+
+  /projects/{id}/alerts:
+    get:
+      tags: [alerts]
+      summary: Consultations + warnings + tareas críticas del proyecto.
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Alert'
+
+  /projects/{id}/approve/{approval_id}:
+    post:
+      tags: [projects]
+      summary: Aprobar o rechazar un approval pendiente.
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - name: approval_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decision]
+              properties:
+                decision:
+                  type: string
+                  enum: [approved, rejected, accepted, revision_requested]
+                comment:
+                  type: string
+      responses:
+        '200':
+          description: OK
+
+  /trades:
+    get:
+      tags: [trades]
+      summary: Oficios y trade_quotes del tenant.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TradeAssignment'
+
+  /materials/{project_id}:
+    get:
+      tags: [materials]
+      summary: Materiales del proyecto.
+      parameters:
+        - name: project_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Material'
+
+  /alerts/global:
+    get:
+      tags: [alerts]
+      summary: Feed de alertas de todos los proyectos del tenant.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Alert'
+
+  /metrics/dashboard:
+    get:
+      tags: [metrics]
+      summary: KPIs para vista global Foxhole (mapa portfolio).
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DashboardMetrics'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        JWT emitido por Supabase Auth. Custom claims requeridas:
+        - `tenant_id` (uuid)
+        - `role` (architect | colaborador | super_admin)
+
+  parameters:
+    ProjectId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+
+  responses:
+    Unauthorized:
+      description: JWT inválido, expirado o sin tenant_id.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+  schemas:
+    ProjectPhase:
+      type: string
+      enum:
+        - intake
+        - briefing_done
+        - design_done
+        - analysis_done
+        - costs_done
+        - trades_done
+        - proposal_done
+        - approved
+        - planning_done
+        - completed
+        - archived
+
+    Pagination:
+      type: object
+      properties:
+        page: { type: integer }
+        per_page: { type: integer }
+        total: { type: integer }
+        total_pages: { type: integer }
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          properties:
+            code: { type: string }
+            message: { type: string }
+            request_id: { type: string }
+
+    UserProfile:
+      type: object
+      properties:
+        user_id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        full_name: { type: string }
+        role:
+          type: string
+          enum: [architect, colaborador, super_admin]
+        tenant:
+          $ref: '#/components/schemas/Tenant'
+
+    Tenant:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        subscription_tier:
+          type: string
+          enum: [free, pro, enterprise]
+
+    StudioProfile:
+      type: object
+      description: Lectura del studio_profile baseline + campos onboarding.
+      properties:
+        tenant_id: { type: string, format: uuid }
+        studio_name: { type: string }
+        team_signature: { type: string }
+        primary_city: { type: string }
+        primary_province: { type: string }
+        autonomic_community: { type: string }
+        license_number: { type: string }
+        specializations:
+          type: array
+          items: { type: string }
+        preferred_suppliers:
+          type: array
+          items: { type: string }
+        default_quality_tier: { type: string }
+        onboarding_completed: { type: boolean }
+
+    ProjectCreateInput:
+      type: object
+      required: [client_name, project_name, project_type]
+      properties:
+        client_email: { type: string, format: email }
+        client_name: { type: string }
+        client_phone: { type: string }
+        project_name: { type: string }
+        project_type:
+          type: string
+          enum: [reforma_integral, reforma_parcial, ampliacion, obra_nueva, rehabilitacion]
+        property_type:
+          type: string
+          enum: [piso, casa, local, oficina]
+        property_area_m2: { type: number }
+        location_address: { type: string }
+        location_city: { type: string }
+        location_province: { type: string }
+        budget_target: { type: number }
+        architect_intake_notes: { type: string }
+        architect_observations: { type: string }
+        client_stated_preferences: { type: string }
+        urgency:
+          type: string
+          enum: [low, normal, high, urgent]
+
+    ProjectSummary:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        client_name: { type: string }
+        current_phase: { $ref: '#/components/schemas/ProjectPhase' }
+        budget_target: { type: number }
+        location_city: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        alerts_count: { type: integer }
+        pending_approvals_count: { type: integer }
+
+    Project:
+      allOf:
+        - $ref: '#/components/schemas/ProjectSummary'
+        - type: object
+          properties:
+            client_email: { type: string }
+            client_phone: { type: string }
+            project_type: { type: string }
+            property_type: { type: string }
+            property_area_m2: { type: number }
+            location_address: { type: string }
+            location_province: { type: string }
+            urgency: { type: string }
+            metadata: { type: object }
+
+    ProjectDetail:
+      allOf:
+        - $ref: '#/components/schemas/Project'
+        - type: object
+          properties:
+            briefing: { type: object, nullable: true }
+            design_options:
+              type: array
+              items: { type: object }
+            regulatory_tasks:
+              type: array
+              items: { type: object }
+            cost_estimate: { type: object, nullable: true }
+            proposal: { type: object, nullable: true }
+            project_plan: { type: object, nullable: true }
+            safety_plan: { type: object, nullable: true }
+            accessibility_audits:
+              type: array
+              items: { type: object }
+
+    TimelineEvent:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        timestamp: { type: string, format: date-time }
+        agent_name: { type: string }
+        event_type: { type: string }
+        message: { type: string }
+        details: { type: object }
+
+    AgentRun:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        agent_name: { type: string }
+        status:
+          type: string
+          enum: [running, completed, failed, timeout]
+        started_at: { type: string, format: date-time }
+        finished_at: { type: string, format: date-time, nullable: true }
+        duration_ms: { type: integer }
+        cost_usd: { type: number, nullable: true }
+        tokens_in: { type: integer, nullable: true }
+        tokens_out: { type: integer, nullable: true }
+        error: { type: string, nullable: true }
+
+    Alert:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        project_id: { type: string, format: uuid }
+        type:
+          type: string
+          enum: [consultation, approval_pending, regulatory_warning, scope_creep, agent_failure, budget_warning]
+        severity:
+          type: string
+          enum: [info, warning, critical]
+        title: { type: string }
+        message: { type: string }
+        created_at: { type: string, format: date-time }
+        resolved_at: { type: string, format: date-time, nullable: true }
+
+    TradeAssignment:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        project_id: { type: string, format: uuid }
+        trade_type: { type: string }
+        contractor_name: { type: string, nullable: true }
+        status: { type: string }
+        estimated_cost: { type: number, nullable: true }
+        scheduled_start: { type: string, format: date, nullable: true }
+
+    Material:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        project_id: { type: string, format: uuid }
+        category: { type: string }
+        item_name: { type: string }
+        unit_price: { type: number }
+        unit: { type: string }
+        quantity: { type: number }
+        source_url: { type: string, nullable: true }
+
+    DashboardMetrics:
+      type: object
+      properties:
+        active_projects: { type: integer }
+        projects_by_phase:
+          type: object
+          additionalProperties: { type: integer }
+        critical_alerts: { type: integer }
+        pending_approvals: { type: integer }
+        revenue_pipeline_eur: { type: number }
+        avg_project_cycle_days: { type: number }

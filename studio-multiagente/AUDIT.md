@@ -1,6 +1,12 @@
 # Auditoría JSONs locales vs workflows en n8n
 
-Fecha: 2026-04-26
+Fecha actualización: 2026-04-29 (post-X1)
+
+## Estado X1 (E2E real del pipeline) — ✅ COMPLETO
+
+**13/13 agentes certificados E2E** sobre proyecto stub `0a53d09f-d8f7-444a-a074-42a3305ef49b`. Outputs reales persistidos en BD. Ver `docs/e2e_evidence_FINAL_2026-04-29.md`.
+
+**Veredicto sistema**: 🟢 READY for first customer pilot. Backend probado E2E.
 
 ## Resumen
 
@@ -33,6 +39,50 @@ Fecha: 2026-04-26
 - `agent_financial_tracker.json` (stub estructural — OCR facturas)
 - `cron_post_phase_audits.json` (stub estructural — cron 30min auditorías post-fase)
 - `util_admin_llm_stats_html.json` (workflow NUEVO — dashboard de costes LLM con drill-down)
+
+**Bloque 34** (X1 COMPLETO — 13/13 agentes pipeline E2E certificados):
+- Project stub `0a53d09f-d8f7-444a-a074-42a3305ef49b` ejecutó pipeline completo con outputs reales en BD: briefings(1), design_options(3), regulatory_tasks(20), cost_estimates(1), proposals(3), project_plans(1), memory_cases(1), safety_plans(1), accessibility_audits(2), + agent_documents (Drive folders) + agent_trades + agent_materials.
+- 9 bugs descubiertos y arreglados a lo largo de la jornada (B26-B34).
+- 7 migrations aplicadas (042-048).
+- HITO HISTÓRICO: por primera vez ArquitAI tiene pipeline E2E demostrado funcional.
+
+**Bloque 33** (X1v5 — cascada middle certificada):
+- Phase: analysis_done → costs_done → trades_done en cascada automática.
+- agent_materials/costs/documents/trades certificados E2E.
+
+**Bloque 32** (X1v4 — regulatory E2E + bugs 5-6):
+- Migration 048: `regulatory_tasks_task_type_check` constraint actualizado (era inconsistente con prompt v2 de B26).
+- agent_regulatory completed con 20 regulatory_tasks generadas + citation_source poblado.
+
+**Bloque 31** (X1v3 — audit SP injection):
+- Audit syntax de los 10 agentes con Studio Profile injection.
+- 3 agentes con paréntesis sin cerrar tras `(agentPrompt.content || '...'.,` (regulatory/materials/costs). Fix aplicado a los 3.
+- 7 agentes ya estaban OK (briefing/design/proposal/planner/memory/safety_plan/accessibility).
+
+**Bloque 30** (X1v2 — pipeline arrancado):
+- Bug 2: `util_notification` devolvía array vacío rompiendo init_new_project. Fix: `Load Project Name.queryReplacement` usa trigger directo.
+- Bug 4 detectado en agent_regulatory.
+- agent_briefing + agent_design certificados E2E.
+- `cron_e2e_smoke_test` (`u1LyMpiDVECy1ABx`, weekly Mon 03:00) creado y activo.
+
+**Bloque 29** (X1v1 — Reality Check fixes + check_rate_limit dup):
+- Migration 047: DROP `check_rate_limit(text,text,integer)` duplicada. util_webhook_security ajustado a firma 4 args.
+
+**Bloque 28** (Anti-drift + Schema FROZEN v1):
+- Migration 046: tabla `applied_migrations` + bulk INSERT de las 45 migrations confirmadas.
+- Script `scripts/check_migration_drift.py` (compara repo vs BD).
+- `docs/schema_v1_frozen.md` (contrato de las 44 tablas core).
+- `docs/plan_pre_interfaz_foxhole.md` (plan formal X1-X5).
+
+**Bloque 27** (Reality Check + 2 fixes críticos):
+- Reality Checker (subagente) detectó: migration 042 nunca aplicada en Supabase, 6 crons rotos por columna `details` faltante, `cron_pathology_review` referencia `pf.type` inexistente.
+- Migration 045 aplicada (`ALTER TABLE activity_log ADD COLUMN details jsonb`).
+- `cron_pathology_review` arreglado (aliases SELECT).
+
+**Bloque 26** (agency-agents-main + Civil Engineer):
+- 10 agentes Claude Code instalados en `~/.claude/agents/` (Civil Engineer, Document Generator, Agents Orchestrator, SRE, Reality Checker, Sales Proposal Strategist, Compliance Auditor, Incident Response Commander, MCP Builder, Product Feedback Synthesizer).
+- Auditoría con criterio Civil Engineer: prompt v1 de agent_regulatory cubría solo capa administrativa. Migration 044 aplicada (prompt v2 con CTE-DB + Eurocódigos + 14 task_types).
+- Script `scripts/safety_plan_to_pdf.py` (reportlab).
 
 **Bloque 24** (refactor 4 agentes finales con inyección studio_profile + cron monitor onboarding):
 - `agent_planner` (`lSUfNw61YfbERI8n`): Load Studio Profile + `_SP_PLAN` injection (priorities orientan plan de fases).

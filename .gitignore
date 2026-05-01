@@ -24,6 +24,11 @@ node_modules/
 .npm/
 
 # ─────────────────────────────────────────────
+# Outputs generados por scripts (PDFs, CSVs, etc.)
+# ─────────────────────────────────────────────
+studio-multiagente/scripts/output/
+
+# ─────────────────────────────────────────────
 # Logs y datos temporales
 # ─────────────────────────────────────────────
 *.log

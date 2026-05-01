@@ -1,0 +1,127 @@
+{
+  "name": "api_alerts_global",
+  "_description": "GET /api/v1/alerts/global - feed de alertas del tenant (cross-projects). Lee v_alerts. Filtros severity y limit.",
+  "_status": "DRAFT - importar tras X3+X4+052_api_views.",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "api/v1/alerts/global",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "id": "ag-001",
+      "name": "GET /alerts/global"
+    },
+    {
+      "parameters": {
+        "workflowId": { "__rl": true, "value": "PLACEHOLDER_UTIL_JWT_VERIFY_ID", "mode": "id" },
+        "options": { "waitForSubWorkflow": true }
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 2,
+      "position": [480, 300],
+      "id": "ag-002",
+      "name": "util_jwt_verify"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            { "id": "ag-c1", "leftValue": "={{ $json.valid }}", "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true", "singleValue": true } }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [720, 300],
+      "id": "ag-003",
+      "name": "Auth OK?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json.code || 'AUTH_INVALID_TOKEN', message: $json._details || $json.code, request_id: 'req_' + Date.now() } }) }}",
+        "options": { "responseCode": "={{ $json.status || 401 }}" }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [960, 460],
+      "id": "ag-004",
+      "name": "Respond Auth Error"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT set_session_context($1::uuid, $2::uuid, $3)",
+        "options": { "queryReplacement": "={{ [$json.user_id, $json.tenant_id, $json.role] }}" }
+      },
+      "credentials": { "postgres": { "id": "PLACEHOLDER_POSTGRES_ID", "name": "Postgres account" } },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [960, 200],
+      "id": "ag-005",
+      "name": "Set Session Context"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM v_alerts WHERE ($1::text IS NULL OR severity = $1) AND (resolved_at IS NULL) ORDER BY CASE severity WHEN 'critical' THEN 1 WHEN 'warning' THEN 2 ELSE 3 END, created_at DESC LIMIT $2::int",
+        "options": {
+          "queryReplacement": "={{ [$('GET /alerts/global').first().json.query?.severity || null, Math.min(parseInt($('GET /alerts/global').first().json.query?.limit || '50'), 200)] }}"
+        }
+      },
+      "credentials": { "postgres": { "id": "PLACEHOLDER_POSTGRES_ID", "name": "Postgres account" } },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1200, 200],
+      "id": "ag-006",
+      "name": "Query v_alerts"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const items = $input.all().map(i => i.json);\nreturn [{ json: {\n  data: items.map(a => ({\n    id:           a.id,\n    project_id:   a.project_id,\n    type:         a.type,\n    severity:     a.severity,\n    title:        a.title,\n    message:      a.message,\n    created_at:   a.created_at,\n    resolved_at:  a.resolved_at\n  })),\n  meta: {\n    request_id: 'req_' + Math.random().toString(36).slice(2, 10),\n    timestamp:  new Date().toISOString(),\n    count:      items.length\n  }\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1440, 200],
+      "id": "ag-007",
+      "name": "Format Response"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": { "responseCode": 200 }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1680, 200],
+      "id": "ag-008",
+      "name": "Respond 200"
+    }
+  ],
+  "connections": {
+    "GET /alerts/global":  { "main": [[{ "node": "util_jwt_verify",     "type": "main", "index": 0 }]] },
+    "util_jwt_verify":     { "main": [[{ "node": "Auth OK?",            "type": "main", "index": 0 }]] },
+    "Auth OK?":            { "main": [
+      [{ "node": "Set Session Context", "type": "main", "index": 0 }],
+      [{ "node": "Respond Auth Error",  "type": "main", "index": 0 }]
+    ]},
+    "Set Session Context": { "main": [[{ "node": "Query v_alerts",      "type": "main", "index": 0 }]] },
+    "Query v_alerts":      { "main": [[{ "node": "Format Response",     "type": "main", "index": 0 }]] },
+    "Format Response":     { "main": [[{ "node": "Respond 200",         "type": "main", "index": 0 }]] }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "PLACEHOLDER_ERROR_HANDLER_ID"
+  },
+  "pinData": {}
+}

@@ -1,0 +1,17 @@
+# Dependencias para todos los scripts de studio-multiagente/scripts/
+#
+# Instalar con: pip install -r requirements.txt
+
+# safety_plan_to_pdf.py
+reportlab>=4.0.0
+psycopg[binary]>=3.1.0
+python-dotenv>=1.0.0
+
+# snapshot_workflows.py
+requests>=2.31.0
+
+# apply_x3_migrations.py
+# (ya cubierto por psycopg arriba)
+
+# check_migration_drift.py
+# (ya cubierto por psycopg arriba)

@@ -22,25 +22,33 @@ Todos los workflows API siguen el mismo flujo:
 
 | Archivo | Endpoint | View consumida |
 |---|---|---|
+| `util_jwt_verify.json` | (sub-workflow) | n/a — verifica JWT vía Supabase |
 | `api_me.json` | `GET /api/v1/me` | `v_my_profile` |
 | `api_projects_list.json` | `GET /api/v1/projects` | `v_project_summary` |
 | `api_project_detail.json` | `GET /api/v1/projects/{id}` | `v_project_detail` |
+| `api_project_timeline.json` | `GET /api/v1/projects/{id}/timeline` | `v_timeline` |
+| `api_alerts_global.json` | `GET /api/v1/alerts/global` | `v_alerts` |
 | `api_metrics_dashboard.json` | `GET /api/v1/metrics/dashboard` | `v_dashboard_metrics` |
 
 ## Pendientes (no construidos aún)
 
 Cuando se haga X5 efectivo, replicar el patrón para:
 
-- `GET /api/v1/projects/{id}/timeline` (consume `v_timeline`)
 - `GET /api/v1/projects/{id}/agent-runs` (consume `v_agent_runs`)
-- `GET /api/v1/projects/{id}/alerts` (consume `v_alerts`)
+- `GET /api/v1/projects/{id}/alerts` (consume `v_alerts` filtrado por project_id)
 - `POST /api/v1/projects/{id}/approve/{approval_id}`
 - `GET /api/v1/trades` (consume `v_trade_overview`)
 - `GET /api/v1/materials/{project_id}`
-- `GET /api/v1/alerts/global` (consume `v_alerts`)
 - `POST /api/v1/projects` (crear proyecto — wrapper sobre `init_new_project`)
 - `PATCH /api/v1/studio-profile`
 - `GET /api/v1/studio-profile`
+
+Auth:
+- `POST /api/v1/auth/login` (wrapper Supabase signInWithPassword)
+- `POST /api/v1/auth/logout`
+- `POST /api/v1/auth/refresh`
+- `POST /api/v1/users/invite` (sólo super_admin/architect)
+- `GET /login` (HTML form mínimo)
 
 ## Antes de importar
 
@@ -50,13 +58,19 @@ Cuando se haga X5 efectivo, replicar el patrón para:
 4. Verificar que el JWT viene con custom claims `tenant_id` + `role` (configurar Auth Hook en Supabase).
 5. Smoke test cada endpoint con curl + JWT válido.
 
-## Util compartido (a extraer)
+## Util compartido `util_jwt_verify`
 
-El nodo "Decode JWT" se duplica en cada workflow. Refactor sugerido:
+Los workflows nuevos (`api_alerts_global`, `api_project_timeline`) usan
+`util_jwt_verify` como sub-workflow vía `executeWorkflow`.
 
-- Crear `util_jwt_decode` como sub-workflow.
-- Cada API workflow llama `executeWorkflow` → `util_jwt_decode` con el header.
-- Reduce duplicación + un solo punto de cambio si Supabase rota la firma.
+Los workflows iniciales (`api_me`, `api_projects_list`, `api_project_detail`,
+`api_metrics_dashboard` — todos B38) tienen el decode inline. **TODO**: cuando
+MCP vuelva, refactorizar esos 4 para que también usen `util_jwt_verify`.
+
+Beneficios:
+- Reduce ~30 líneas de JS duplicado por workflow.
+- Un solo punto de cambio si Supabase rota la firma o cambia formato.
+- Validación contra `/auth/v1/user` real, no sólo decode local.
 
 ## Test manual con curl
 

@@ -1,0 +1,115 @@
+{
+  "name": "util_jwt_verify",
+  "_description": "Sub-workflow que valida JWT de Supabase via HTTP a /auth/v1/user. Devuelve { valid, user_id, tenant_id, role, email } o { valid:false, code, status }.",
+  "_status": "DRAFT - importar tras X4. Usar como executeWorkflow desde cualquier api_*.",
+  "_input_schema": {
+    "authorization": "Bearer <JWT> (header tal cual)"
+  },
+  "_output_schema": {
+    "valid":     "boolean",
+    "user_id":   "uuid (si valid)",
+    "tenant_id": "uuid (si valid y custom claim presente)",
+    "role":      "string (architect|colaborador|super_admin)",
+    "email":     "string",
+    "code":      "ERROR_CODE (si !valid)",
+    "status":    "HTTP status code sugerido"
+  },
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [240, 300],
+      "id": "ujv-001",
+      "name": "Trigger"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const auth = ($input.first().json.authorization || '').toString();\nif (!auth.startsWith('Bearer ')) {\n  return [{ json: { valid: false, code: 'AUTH_MISSING_TOKEN', status: 401 } }];\n}\nconst token = auth.slice(7);\nif (!token || token.split('.').length !== 3) {\n  return [{ json: { valid: false, code: 'AUTH_INVALID_TOKEN', status: 401 } }];\n}\n// Decode payload sin verificar firma - solo para early reject de expirados\ntry {\n  const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'));\n  if (payload.exp && Date.now()/1000 > payload.exp) {\n    return [{ json: { valid: false, code: 'AUTH_EXPIRED', status: 401 } }];\n  }\n  return [{ json: { token, payload_preview: { sub: payload.sub, exp: payload.exp } } }];\n} catch (e) {\n  return [{ json: { valid: false, code: 'AUTH_INVALID_TOKEN', status: 401, _details: e.message } }];\n}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 300],
+      "id": "ujv-002",
+      "name": "Pre-decode JWT"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            { "id": "ujv-c1",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": "",
+              "operator": { "type": "boolean", "operation": "false", "singleValue": true } }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [720, 300],
+      "id": "ujv-003",
+      "name": "Has Token?"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://YOUR_SUPABASE_PROJECT.supabase.co/auth/v1/user",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $json.token }}" },
+            { "name": "apikey",        "value": "PLACEHOLDER_SUPABASE_ANON_KEY" }
+          ]
+        },
+        "options": {
+          "response": { "response": { "responseFormat": "json", "neverError": true } },
+          "timeout": 10000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [960, 200],
+      "id": "ujv-004",
+      "name": "Supabase /auth/v1/user"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const resp = $input.first().json;\nconst pre  = $('Pre-decode JWT').first().json;\n\n// neverError:true = revisar status manualmente\nif (resp.statusCode && resp.statusCode >= 400) {\n  return [{ json: {\n    valid:  false,\n    code:   'AUTH_INVALID_TOKEN',\n    status: 401,\n    _details: resp.message || 'Supabase rechazo el JWT'\n  }}];\n}\n\nconst user = resp.body || resp;\nif (!user || !user.id) {\n  return [{ json: { valid: false, code: 'AUTH_INVALID_TOKEN', status: 401 } }];\n}\n\n// Las custom claims viven en el JWT decoded, no en /auth/v1/user, asi que las leemos del token original\nlet tenantId = null;\nlet role     = 'architect';\nlet fullName = user.user_metadata?.full_name || null;\ntry {\n  const payload = JSON.parse(Buffer.from(pre.token.split('.')[1], 'base64url').toString('utf8'));\n  tenantId = payload.tenant_id || null;\n  role     = payload.role      || role;\n  fullName = payload.full_name || fullName;\n} catch(e) {}\n\nif (!tenantId) {\n  return [{ json: {\n    valid:  false,\n    code:   'AUTH_NO_TENANT',\n    status: 403,\n    _details: 'JWT valido pero sin tenant_id custom claim. Auth Hook no configurado o user sin perfil activo.',\n    user_id: user.id,\n    email:   user.email\n  }}];\n}\n\nreturn [{ json: {\n  valid:     true,\n  user_id:   user.id,\n  email:     user.email,\n  tenant_id: tenantId,\n  role,\n  full_name: fullName\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1200, 200],
+      "id": "ujv-005",
+      "name": "Format Response"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Pasthrough del error generado en Pre-decode (token missing/expired/malformed)\nreturn [{ json: $input.first().json }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [960, 400],
+      "id": "ujv-006",
+      "name": "Pass Pre-decode Error"
+    }
+  ],
+  "connections": {
+    "Trigger":               { "main": [[{ "node": "Pre-decode JWT",   "type": "main", "index": 0 }]] },
+    "Pre-decode JWT":        { "main": [[{ "node": "Has Token?",        "type": "main", "index": 0 }]] },
+    "Has Token?":            { "main": [
+      [{ "node": "Pass Pre-decode Error",     "type": "main", "index": 0 }],
+      [{ "node": "Supabase /auth/v1/user",    "type": "main", "index": 0 }]
+    ]},
+    "Supabase /auth/v1/user":{ "main": [[{ "node": "Format Response",   "type": "main", "index": 0 }]] }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "PLACEHOLDER_ERROR_HANDLER_ID"
+  },
+  "pinData": {}
+}

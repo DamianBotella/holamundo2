@@ -1,0 +1,172 @@
+{
+  "name": "api_project_timeline",
+  "_description": "GET /api/v1/projects/{id}/timeline - eventos cronologicos del proyecto. Lee v_timeline. Cursor pagination.",
+  "_status": "DRAFT - importar tras X3+X4+052_api_views.",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "api/v1/projects/:id/timeline",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "id": "tl-001",
+      "name": "GET timeline"
+    },
+    {
+      "parameters": {
+        "workflowId": { "__rl": true, "value": "PLACEHOLDER_UTIL_JWT_VERIFY_ID", "mode": "id" },
+        "options": { "waitForSubWorkflow": true }
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 2,
+      "position": [480, 300],
+      "id": "tl-002",
+      "name": "util_jwt_verify"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            { "id": "tl-c1", "leftValue": "={{ $json.valid }}", "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true", "singleValue": true } }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [720, 300],
+      "id": "tl-003",
+      "name": "Auth OK?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json.code || 'AUTH_INVALID_TOKEN', message: $json._details || $json.code, request_id: 'req_' + Date.now() } }) }}",
+        "options": { "responseCode": "={{ $json.status || 401 }}" }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [960, 460],
+      "id": "tl-004",
+      "name": "Respond Auth Error"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const projectId = $('GET timeline').first().json.params?.id;\nconst auth      = $input.first().json;\nconst query     = $('GET timeline').first().json.query || {};\n\nif (!projectId || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(projectId)) {\n  return [{ json: { _error: 'VALIDATION_FAILED', _status: 400, _details: 'project id (UUID) requerido' } }];\n}\n\nconst limit = Math.min(parseInt(query.limit || '50'), 500);\nlet cursorBefore = null;\nif (query.cursor) {\n  try { cursorBefore = JSON.parse(Buffer.from(query.cursor, 'base64url').toString('utf8')); } catch {}\n}\n\nreturn [{ json: {\n  user_id:    auth.user_id,\n  tenant_id:  auth.tenant_id,\n  role:       auth.role,\n  project_id: projectId,\n  limit,\n  cursor_before: cursorBefore,\n  request_id: 'req_' + Math.random().toString(36).slice(2, 10)\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [960, 200],
+      "id": "tl-005",
+      "name": "Validate Params"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            { "id": "tl-c2", "leftValue": "={{ $json._error }}", "rightValue": "",
+              "operator": { "type": "string", "operation": "exists" } }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1200, 200],
+      "id": "tl-006",
+      "name": "Validation OK?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details, request_id: 'req_' + Date.now() } }) }}",
+        "options": { "responseCode": "={{ $json._status || 400 }}" }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1440, 360],
+      "id": "tl-007",
+      "name": "Respond Validation Error"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT set_session_context($1::uuid, $2::uuid, $3)",
+        "options": { "queryReplacement": "={{ [$json.user_id, $json.tenant_id, $json.role] }}" }
+      },
+      "credentials": { "postgres": { "id": "PLACEHOLDER_POSTGRES_ID", "name": "Postgres account" } },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1440, 100],
+      "id": "tl-008",
+      "name": "Set Session Context"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM v_timeline WHERE project_id = $1::uuid AND ($2::timestamptz IS NULL OR timestamp < $2::timestamptz) ORDER BY timestamp DESC LIMIT $3::int",
+        "options": {
+          "queryReplacement": "={{ [$('Validate Params').first().json.project_id, $('Validate Params').first().json.cursor_before?.ts || null, $('Validate Params').first().json.limit + 1] }}"
+        }
+      },
+      "credentials": { "postgres": { "id": "PLACEHOLDER_POSTGRES_ID", "name": "Postgres account" } },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1680, 100],
+      "id": "tl-009",
+      "name": "Query v_timeline"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const items   = $input.all().map(i => i.json);\nconst params  = $('Validate Params').first().json;\nconst limit   = params.limit;\n\nconst hasMore = items.length > limit;\nconst page    = hasMore ? items.slice(0, limit) : items;\n\nlet cursorNext = null;\nif (hasMore && page.length > 0) {\n  const last = page[page.length - 1];\n  cursorNext = Buffer.from(JSON.stringify({ id: last.id, ts: last.timestamp })).toString('base64url');\n}\n\nreturn [{ json: {\n  data: page.map(t => ({\n    id:             t.id,\n    timestamp:      t.timestamp,\n    agent_name:     t.agent_name,\n    action:         t.action,\n    status:         t.status,\n    output_summary: t.output_summary,\n    details:        t.details || {}\n  })),\n  meta: {\n    request_id: params.request_id,\n    timestamp:  new Date().toISOString(),\n    pagination: {\n      cursor_next:     cursorNext,\n      cursor_prev:     null,\n      has_more:        hasMore,\n      total_estimated: page.length + (hasMore ? 1 : 0)\n    }\n  }\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1920, 100],
+      "id": "tl-010",
+      "name": "Format Response"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": { "responseCode": 200 }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [2160, 100],
+      "id": "tl-011",
+      "name": "Respond 200"
+    }
+  ],
+  "connections": {
+    "GET timeline":          { "main": [[{ "node": "util_jwt_verify",         "type": "main", "index": 0 }]] },
+    "util_jwt_verify":       { "main": [[{ "node": "Auth OK?",                "type": "main", "index": 0 }]] },
+    "Auth OK?":              { "main": [
+      [{ "node": "Validate Params",        "type": "main", "index": 0 }],
+      [{ "node": "Respond Auth Error",     "type": "main", "index": 0 }]
+    ]},
+    "Validate Params":       { "main": [[{ "node": "Validation OK?",          "type": "main", "index": 0 }]] },
+    "Validation OK?":        { "main": [
+      [{ "node": "Respond Validation Error", "type": "main", "index": 0 }],
+      [{ "node": "Set Session Context",      "type": "main", "index": 0 }]
+    ]},
+    "Set Session Context":   { "main": [[{ "node": "Query v_timeline",        "type": "main", "index": 0 }]] },
+    "Query v_timeline":      { "main": [[{ "node": "Format Response",         "type": "main", "index": 0 }]] },
+    "Format Response":       { "main": [[{ "node": "Respond 200",             "type": "main", "index": 0 }]] }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "PLACEHOLDER_ERROR_HANDLER_ID"
+  },
+  "pinData": {}
+}

@@ -61,18 +61,22 @@
 
 ---
 
-### Sesión X3 — Multi-tenant real con RLS Postgres (~12-15h) 🔴 BLOQUEANTE
+### Sesión X3 — Multi-tenant real con RLS Postgres (~12-15h) 🔴 BLOQUEANTE — DISEÑO DRAFT (2026-05-01)
+
+**Estado**: 📐 diseño completo en [`docs/x3_multi_tenant_design.md`](x3_multi_tenant_design.md) + 3 migrations en `.draft` (no aplicadas).
 
 **Por qué bloquea UI**: la UI necesita saber qué estudio está logueado en cada request. Hoy es mono-tenant. Si construyes UI mono-tenant y luego retrofiteo multi-tenant, rehaces 80% de la UI.
 
-**Qué hacer**:
-1. Migration 047 — activar RLS en tablas core con `USING (tenant_id = current_tenant_id())`. Tablas: projects, clients, briefings, design_options, regulatory_tasks, materials, agent_executions, approvals, activity_log, project_intelligence, studio_profile, etc.
-2. Función `current_tenant_id()` lee de `app.current_tenant_id` (variable de sesión) o de un JWT claim.
-3. Cada workflow n8n al arrancar setea la variable de sesión Postgres: `SET LOCAL app.current_tenant_id = '...';`.
-4. Tabla `tenants` con `id`, `name`, `created_at`, `subscription_tier`.
-5. Linkear `studio_profile.tenant_id`, `projects.tenant_id`, etc. (ya existen las columnas en muchas tablas).
-6. Verificar que un INSERT/SELECT desde sesión sin `tenant_id` falla.
-7. Test: crear 2 tenants, datos en cada uno, verificar aislamiento.
+**Qué se ha diseñado**:
+1. `049_multi_tenant_extend.sql.draft` — añade `tenant_id` a 8 tablas raíz (studio_profile, onboarding_sessions, supplier_catalog, project_notes, contract_templates, certificates, contracts, invoices). Backfill al tenant baseline.
+2. `050_rls_enable.sql.draft` — habilita RLS en 30+ tablas. Estrategia híbrida: tablas raíz con `tenant_id` directo, tablas pipeline (briefings, design_options, etc.) heredan via subquery a `projects`. Helpers `set_tenant_context()`, `resolve_tenant_from_project()`, `is_super_admin()`.
+3. `051_user_profiles_auth.sql.draft` — tabla `user_profiles` linker auth.users <-> tenants. Roles architect/colaborador/super_admin. Vista `v_my_profile`. (Se aplica en X4).
+
+**Pendiente para ejecutar**:
+- Auditar y actualizar 13 agentes + 5 utils + 30+ crones para usar `set_tenant_context()` al inicio (4-6h).
+- Aplicar 049 → smoke test → aplicar 050 → smoke test (3h).
+- Crear 2º tenant test + verificar aislamiento (1h).
+- Documentar `docs/e2e_evidence_x3_<fecha>.md`.
 
 **Producto**: backend multi-tenant real. Ya soporta varios estudios sin retrofit.
 
@@ -141,7 +145,7 @@ Una vez X1-X5 completos:
 |---|---|---|---|---|---|
 | X1 | E2E real | 5h | 🔴 | ✅ B30-B34 | Confianza certificada — 13/13 agentes E2E |
 | X2 | Orchestrator audit + cleanup | 3h | 🟡 | pendiente | Pipeline limpio |
-| X3 | Multi-tenant + RLS | 12-15h | 🔴 | pendiente | Backend multi-cliente |
+| X3 | Multi-tenant + RLS | 12-15h | 🔴 | 📐 diseño DRAFT (B35) | Backend multi-cliente |
 | X4 | Auth + sesiones | 6-8h | 🔴 | pendiente | Login + roles |
 | X5 | API REST contractual | 10-12h | 🔴 | pendiente (boceto OpenAPI iniciado) | Contrato estable para UI |
 | X6+ | Foxhole UI | varias sesiones | — | pendiente | Producto vendible visualmente |

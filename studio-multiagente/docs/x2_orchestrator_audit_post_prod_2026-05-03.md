@@ -155,18 +155,20 @@ Resumen:
 
 **Decisión bloqueante (Damián):** elegir variante A o B + ejecutar query de auditoría sobre Supabase para entender el universo actual de approvals pendientes.
 
-### PA-3: error handling en 30 executeWorkflow
+### PA-3: error handling en 30 executeWorkflow — APLICADO ✅ (B46+B47)
 
-**Plan ejecutable detallado:** [`pa3_error_handling_plan.md`](pa3_error_handling_plan.md)
+**B46:** Subgraph reusable Format/Log/Respond Agent Error añadido al orchestrator. 11 ramas error de los 11 Run agent_X convergen ahí. **E2E test** validado (forced throw en agent_briefing → 365ms → path completo → INSERT activity_log → Respond `{statusCode:500}`). [`pa3_error_handling_plan.md`](pa3_error_handling_plan.md) sec 2-4.
 
-Resumen:
-- 3 nodos nuevos en `main_orchestrator`: `Format Agent Error Context` (Code) + `Log Agent Error` (Postgres) + `Respond Agent Error` (Code/respondToWebhook).
-- 27 operaciones MCP listas para aplicar en una sola llamada atómica.
-- Las 11 ramas error de los 11 `Run agent_X` convergen en el subgraph común.
-- Plan de validación + rollback granular en el doc.
-- Replicación al resto de los 18 executeWorkflow (~3h) tras certificar el orchestrator.
+**B47 — replicación al resto:** decisión pragmática tras inspección. Solo se replica a entrypoints HTTP webhook con cliente externo. Sub-workflows agente NO replican porque sus failures ya los captura el PA-3 del orchestrator (rama error de cada Run agent_X).
 
-**Decisión bloqueante (Damián):** revisar el JSON de los 3 nodos en sección 2 del plan + confirmar variante de Respond Agent Error (Code statusCode vs respondToWebhook 500 con cambio en webhook entry).
+| Workflow | Tipo | Estado PA-3 |
+|---|---|---|
+| `main_orchestrator` | Webhook entry cliente | ✅ B46 — subgraph completo |
+| `init_new_project` | Webhook entry cliente | ✅ B47 — Webhook Security + Call util_file_organizer → Respond 500. Call util_notification → Log warning + continuar 201 (email no crítico) |
+| `util_consultation` | Sub-workflow (cron) | ✅ B47 — Send Conflict Alert → Log warning + continuar |
+| `agent_*` (11 sub-workflows) | Sub-workflow del orchestrator | NO replicado — failures suben al PA-3 del padre |
+
+**Justificación de no replicar a agent_X:** si Call LLM dentro de un agente lanza throw, el sub-workflow termina con exception → padre `Run agent_X` (con `onError: continueErrorOutput` aplicado en B46) lo captura en su rama error → Format Agent Error Context → Log Agent Error → Respond Agent Error. Replicar PA-3 dentro de cada agent_X duplicaría logs y aumentaría complejidad sin valor.
 
 ### PA-4: advisory lock en Load Project
 

@@ -2,6 +2,45 @@
 
 Histórico cronológico de hitos del sistema. Generado a partir de git log.
 
+## 2026-05-03 — Bloque 47 (PA-3 replicación a entrypoints HTTP)
+
+Replicación PA-3 a los 2 entrypoints HTTP webhook restantes con cliente externo.
+Decisión pragmática tras inspección: NO replicar a los 11 sub-workflows agente
+porque sus failures ya los captura el PA-3 del orchestrator (rama error de cada
+Run agent_X con onError continueErrorOutput aplicado en B46). Replicar dentro
+de cada agent_X duplicaría logs sin valor adicional.
+
+**init_new_project** (13 ops):
+- 4 nodos nuevos: Format Sub Error (Code), Log Sub Error (Postgres status=error),
+  Respond 500 Error (respondToWebhook), Log Notification Error (Postgres status=warning).
+- onError continueErrorOutput en Webhook Security, Call 'util_file_organizer',
+  Call 'util_notification'.
+- Ramas error: Webhook Security[1] + util_file_organizer[1] -> Format -> Log
+  -> Respond 500 (proyecto sin Drive folders es inconsistente, alerta cliente).
+- util_notification[1] -> Log Notification Error (warning) -> Prepare Orchestrator
+  Payload (continuar al Respond 201 porque email es no crítico, proyecto SI se creó).
+- Fix: optional chaining (?.) removido de queryReplacement (n8n expressions no
+  lo soportan; solo permitido en jsCode de Code nodes).
+
+**util_consultation** (4 ops):
+- 1 nodo nuevo: Log Alert Error (Postgres status=warning).
+- onError continueErrorOutput en Send Conflict Alert.
+- Send Conflict Alert[1] -> Log Alert Error -> Return Result (continuar al éxito
+  porque la alert email es no crítica, la consulta YA fue encolada).
+
+Beneficio inmediato verificado en vivo: el bug Drive expirada que se descubrió
+durante la sesión (init_new_project respondió 200 al cliente pero el proyecto
+quedó sin Drive folders) ahora devolveria 500 con error claro y log en
+activity_log.
+
+X2 al cierre B47:
+- Aplicados: PA-1, PA-3 (orchestrator + 2 entrypoints HTTP), PA-5 (24/26 INSERTs),
+  PA-6 (snapshots), PA-7, PA-8.
+- Descartado: PA-2.
+- Pendiente: PA-4 (esperando Damian aplique migración 054 en Supabase).
+
+---
+
 ## 2026-05-03 — Bloque 45 (X2 cierre): PA-8 aplicado
 
 Continuación de la sesión autónoma B44 sobre el orchestrator de producción.

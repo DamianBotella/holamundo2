@@ -128,12 +128,14 @@ git log --oneline -20
 | B42 | 62e6c79 | error_handler v2 | error_handler_v2.json + v_recent_errors + spec |
 | B43 | 1e33416 | Cierre jornada | ESTADO_PROYECTO + 3 workflows API + requirements |
 
-### Jornada 2026-05-03 (B44-B45)
+### Jornada 2026-05-03 (B44-B47)
 
 | Commit | Bloque | Producto |
 |---|---|---|
 | B44 | X2 sobre PROD (sesión autónoma) | Snapshot 19 workflows críticos + PA-5 a 23 INSERTs activity_log + PA-7 elimina 2 huérfanos + doc audit_post_prod |
 | B45 | X2 cierre PA-8 | Branch false en `Regulatory Complete?` (Log Regulatory Pending + Respond Regulatory Pending). main_orchestrator vuelve a 87 nodos. |
+| B46 | PA-1 + PA-3 + E2E + Drive | Variant A approval_type filter + 27 ops orchestrator + E2E forzado validado (365ms, path error completo). Bug Drive credencial descubierto y arreglado por Damián. |
+| B47 | PA-3 replicación entrypoints HTTP | init_new_project (13 ops) + util_consultation (4 ops). Sub-workflows agente NO replican (cubiertos por PA-3 del orchestrator) |
 
 ---
 

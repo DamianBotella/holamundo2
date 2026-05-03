@@ -1,0 +1,514 @@
+{
+  "name": "agent_safety_plan",
+  "active": true,
+  "nodes": [
+    {
+      "id": "as-01",
+      "name": "Receive Project",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    },
+    {
+      "id": "as-02",
+      "name": "Load Project Data",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        250,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT p.id, p.name as project_name, p.project_type, p.budget_target, p.location_address, p.location_city, p.location_province, p.property_type, p.property_area_m2, c.name as client_name, c.email as client_email, (SELECT row_to_json(b.*) FROM briefings b WHERE b.project_id = p.id AND b.status = 'approved' ORDER BY b.created_at DESC LIMIT 1) as briefing, (SELECT row_to_json(d.*) FROM design_options d WHERE d.project_id = p.id AND d.is_selected = true LIMIT 1) as design_option, (SELECT row_to_json(ce.*) FROM cost_estimates ce WHERE ce.project_id = p.id ORDER BY ce.version DESC LIMIT 1) as cost_estimate, (SELECT json_agg(json_build_object('trade_type', tr.trade_type, 'scope_description', tr.scope_description) ORDER BY tr.trade_type) FROM trade_requests tr WHERE tr.project_id = p.id AND tr.status = 'prepared') as trade_assignments, (SELECT row_to_json(pp.*) FROM project_plans pp WHERE pp.project_id = p.id ORDER BY pp.created_at DESC LIMIT 1) as project_plan FROM projects p JOIN clients c ON c.id = p.client_id WHERE p.id = $1::uuid",
+        "options": {
+          "queryReplacement": "={{ [$json.project_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "as-03",
+      "name": "Load Safety Prompt",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        500,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT content, model_recommended, temperature FROM agent_prompts WHERE agent_name = 'agent_safety_plan' AND prompt_type = 'system' AND is_active = true LIMIT 1",
+        "options": {
+          "alwaysOutputData": true
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "as-04",
+      "name": "Start Execution",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        750,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO agent_executions (project_id, agent_name, status, started_at) VALUES ($1::uuid, 'agent_safety_plan', 'running', NOW()) RETURNING id",
+        "options": {
+          "queryReplacement": "={{ [$('Load Project Data').first().json.id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "as-05",
+      "name": "Build Safety Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1000,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const project = $('Load Project Data').first().json;\nconst prompt = $('Load Safety Prompt').first().json;\nconst executionId = $input.first().json.id;\n\nconst briefing = typeof project.briefing === 'string' ? JSON.parse(project.briefing) : (project.briefing || {});\nconst design = typeof project.design_option === 'string' ? JSON.parse(project.design_option) : (project.design_option || {});\nconst costs = typeof project.cost_estimate === 'string' ? JSON.parse(project.cost_estimate) : (project.cost_estimate || {});\nconst plan = typeof project.project_plan === 'string' ? JSON.parse(project.project_plan) : (project.project_plan || {});\nconst trades = Array.isArray(project.trade_assignments) ? project.trade_assignments : [];\n\nconst phasesText = (Array.isArray(plan.phases) ? plan.phases : []).map(p => `${p.order || '?'}. ${p.phase_name || p.name} (${p.duration_weeks || '?'} sem, especialidad: ${p.specialty || '?'})`).join('\\n');\nconst tradesText = trades.map(t => `- ${t.trade_type}: ${t.scope_description || 'pendiente'}`).join('\\n');\nconst objectives = Array.isArray(briefing.objectives) ? briefing.objectives.join('; ') : '';\nconst constraints = Array.isArray(briefing.constraints) ? briefing.constraints.join('; ') : '';\nconst pemTotal = costs.total_estimated || 'no estimado';\nconst durationWeeks = plan.total_duration_days ? Math.round(plan.total_duration_days / 7) : '?';\n\nconst prompt_user = `Genera el documento de Seguridad y Salud para este proyecto.\n\nPROYECTO: ${project.project_name}\nTipo: ${project.project_type} | Área: ${project.property_area_m2} m² | Tipo propiedad: ${project.property_type || 'no especificado'}\nUbicación: ${project.location_address || ''}, ${project.location_city}, ${project.location_province}\nPEM estimado: ${pemTotal}€\nDuración: ${durationWeeks} semanas\n\nDISEÑO ELEGIDO: ${design.title || 'no especificado'}\n${design.description ? 'Descripción: ' + design.description : ''}\n\nGREMIOS:\n${tradesText || 'No definidos aún'}\n\nFASES DEL PLAN:\n${phasesText || 'Plan no generado'}\n\nOBJETIVOS TÉCNICOS: ${objectives || 'no especificados'}\nRESTRICCIONES DETECTADAS: ${constraints || 'ninguna'}\n\nTipo de inmueble: ${project.property_type}. Año del edificio: PROBABLEMENTE pre-2002 (común en reforma) — evaluar amianto en bajantes/cubierta antes de demolición.\n\nGenera el EBSS o PSS según RD 1627/1997 art. 4 (decide tú según los datos del proyecto). Output JSON exacto según el esquema.`;\n\n// === STUDIO PROFILE INJECTION (B24) ===\nconst _studio = $('Load Studio Profile').first().json || {};\nfunction _safeStudio(v){ if(v==null)return null; if(typeof v==='string'){try{return JSON.parse(v);}catch(e){return v;}} return v; }\nconst _id=_safeStudio(_studio.identity)||{},_priorities=_safeStudio(_studio.priorities)||[];\nconst _SP_SAFE_LINES=[];\n_SP_SAFE_LINES.push('Estudio: '+(_id.nombre_estudio||'estudio')+' en '+(_id.ciudad||'Espana')+'.');\n_SP_SAFE_LINES.push('PRIORIDADES (la #1 deberia ser seguridad estructural; usa estas para ponderar riesgos):');\n(_priorities||[]).forEach(p=>_SP_SAFE_LINES.push((p.orden||'?')+'. '+(p.prioridad||'')));\nconst _SP_SAFE=_SP_SAFE_LINES.join('\\n');\n// === END STUDIO PROFILE INJECTION ===\nconst systemPromptToUse = _SP_SAFE + '\\n\\n' + ((prompt && prompt.content) ? prompt.content : 'Eres CSS y generas EBSS/PSS según RD 1627/1997. Responde solo JSON.');\n\nreturn [{ json: {\n  execution_id: executionId,\n  project_id: project.id,\n  project_name: project.project_name,\n  prompt_system: systemPromptToUse,\n  prompt_user,\n  model: 'gpt-4o',\n  temperature: 0.2,\n  agent_name: 'agent_safety_plan'\n}}];"
+      }
+    },
+    {
+      "id": "as-06",
+      "name": "Call LLM",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.1,
+      "position": [
+        1250,
+        300
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "JoKqGZ8pDzhJohV2",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "as-07",
+      "name": "Parse Safety Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1500,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const llm = $input.first().json;\nconst project = $('Load Project Data').first().json;\nconst built = $('Build Safety Prompt').first().json;\nconst text = llm.text || '';\n\nlet parsed = {};\nlet parseError = null;\n\ntry {\n  const m = text.match(/\\{[\\s\\S]*\\}/);\n  if (m) parsed = JSON.parse(m[0]);\n  else throw new Error('No JSON found in LLM response');\n} catch (e) {\n  parseError = e.message;\n  parsed = {\n    document_type: 'EBSS',\n    document_type_justification: 'Generación automática fallida — usar plantilla manual',\n    project_summary: project.project_name + ' — revisar manualmente',\n    applicable_regulations: ['RD 1627/1997', 'Ley 31/1995 PRL'],\n    phases_with_risks: [],\n    general_collective_protections: [],\n    general_epis: [],\n    emergency_protocol: {},\n    hygiene_facilities: [],\n    simultaneous_activities: [],\n    training_required: [],\n    medical_surveillance: '',\n    recommendations_to_architect: ['Generar manualmente — error en LLM: ' + parseError]\n  };\n}\n\nreturn [{ json: {\n  execution_id: built.execution_id,\n  project_id: project.id,\n  project_name: project.project_name,\n  document_type: parsed.document_type || 'EBSS',\n  content_json: JSON.stringify(parsed),\n  parse_error: parseError\n}}];"
+      }
+    },
+    {
+      "id": "as-08",
+      "name": "Save Draft Safety Plan",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1750,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO safety_plans (project_id, version, document_type, content_json, status, execution_id, exec_status) VALUES ($1::uuid, 1, $2, $3::jsonb, 'draft', $4::uuid, 'draft') RETURNING id",
+        "options": {
+          "queryReplacement": "={{ [$json.project_id, $json.document_type, $json.content_json, $json.execution_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "as-09",
+      "name": "Build Doc Content",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2000,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const parse = $('Parse Safety Response').first().json;\nconst project = $('Load Project Data').first().json;\nconst draft = $input.first().json;\nconst content = JSON.parse(parse.content_json);\n\nconst lines = [];\nlines.push(content.document_type + ' — ' + project.project_name);\nlines.push('');\nlines.push('Tipo de documento: ' + content.document_type);\nlines.push('Justificación: ' + (content.document_type_justification || ''));\nlines.push('');\nlines.push('1. RESUMEN DEL PROYECTO');\nlines.push(content.project_summary || '');\nlines.push('Cliente: ' + (project.client_name || '?'));\nlines.push('Ubicación: ' + [project.location_address, project.location_city, project.location_province].filter(Boolean).join(', '));\nlines.push('Superficie: ' + (project.property_area_m2 || '?') + ' m²');\nlines.push('');\nlines.push('2. NORMATIVA APLICABLE');\n(content.applicable_regulations || []).forEach(r => lines.push('  • ' + r));\nlines.push('');\nlines.push('3. RIESGOS POR FASE');\n(content.phases_with_risks || []).forEach(ph => {\n  lines.push('--- Fase ' + (ph.phase_order || '?') + ': ' + (ph.phase_name || '?') + ' ---');\n  lines.push('Trabajadores simultáneos estimados: ' + (ph.workers_simultaneous || '?'));\n  lines.push('');\n  (ph.specific_risks || []).forEach(r => {\n    lines.push('  RIESGO: ' + r.risk);\n    lines.push('    Severidad: ' + r.severity + ' | Probabilidad: ' + r.probability);\n    lines.push('    Medidas preventivas:');\n    (r.preventive_measures || []).forEach(m => lines.push('      - ' + m));\n    lines.push('    Protecciones colectivas:');\n    (r.collective_protections || []).forEach(p => lines.push('      - ' + p));\n    lines.push('    EPIs requeridos:');\n    (r.epis_required || []).forEach(e => lines.push('      - ' + e));\n    lines.push('');\n  });\n});\nlines.push('4. PROTECCIONES COLECTIVAS GENERALES');\n(content.general_collective_protections || []).forEach(p => lines.push('  • ' + p));\nlines.push('');\nlines.push('5. EPIs GENERALES OBLIGATORIOS');\n(content.general_epis || []).forEach(e => lines.push('  • ' + e));\nlines.push('');\nlines.push('6. PROTOCOLO DE EMERGENCIA');\nconst ep = content.emergency_protocol || {};\nlines.push('Botiquín ubicado en: ' + (ep.first_aid_kit_location || 'a definir'));\nlines.push('Contactos de emergencia: ' + ((ep.emergency_contacts || []).join(', ') || '112'));\nlines.push('Ruta de evacuación: ' + (ep.evacuation_route || 'a definir'));\nlines.push('Hospital más cercano: ' + (ep.nearest_hospital || 'a definir'));\nlines.push('');\nlines.push('7. INSTALACIONES DE HIGIENE');\n(content.hygiene_facilities || []).forEach(f => lines.push('  • ' + f));\nlines.push('');\nif ((content.simultaneous_activities || []).length > 0) {\n  lines.push('8. CONCURRENCIA DE ACTIVIDADES (art. 24 LPRL)');\n  content.simultaneous_activities.forEach(s => {\n    lines.push('  • ' + s.phase_a + ' + ' + s.phase_b + ' → ' + s.coordination_required);\n  });\n  lines.push('');\n}\nlines.push('9. FORMACIÓN PRL REQUERIDA');\n(content.training_required || []).forEach(t => lines.push('  • ' + t));\nlines.push('');\nlines.push('10. VIGILANCIA MÉDICA');\nlines.push(content.medical_surveillance || 'según convenio');\nlines.push('');\nlines.push('11. RECOMENDACIONES AL ARQUITECTO');\n(content.recommendations_to_architect || []).forEach(r => lines.push('  • ' + r));\nlines.push('');\nlines.push('---');\nlines.push('Documento generado por ArquitAI — debe ser revisado, completado y firmado por el Coordinador de Seguridad y Salud designado.');\n\nreturn [{ json: {\n  safety_plan_id: draft.id,\n  doc_title: content.document_type + ' - ' + project.project_name,\n  doc_body: lines.join('\\n'),\n  project_id: project.id,\n  execution_id: $('Build Safety Prompt').first().json.execution_id\n}}];"
+      }
+    },
+    {
+      "id": "as-10",
+      "name": "Create Google Doc",
+      "type": "n8n-nodes-base.googleDocs",
+      "typeVersion": 2,
+      "position": [
+        2250,
+        300
+      ],
+      "parameters": {
+        "operation": "create",
+        "title": "={{ $json.doc_title }}",
+        "folderId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "root",
+          "cachedResultName": "/ (Drive raíz)"
+        }
+      },
+      "credentials": {
+        "googleDocsOAuth2Api": {
+          "id": "PLACEHOLDER",
+          "name": "Google Docs account"
+        }
+      }
+    },
+    {
+      "id": "as-12",
+      "name": "Update Plan with Doc URL",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2750,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE safety_plans SET google_doc_id = $1, google_doc_url = $2, exec_status = 'confirmed' WHERE id = $3::uuid RETURNING id, google_doc_url",
+        "options": {
+          "queryReplacement": "={{ [$('Create Google Doc').first().json.id, 'https://docs.google.com/document/d/' + $('Create Google Doc').first().json.id + '/edit', $('Build Doc Content').first().json.safety_plan_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "as-13",
+      "name": "Complete Execution",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        3000,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE agent_executions SET status = 'completed', finished_at = NOW() WHERE id = $1::uuid",
+        "options": {
+          "queryReplacement": "={{ [$('Build Doc Content').first().json.execution_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "as-14",
+      "name": "Return Success",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        3250,
+        300
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "rs1",
+              "name": "status",
+              "value": "complete",
+              "type": "string"
+            },
+            {
+              "id": "rs2",
+              "name": "safety_plan_id",
+              "value": "={{ $('Build Doc Content').first().json.safety_plan_id }}",
+              "type": "string"
+            },
+            {
+              "id": "rs3",
+              "name": "google_doc_url",
+              "value": "={{ 'https://docs.google.com/document/d/' + $('Create Google Doc').first().json.id + '/edit' }}",
+              "type": "string"
+            },
+            {
+              "id": "rs4",
+              "name": "document_type",
+              "value": "={{ $('Parse Safety Response').first().json.document_type }}",
+              "type": "string"
+            },
+            {
+              "id": "rs5",
+              "name": "project_id",
+              "value": "={{ $('Load Project Data').first().json.id }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "as-11-http",
+      "name": "Insert Doc Body HTTP",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2500,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://docs.googleapis.com/v1/documents/' + $('Create Google Doc').first().json.id + ':batchUpdate' }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleDocsOAuth2Api",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ requests: [{ insertText: { location: { index: 1 }, text: $('Build Doc Content').first().json.doc_body } }] }) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "credentials": {
+        "googleDocsOAuth2Api": {
+          "id": "PLACEHOLDER",
+          "name": "Google Docs account"
+        }
+      },
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "as-load-studio",
+      "name": "Load Studio Profile",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        875,
+        460
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM get_active_studio_profile();",
+        "options": {
+          "alwaysOutputData": true
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Load Project Data": {
+      "main": [
+        [
+          {
+            "node": "Load Safety Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Safety Prompt": {
+      "main": [
+        [
+          {
+            "node": "Start Execution",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Safety Prompt": {
+      "main": [
+        [
+          {
+            "node": "Call LLM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call LLM": {
+      "main": [
+        [
+          {
+            "node": "Parse Safety Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Safety Response": {
+      "main": [
+        [
+          {
+            "node": "Save Draft Safety Plan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Draft Safety Plan": {
+      "main": [
+        [
+          {
+            "node": "Build Doc Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Doc Content": {
+      "main": [
+        [
+          {
+            "node": "Create Google Doc",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Plan with Doc URL": {
+      "main": [
+        [
+          {
+            "node": "Complete Execution",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Complete Execution": {
+      "main": [
+        [
+          {
+            "node": "Return Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Google Doc": {
+      "main": [
+        [
+          {
+            "node": "Insert Doc Body HTTP",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Doc Body HTTP": {
+      "main": [
+        [
+          {
+            "node": "Update Plan with Doc URL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Start Execution": {
+      "main": [
+        [
+          {
+            "node": "Load Studio Profile",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Studio Profile": {
+      "main": [
+        [
+          {
+            "node": "Build Safety Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Receive Project": {
+      "main": [
+        [
+          {
+            "node": "Load Project Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true,
+    "saveExecutionProgress": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": null,
+  "versionId": "68893da4-e185-4033-8645-0b288764b1f4",
+  "tags": []
+}

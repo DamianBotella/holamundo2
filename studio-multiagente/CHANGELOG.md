@@ -2,6 +2,41 @@
 
 Histórico cronológico de hitos del sistema. Generado a partir de git log.
 
+## 2026-05-03 — Bloque 50 (X3 paso 3 PARCIAL): patron correcto descubierto
+
+Bloque exploratorio. Aplique el approach inicial (anadir nodo Postgres separado
+'Set Tenant Context' al inicio de cada workflow) a 19 workflows. RESULTADO:
+ROMPE EL FLOW. El item del nodo Postgres solo lleva {tenant_id} y los nodos
+siguientes pierden los datos del trigger.
+
+Estrategia revertida en 18 workflows. Mantengo:
+- main_orchestrator: con set_config combinado en CTE de Load Project (Caso 1
+  del patron correcto). Validado E2E execution 3245.
+- init_new_project: Create Project + Create Client mantienen tenant_id
+  hardcoded a (SELECT id FROM tenants WHERE slug='damian-mtnz') para que
+  los nuevos proyectos NO queden con tenant_id NULL.
+
+Hallazgos validados empiricamente:
+- set_config('app.current_tenant', uuid, false) PERSISTE entre nodos
+  Postgres distintos (n8n reusa connection del pool en el mismo workflow exec).
+- 049b actualizada: PERFORM set_config(...,false) en lugar de true.
+
+Patron correcto documentado en docs/x3_workflow_patch_pattern.md:
+- Combinar set_config en CTE _ts dentro del query existing del primer Postgres.
+- NO usar nodo separado.
+
+Estado X3 al cierre B50:
+- Aplicado: 049 + 049b + main_orchestrator parchado correctamente.
+- Pendiente: 17 workflows criticos por parchar siguiendo el patron correcto.
+- 050 (RLS) NO aplicada todavia. No se puede aplicar hasta que los 17
+  workflows tengan set_tenant_context activo.
+
+Stubs adicionales creados durante smoke tests (Damian limpiar):
+- 0eaccf0b-3cda-43c8-b80e-b9ff3dc710e8 (TEST X3 SMOKE PRE-RLS) - tenant_id NULL
+- af44e23e-0e23-435c-8a3b-ccfc5ba4d0d8 (TEST X3 SMOKE 2) - tenant_id baseline OK
+
+---
+
 ## 2026-05-03 — Bloque 48 (PA-4 aplicado): X2 cerrado al 100%
 
 PA-4 Variante B (passive TTL 10min) aplicado tras Damian ejecutar migracion 054

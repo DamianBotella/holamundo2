@@ -1,0 +1,418 @@
+{
+  "name": "agent_accessibility",
+  "active": true,
+  "nodes": [
+    {
+      "id": "aa-01",
+      "name": "Receive Project",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    },
+    {
+      "id": "aa-02",
+      "name": "Load Project Data",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        250,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT p.id, p.name as project_name, p.project_type, p.property_type, p.property_area_m2, p.location_city, p.location_province, (SELECT row_to_json(b.*) FROM briefings b WHERE b.project_id = p.id AND b.status = 'approved' ORDER BY b.created_at DESC LIMIT 1) as briefing, (SELECT row_to_json(d.*) FROM design_options d WHERE d.project_id = p.id AND d.is_selected = true LIMIT 1) as design_option FROM projects p WHERE p.id = $1::uuid",
+        "options": {
+          "queryReplacement": "={{ [$json.project_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "aa-03",
+      "name": "Load Accessibility Prompt",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        500,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT content, model_recommended, temperature FROM agent_prompts WHERE agent_name = 'agent_accessibility' AND prompt_type = 'system' AND is_active = true LIMIT 1",
+        "options": {
+          "alwaysOutputData": true
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "aa-04",
+      "name": "Start Execution",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        750,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO agent_executions (project_id, agent_name, status, started_at) VALUES ($1::uuid, 'agent_accessibility', 'running', NOW()) RETURNING id",
+        "options": {
+          "queryReplacement": "={{ [$('Load Project Data').first().json.id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "aa-05",
+      "name": "Build Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1000,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const project = $('Load Project Data').first().json;\nconst prompt = $('Load Accessibility Prompt').first().json;\nconst executionId = $input.first().json.id;\n\nconst briefing = typeof project.briefing === 'string' ? JSON.parse(project.briefing) : (project.briefing || {});\nconst design = typeof project.design_option === 'string' ? JSON.parse(project.design_option) : (project.design_option || {});\n\nconst rooms = Array.isArray(design.rooms_layout) ? design.rooms_layout : [];\nconst constraints = Array.isArray(briefing.constraints) ? briefing.constraints : [];\nconst objectives = Array.isArray(briefing.objectives) ? briefing.objectives : [];\nconst clientNeeds = Array.isArray(briefing.client_needs) ? briefing.client_needs : [];\n\nconst roomsText = rooms.map(r => typeof r === 'object' ? `- ${r.room || r.name || '?'}: ${r.scope || r.description || ''}` : `- ${r}`).join('\\n');\n\nconst prompt_user = `Audita el cumplimiento de DB-SUA y accesibilidad para este proyecto.\n\nPROYECTO: ${project.project_name}\nTipo: ${project.project_type} | Inmueble: ${project.property_type || 'no especificado'} | Área: ${project.property_area_m2} m²\nUbicación: ${project.location_city}, ${project.location_province}\n\nDISEÑO ELEGIDO: ${design.title || 'no especificado'}\n${design.description || ''}\n\nROOMS_LAYOUT (alcance por habitación):\n${roomsText || 'No definido en el design'}\n\nNOTAS TÉCNICAS DEL DISEÑO: ${(design.technical_notes || []).join('; ') || 'ninguna'}\nLOGICA DE INTERVENCION: ${design.intervention_logic || 'no especificada'}\n\nOBJETIVOS DEL BRIEFING: ${objectives.join('; ') || 'no especificados'}\nNECESIDADES DEL CLIENTE: ${clientNeeds.join('; ') || 'no especificadas'}\nRESTRICCIONES DETECTADAS: ${constraints.join('; ') || 'ninguna'}\n\nGenera la auditoría completa según el esquema JSON.`;\n\n// === STUDIO PROFILE INJECTION (B24) ===\nconst _studio = $('Load Studio Profile').first().json || {};\nfunction _safeStudio(v){ if(v==null)return null; if(typeof v==='string'){try{return JSON.parse(v);}catch(e){return v;}} return v; }\nconst _id=_safeStudio(_studio.identity)||{};\nconst _priorities=_safeStudio(_studio.priorities)||[];\nconst _redLines=_safeStudio(_studio.red_lines)||[];\nconst _jur=_safeStudio(_studio.jurisdiction)||{};\nconst _SP_ACC_LINES=[];\n_SP_ACC_LINES.push('Estudio: '+(_id.nombre_estudio||'estudio')+' ('+(_id.ciudad||'España')+'). Auditor de accesibilidad asistente del/la profesional.');\nif(_jur.ccaa) _SP_ACC_LINES.push('JURISDICCIÓN: '+_jur.ccaa+'. Aplica DB-SUA del CTE + normativa autonómica de accesibilidad de '+_jur.ccaa+' si existe.');\nif(_priorities.length){ _SP_ACC_LINES.push('PRIORIDADES DEL ESTUDIO (al ponderar gravedad):'); _priorities.forEach(p=>_SP_ACC_LINES.push((p.orden||'?')+'. '+(p.prioridad||'')+(p.detalle?' — '+p.detalle:''))); }\nif(_redLines.length){ _SP_ACC_LINES.push('LÍNEAS ROJAS (no recomendar nunca):'); _redLines.forEach(l=>_SP_ACC_LINES.push('- '+(l.texto||''))); }\nconst _SP_ACC=_SP_ACC_LINES.join('\\n');\n// === END STUDIO PROFILE INJECTION ===\nconst _baseSystemPrompt = (prompt && prompt.content) ? prompt.content : 'Eres auditor de accesibilidad. Devuelve solo JSON.';\nconst systemPromptToUse = _SP_ACC + '\\n\\n' + _baseSystemPrompt;\n\nreturn [{ json: {\n  execution_id: executionId,\n  project_id: project.id,\n  project_name: project.project_name,\n  prompt_system: systemPromptToUse,\n  prompt_user,\n  model: 'gpt-4o',\n  temperature: 0.2,\n  agent_name: 'agent_accessibility'\n}}];"
+      }
+    },
+    {
+      "id": "aa-06",
+      "name": "Call LLM",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.1,
+      "position": [
+        1250,
+        300
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "JoKqGZ8pDzhJohV2",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "aa-07",
+      "name": "Parse Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1500,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const llm = $input.first().json;\nconst project = $('Load Project Data').first().json;\nconst built = $('Build Prompt').first().json;\nconst text = llm.text || '';\n\nlet parsed = {};\nlet parseError = null;\n\ntry {\n  const m = text.match(/\\{[\\s\\S]*\\}/);\n  if (m) parsed = JSON.parse(m[0]);\n  else throw new Error('No JSON found in LLM response');\n} catch (e) {\n  parseError = e.message;\n  parsed = {\n    applies_to_project: false,\n    applies_justification: 'Generación automática fallida — revisar manualmente',\n    overall_compliance: 'pending',\n    compliance_issues: [],\n    recommendations: [{ category: 'obligatorio', recommendation: 'Generar auditoría manualmente', justification: 'Error LLM: ' + parseError }],\n    commercial_argumentation: ''\n  };\n}\n\nreturn [{ json: {\n  execution_id: built.execution_id,\n  project_id: project.id,\n  applies_to_project: !!parsed.applies_to_project,\n  applies_justification: parsed.applies_justification || '',\n  overall_compliance: parsed.overall_compliance || 'pending',\n  compliance_issues: JSON.stringify(parsed.compliance_issues || []),\n  recommendations: JSON.stringify(parsed.recommendations || []),\n  commercial_argumentation: parsed.commercial_argumentation || '',\n  content_json: JSON.stringify(parsed),\n  parse_error: parseError\n}}];"
+      }
+    },
+    {
+      "id": "aa-08",
+      "name": "Save Audit",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1750,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO accessibility_audits (project_id, version, applies_to_project, applies_justification, overall_compliance, compliance_issues, recommendations, commercial_argumentation, content_json, status, execution_id, exec_status) VALUES ($1::uuid, 1, $2::boolean, $3, $4, $5::jsonb, $6::jsonb, $7, $8::jsonb, 'draft', $9::uuid, 'confirmed') RETURNING id",
+        "options": {
+          "queryReplacement": "={{ [$json.project_id, $json.applies_to_project, $json.applies_justification, $json.overall_compliance, $json.compliance_issues, $json.recommendations, $json.commercial_argumentation, $json.content_json, $json.execution_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "aa-09",
+      "name": "Complete Execution",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2000,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE agent_executions SET status = 'completed', finished_at = NOW() WHERE id = $1::uuid",
+        "options": {
+          "queryReplacement": "={{ [$('Build Prompt').first().json.execution_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "aa-10",
+      "name": "Write Intelligence",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2250,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO project_intelligence (project_id, agent_name, key, value) VALUES ($1::uuid, 'agent_accessibility', 'audit_completed', $2::jsonb) ON CONFLICT (project_id, agent_name, key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()",
+        "options": {
+          "queryReplacement": "={{ [$('Parse Response').first().json.project_id, JSON.stringify({audit_id: $('Save Audit').first().json.id, applies: $('Parse Response').first().json.applies_to_project, compliance: $('Parse Response').first().json.overall_compliance, issues_count: JSON.parse($('Parse Response').first().json.compliance_issues).length})] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "aa-11",
+      "name": "Return Success",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2500,
+        300
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "rs1",
+              "name": "status",
+              "value": "complete",
+              "type": "string"
+            },
+            {
+              "id": "rs2",
+              "name": "audit_id",
+              "value": "={{ $('Save Audit').first().json.id }}",
+              "type": "string"
+            },
+            {
+              "id": "rs3",
+              "name": "applies",
+              "value": "={{ $('Parse Response').first().json.applies_to_project }}",
+              "type": "boolean"
+            },
+            {
+              "id": "rs4",
+              "name": "overall_compliance",
+              "value": "={{ $('Parse Response').first().json.overall_compliance }}",
+              "type": "string"
+            },
+            {
+              "id": "rs5",
+              "name": "issues_count",
+              "value": "={{ JSON.parse($('Parse Response').first().json.compliance_issues).length }}",
+              "type": "number"
+            },
+            {
+              "id": "rs6",
+              "name": "project_id",
+              "value": "={{ $('Parse Response').first().json.project_id }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "aa-load-studio",
+      "name": "Load Studio Profile",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        875,
+        460
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM get_active_studio_profile();",
+        "options": {
+          "alwaysOutputData": true
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Load Project Data": {
+      "main": [
+        [
+          {
+            "node": "Load Accessibility Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Accessibility Prompt": {
+      "main": [
+        [
+          {
+            "node": "Start Execution",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Prompt": {
+      "main": [
+        [
+          {
+            "node": "Call LLM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call LLM": {
+      "main": [
+        [
+          {
+            "node": "Parse Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Response": {
+      "main": [
+        [
+          {
+            "node": "Save Audit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Audit": {
+      "main": [
+        [
+          {
+            "node": "Complete Execution",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Complete Execution": {
+      "main": [
+        [
+          {
+            "node": "Write Intelligence",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write Intelligence": {
+      "main": [
+        [
+          {
+            "node": "Return Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Start Execution": {
+      "main": [
+        [
+          {
+            "node": "Load Studio Profile",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Studio Profile": {
+      "main": [
+        [
+          {
+            "node": "Build Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Receive Project": {
+      "main": [
+        [
+          {
+            "node": "Load Project Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true,
+    "saveExecutionProgress": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": null,
+  "versionId": "2693894b-34d6-4fd9-83d8-362ac962933c",
+  "tags": []
+}

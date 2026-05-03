@@ -1,0 +1,1018 @@
+{
+  "name": "agent_briefing",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "passthrough",
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "project_id",
+              "type": "string"
+            },
+            {
+              "name": "action",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        250,
+        300
+      ],
+      "id": "ab000000-ab00-4000-8000-000000000001",
+      "name": "Receive Project"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO agent_executions (project_id, agent_name, status) VALUES ($1::uuid, 'agent_briefing', 'running') RETURNING id",
+        "options": {
+          "queryReplacement": "={{ [$('Receive Project').first().json.project_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        500,
+        160
+      ],
+      "id": "ab-exec-start",
+      "name": "Start Execution"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT p.id, p.name as project_name, p.project_type, p.budget_target, p.budget_flexible, p.location_address, p.location_city, p.location_province, p.property_type, p.property_area_m2, p.urgency, p.current_phase, p.metadata, p.briefing_hash, c.name as client_name, c.email as client_email, pii_decrypt(c.phone_enc) as client_phone, c.preferred_contact, pii_decrypt(c.notes_enc) as client_notes , (SELECT json_agg(json_build_object('type', pathology_type, 'severity', severity, 'description', description, 'affects_safety', affects_safety, 'recommended_action', recommended_action, 'cost_min', estimated_intervention_cost_min, 'cost_max', estimated_intervention_cost_max) ORDER BY CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END) FROM pathology_findings WHERE project_id = p.id AND status NOT IN ('repaired','dismissed')) AS pathology_findings FROM projects p JOIN clients c ON c.id = p.client_id WHERE p.id = $1::uuid",
+        "options": {
+          "queryReplacement": "={{ [$('Receive Project').first().json.project_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        500,
+        300
+      ],
+      "id": "ab000000-ab00-4000-8000-000000000002",
+      "name": "Load Project + Client"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH briefing AS (SELECT id, version, summary, pii_decrypt(client_needs_enc)::jsonb AS client_needs, objectives, constraints, status FROM briefings WHERE project_id = $1::uuid ORDER BY version DESC LIMIT 1) SELECT * FROM briefing UNION ALL SELECT NULL::uuid, 0::int, NULL::text, NULL::jsonb, NULL::jsonb, NULL::jsonb, 'new_project'::text WHERE NOT EXISTS (SELECT 1 FROM briefing)",
+        "options": {
+          "queryReplacement": "={{ [$('Receive Project').first().json.project_id] }}",
+          "alwaysOutputData": true
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        750,
+        300
+      ],
+      "id": "ab000000-ab00-4000-8000-000000000003",
+      "name": "Load Existing Briefing"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT content, model_recommended, temperature FROM agent_prompts WHERE agent_name = 'agent_briefing' AND prompt_type = 'system' AND is_active = true LIMIT 1",
+        "options": {
+          "alwaysOutputData": true
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1000,
+        300
+      ],
+      "id": "ab000000-ab00-4000-8000-000000000004",
+      "name": "Load Agent Prompt"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const project = $('Load Project + Client').first().json;\nconst projectId = $('Receive Project').first().json.project_id;\nconst prevBriefingData = $('Load Existing Briefing').first().json;\nconst hasPrevBriefing = prevBriefingData && prevBriefingData.id && (prevBriefingData.version !== undefined && prevBriefingData.version !== null && prevBriefingData.version > 0);\nconst promptData = $('Load Agent Prompt').first().json;\n// === STUDIO PROFILE INJECTION (B23) ===\nconst _studio = $('Load Studio Profile').first().json || {};\nfunction _safeStudio(v){ if(v==null)return null; if(typeof v==='string'){try{return JSON.parse(v);}catch(e){return v;}} return v; }\nconst _id=_safeStudio(_studio.identity)||{},_tone=_safeStudio(_studio.tone)||{},_priorities=_safeStudio(_studio.priorities)||[],_redLines=_safeStudio(_studio.red_lines)||[],_checklist=_safeStudio(_studio.visit_checklist)||[],_jur=_safeStudio(_studio.jurisdiction)||{};\nconst _toneCli=_tone.clientes||{};\nconst _STUDIO_CONTEXT_LINES=[];\n_STUDIO_CONTEXT_LINES.push('Trabajas para \"'+(_id.nombre_estudio||'estudio')+'\" en '+(_id.ciudad||'Espana')+', especializado en '+(((_id.ambito||[]).join(', '))||'arquitectura tecnica')+'.');\n_STUDIO_CONTEXT_LINES.push('TONO con clientes: '+(_toneCli.formalidad||'cercano')+', '+(_toneCli.tecnicidad||'llano')+', '+(_toneCli.longitud||'conciso')+(_toneCli.tutea?'. Tutea por defecto.':'. Usa usted por defecto.')+(_toneCli.explica_terminos?' Explica terminos tecnicos entre parentesis.':''));\n_STUDIO_CONTEXT_LINES.push('PRIORIDADES (orden estricto):');\n(_priorities||[]).forEach(p=>{ _STUDIO_CONTEXT_LINES.push((p.orden||'?')+'. '+(p.prioridad||'')+(p.detalle?' - '+p.detalle:'')); });\n_STUDIO_CONTEXT_LINES.push('LINEAS ROJAS (NUNCA hacer):');\n(_redLines||[]).forEach(l=>{ _STUDIO_CONTEXT_LINES.push('- '+(l.texto||'')); });\n_STUDIO_CONTEXT_LINES.push('JURISDICCION: '+(_jur.ccaa||'Espana')+'. Aplica normativa estatal (CTE, LOE, RD 1627/1997, REBT, RITE) + autonomica.');\nconst _STUDIO_CONTEXT = _STUDIO_CONTEXT_LINES.join('\\n');\nconst _checklistExtra = (_checklist && _checklist.length>0) ? '\\n\\nCHECKLIST de open_questions a incluir si no estan resueltas en las notas: '+_checklist.map(c=>c.pregunta||'').filter(Boolean).join(' / ') : '';\nconst _baseSystemPrompt = (promptData && promptData.content)\n  ? promptData.content\n  : 'Eres el Agente de Briefing de un estudio de arquitectura tecnica. Convierte la informacion inicial del proyecto en un briefing estructurado. Responde EXCLUSIVAMENTE con un objeto JSON valido sin backticks ni texto adicional.';\nconst systemPrompt = _STUDIO_CONTEXT + _checklistExtra + '\\n\\n' + _baseSystemPrompt;\n// === END STUDIO PROFILE INJECTION ===\nconst model = ((promptData && promptData.model_recommended) || 'gpt-4o').trim();\nconst temperature = (promptData && promptData.temperature !== null && promptData.temperature !== undefined) ? Number(promptData.temperature) : 0.2;\nconst nextVersion = hasPrevBriefing ? (prevBriefingData.version + 1) : 1;\nconst metadata = project.metadata || {};\nconst metaNotes = metadata.architect_intake_notes || metadata.notes || metadata.description || '';\nconst metaObservations = metadata.architect_observations || '';\nconst metaPreferences = metadata.client_stated_preferences || '';\nconst metaVisitDate = metadata.visit_date || '';\nconst budgetStr = project.budget_target ? project.budget_target + ' EUR' : 'No especificado';\nconst areaStr = project.property_area_m2 ? project.property_area_m2 + ' m2' : 'No especificada';\nconst locationParts = [project.location_address, project.location_city, project.location_province].filter(Boolean);\nconst locationStr = locationParts.length > 0 ? locationParts.join(', ') : 'No especificada';\nconst userParts = [\n  'Genera el briefing estructurado para este proyecto.',\n  '',\n  'DATOS DEL PROYECTO:',\n  '- Nombre: ' + (project.project_name || 'Sin nombre'),\n  '- Tipo: ' + (project.project_type || 'No especificado'),\n  '- Localizacion: ' + locationStr,\n  '- Tipo de inmueble: ' + (project.property_type || 'No especificado'),\n  '- Superficie aproximada: ' + areaStr,\n  '- Presupuesto objetivo: ' + budgetStr + (project.budget_flexible ? ' (flexible)' : ' (ajustado)'),\n  '- Urgencia: ' + (project.urgency || 'normal'),\n  '',\n  'DATOS DEL CLIENTE:',\n  '- Nombre: ' + (project.client_name || 'Sin nombre'),\n  '- Notas del cliente: ' + (project.client_notes || 'Sin notas'),\n  '',\n  'NOTAS DEL ARQUITECTO TRAS VISITA:' + (metaVisitDate ? ' (' + metaVisitDate + ')' : ''),\n  metaNotes || 'Sin notas del arquitecto',\n  '',\n  'OBSERVACIONES TECNICAS DEL ARQUITECTO (patologias, oportunidades, estado del inmueble):',\n  metaObservations || 'Sin observaciones registradas',\n  '',\n  'PATOLOGIAS DETECTADAS POR agent_pathology (' + ((project.pathology_findings || []).length) + '):',\n  ((project.pathology_findings || []).length === 0 ? '  (sin patologias registradas todavia)' : (project.pathology_findings || []).map(function(p) {\n    var cost = (p.cost_min || p.cost_max) ? ' [estimado ' + (p.cost_min || 0) + '-' + (p.cost_max || 0) + 'eur]' : '';\n    var safety = p.affects_safety ? ' [AFECTA SEGURIDAD]' : '';\n    return '  - [' + (p.severity || '?').toUpperCase() + '] ' + (p.type || '?') + ': ' + (p.description || '?') + safety + cost + (p.recommended_action ? ' → ' + p.recommended_action : '');\n  }).join('\\n')),\n  '',\n  'PREFERENCIAS TRANSMITIDAS POR EL CLIENTE:',\n  metaPreferences || 'Sin preferencias registradas'\n];\n\ntry {\n  const sim = $('Search Similar Cases').first().json;\n  const cases = (sim && sim.similar_cases) ? sim.similar_cases : [];\n  if (cases.length > 0) {\n    userParts.push('');\n    userParts.push('CASOS SIMILARES DE PROYECTOS ANTERIORES (memoria del estudio):');\n    cases.slice(0, 3).forEach((c, i) => {\n      userParts.push((i+1) + '. ' + (c.summary || '?') + ' [similitud ' + Math.round((c.similarity||0) * 100) + '%, ' + (c.area_m2||'?') + 'm2, ' + (c.location_zone||'?') + ']');\n      const lessons = c.lessons_learned ? (typeof c.lessons_learned === 'string' ? JSON.parse(c.lessons_learned) : c.lessons_learned) : [];\n      lessons.slice(0, 2).forEach(l => userParts.push('   - ' + (l.lesson || JSON.stringify(l)).substring(0, 150)));\n    });\n    userParts.push('Aprovecha estas lecciones al detectar constraints y proponer open_questions.');\n  }\n} catch(e) {}\n\nconst _userPartsExtended = [\n];\nif (hasPrevBriefing && prevBriefingData.status === 'revision_requested') {\n  userParts.push('');\n  userParts.push('BRIEFING ANTERIOR RECHAZADO (esta es la revision ' + nextVersion + '):');\n  userParts.push('Resumen previo: ' + (prevBriefingData.summary || '').substring(0, 400));\n  userParts.push('Corrige y mejora el briefing anterior basandote en el contexto disponible.');\n}\nuserParts.push('');\nuserParts.push('Responde con el JSON estructurado del briefing.');\nconst userPrompt = userParts.join('\\n');\nreturn [{ json: { agent_name: 'agent_briefing',\n  project_id: projectId,\n  project_name: project.project_name,\n  client_name: project.client_name,\n  client_email: project.client_email || null,\n  next_version: nextVersion,\n  prompt_system: systemPrompt,\n  prompt_user: userPrompt,\n  model: model,\n  temperature: temperature\n} }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1250,
+        300
+      ],
+      "id": "ab000000-ab00-4000-8000-000000000005",
+      "name": "Prepare LLM Payload"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "JoKqGZ8pDzhJohV2",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.1,
+      "position": [
+        1500,
+        300
+      ],
+      "id": "ab000000-ab00-4000-8000-000000000006",
+      "name": "Call LLM"
+    },
+    {
+      "parameters": {
+        "jsCode": "const llmResult = $input.first().json;\nconst preparedData = $('Prepare LLM Payload').first().json;\nlet responseText = (llmResult.text || llmResult.response_text || llmResult.content || '').trim();\nif (responseText.startsWith('```')) {\n  responseText = responseText.replace(/^```[a-z]*\\n?/, '').replace(/\\n?```$/, '').trim();\n}\nlet parsed;\ntry {\n  parsed = JSON.parse(responseText);\n} catch(e) {\n  // Intentar extraer JSON embebido con regex\n  const m = responseText.match(/\\{[\\s\\S]*\\}/);\n  if (m) {\n    try { parsed = JSON.parse(m[0]); } catch(e2) { parsed = null; }\n  } else {\n    parsed = null;\n  }\n}\nconst isValid = parsed && typeof parsed.summary === 'string';\nif (!isValid) {\n  parsed = {\n    summary: 'Error al procesar respuesta del LLM. Revisar manualmente. Respuesta: ' + responseText.substring(0, 200),\n    client_needs: [],\n    objectives: [],\n    constraints: [],\n    style_preferences: {},\n    rooms_affected: [],\n    missing_info: ['La respuesta del LLM no fue JSON valido'],\n    open_questions: []\n  };\n}\nreturn [{ json: {\n  project_id: preparedData.project_id,\n  project_name: preparedData.project_name,\n  client_name: preparedData.client_name,\n  client_email: preparedData.client_email,\n  next_version: preparedData.next_version,\n  summary: parsed.summary || '',\n  client_needs: parsed.client_needs || [],\n  objectives: parsed.objectives || [],\n  constraints: parsed.constraints || [],\n  style_preferences: parsed.style_preferences || {},\n  rooms_affected: parsed.rooms_affected || [],\n  missing_info: parsed.missing_info || [],\n  open_questions: parsed.open_questions || []\n} }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1750,
+        300
+      ],
+      "id": "ab000000-ab00-4000-8000-000000000007",
+      "name": "Parse Briefing Response"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO briefings (project_id, execution_id, exec_status, version, summary, client_needs, objectives, constraints, style_preferences, rooms_affected, missing_info, open_questions, status) VALUES ($1::uuid, $2::uuid, 'draft', $3::int, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, $10::jsonb, $11::jsonb, 'pending_review') RETURNING id",
+        "options": {
+          "queryReplacement": "={{ [$json.project_id, $('Start Execution').first().json.id, $json.next_version, $json.summary, JSON.stringify($json.client_needs), JSON.stringify($json.objectives), JSON.stringify($json.constraints), JSON.stringify($json.style_preferences), JSON.stringify($json.rooms_affected), JSON.stringify($json.missing_info), JSON.stringify($json.open_questions)] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2000,
+        300
+      ],
+      "id": "ab000000-ab00-4000-8000-000000000008",
+      "name": "Save Briefing"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO approvals (project_id, approval_type, requested_by, summary, details, related_entity, related_entity_id, expires_at) VALUES ($1::uuid, 'briefing_review', 'agent_briefing', $2, $3::jsonb, 'briefings', $4::uuid, NOW() + INTERVAL '72 hours') RETURNING id, webhook_token",
+        "options": {
+          "queryReplacement": "={{ [$('Parse Briefing Response').first().json.project_id, 'Revision de briefing v' + $('Parse Briefing Response').first().json.next_version + ' para proyecto ' + $('Parse Briefing Response').first().json.project_name, JSON.stringify({briefing_id: $json.id, briefing_version: $('Parse Briefing Response').first().json.next_version, project_name: $('Parse Briefing Response').first().json.project_name}), $json.id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2250,
+        300
+      ],
+      "id": "ab000000-ab00-4000-8000-000000000009",
+      "name": "Create Approval"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const parsed = $('Parse Briefing Response').first().json;\nconst savedBriefing = $('Save Briefing').first().json;\nconst approvalRecord = $('Create Approval').first().json;\nconst resumeUrl = $execution.resumeUrl;\nconst webhookToken = approvalRecord.webhook_token || '';\nconst approveUrl = resumeUrl + '?action=approve&token=' + encodeURIComponent(webhookToken);\nconst rejectUrl = resumeUrl + '?action=reject&token=' + encodeURIComponent(webhookToken);\nconst needsList = (parsed.client_needs || []).map(function(n) {\n  const text = typeof n === 'object' && n !== null ? (n.need || JSON.stringify(n)) : String(n);\n  return '<li>' + text + '</li>';\n}).join('');\nconst objList = (parsed.objectives || []).map(function(o) { return '<li>' + String(o) + '</li>'; }).join('');\nconst missingList = (parsed.missing_info || []).map(function(m) { return '<li>' + String(m) + '</li>'; }).join('');\nconst htmlBody = '<div style=\"font-family:Arial,sans-serif;max-width:700px;margin:0 auto\">'\n  + '<h2 style=\"color:#2c3e50\">Studio AI - Revision de Briefing</h2>'\n  + '<h3 style=\"color:#7f8c8d\">Proyecto: ' + parsed.project_name + '</h3>'\n  + '<p><b>Cliente:</b> ' + parsed.client_name + ' &nbsp;|&nbsp; <b>Version:</b> ' + parsed.next_version + '</p>'\n  + '<hr style=\"border:none;border-top:1px solid #eee\">'\n  + '<h4>Resumen:</h4><p>' + parsed.summary + '</p>'\n  + '<h4>Necesidades del cliente:</h4><ul>' + needsList + '</ul>'\n  + '<h4>Objetivos:</h4><ul>' + objList + '</ul>'\n  + '<h4>Informacion faltante:</h4><ul>' + missingList + '</ul>'\n  + '<div style=\"margin:32px 0;text-align:center\">'\n  + '<a href=\"' + approveUrl + '\" style=\"background:#27ae60;color:white;padding:14px 28px;text-decoration:none;border-radius:4px;margin-right:16px;display:inline-block;font-size:15px\">Aprobar Briefing</a>'\n  + '<a href=\"' + rejectUrl + '\" style=\"background:#e74c3c;color:white;padding:14px 28px;text-decoration:none;border-radius:4px;display:inline-block;font-size:15px\">Solicitar Revision</a>'\n  + '</div>'\n  + '<p style=\"color:#95a5a6;font-size:12px;text-align:center\">Este enlace expira en 72 horas.</p>'\n  + '</div>';\nconst archEmail = ($('Load Architect Email').first()?.json?.value) || 'botelladesdeel98@gmail.com';\nreturn [{ json: {\n  to: archEmail,\n  subject: '[Studio AI] Briefing para revision: ' + parsed.project_name,\n  html_body: htmlBody,\n  briefing_id: savedBriefing.id,\n  approval_id: approvalRecord.id,\n  project_id: parsed.project_id,\n  project_name: parsed.project_name,\n  next_version: parsed.next_version\n} }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2500,
+        300
+      ],
+      "id": "ab000000-ab00-4000-8000-000000000010",
+      "name": "Build Approval Email"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.to }}",
+        "subject": "={{ $json.subject }}",
+        "emailType": "html",
+        "message": "={{ $json.html_body }}",
+        "options": {}
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "PLACEHOLDER",
+          "name": "damian2botella"
+        }
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        2750,
+        300
+      ],
+      "id": "ab000000-ab00-4000-8000-000000000011",
+      "name": "Send Approval Email"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, phase_at_time, output_summary, status, details) VALUES ($1::uuid, 'agent_briefing', 'briefing_sent_for_review', 'intake', $2, 'success', $3::jsonb)",
+        "options": {
+          "queryReplacement": "={{ [$('Build Approval Email').first().json.project_id, 'Briefing v' + $('Build Approval Email').first().json.next_version + ' enviado para revision. ID: ' + $('Build Approval Email').first().json.briefing_id, JSON.stringify({briefing_id: $('Build Approval Email').first().json.briefing_id, version: $('Build Approval Email').first().json.next_version, awaiting: 'architect_approval'})] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        3000,
+        300
+      ],
+      "id": "ab000000-ab00-4000-8000-000000000012",
+      "name": "Log - Awaiting Approval"
+    },
+    {
+      "parameters": {
+        "resume": "webhook",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        3250,
+        300
+      ],
+      "id": "ab000000-ab00-4000-8000-000000000013",
+      "name": "Wait for Decision"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const resumeData = $input.first().json;\nconst emailData = $('Build Approval Email').first().json;\nconst approvalRecord = $('Create Approval').first().json;\nconst expectedToken = approvalRecord.webhook_token || '';\nconst receivedToken = (resumeData.query && resumeData.query.token)\n  || (resumeData.body && resumeData.body.token)\n  || resumeData.token\n  || '';\nconst tokenValid = !!expectedToken && receivedToken === expectedToken;\nlet action = 'reject';\nif (tokenValid) {\n  action = (resumeData.query && resumeData.query.action)\n    || (resumeData.body && resumeData.body.action)\n    || resumeData.action\n    || 'reject';\n}\nreturn [{ json: {\n  action: action,\n  is_approved: action === 'approve',\n  project_id: emailData.project_id,\n  briefing_id: emailData.briefing_id,\n  approval_id: emailData.approval_id,\n  project_name: emailData.project_name,\n  next_version: emailData.next_version\n} }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3500,
+        300
+      ],
+      "id": "ab000000-ab00-4000-8000-000000000014",
+      "name": "Process Approval Response"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "ab000000-ab00-4000-8000-000000000f01",
+              "leftValue": "={{ $json.is_approved }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3750,
+        300
+      ],
+      "id": "ab000000-ab00-4000-8000-000000000015",
+      "name": "Approved?"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE briefings SET status = 'approved', approved_at = NOW(), approved_by = 'architect' WHERE id = $1::uuid",
+        "options": {
+          "queryReplacement": "={{ [$json.briefing_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        4000,
+        150
+      ],
+      "id": "ab000000-ab00-4000-8000-000000000016",
+      "name": "Update Briefing - Approved"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE approvals SET status = 'approved', decided_by = 'architect', decided_at = NOW() WHERE id = $1::uuid",
+        "options": {
+          "queryReplacement": "={{ [$('Process Approval Response').first().json.approval_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        4250,
+        150
+      ],
+      "id": "ab000000-ab00-4000-8000-000000000017",
+      "name": "Update Approval - Approved"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE agent_executions SET status = 'completed', finished_at = now() WHERE id = $1::uuid; UPDATE briefings SET exec_status = 'confirmed' WHERE execution_id = $1::uuid",
+        "options": {
+          "queryReplacement": "={{ [$('Start Execution').first().json.id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        4500,
+        150
+      ],
+      "id": "ab-exec-complete",
+      "name": "Complete Execution"
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "duplicateItem": false,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "ab000000-ab00-4000-8000-000000001801",
+              "name": "status",
+              "value": "complete",
+              "type": "string"
+            },
+            {
+              "id": "ab000000-ab00-4000-8000-000000001802",
+              "name": "briefing_id",
+              "value": "={{ $('Process Approval Response').first().json.briefing_id }}",
+              "type": "string"
+            },
+            {
+              "id": "ab000000-ab00-4000-8000-000000001803",
+              "name": "phase",
+              "value": "briefing_done",
+              "type": "string"
+            },
+            {
+              "id": "ab000000-ab00-4000-8000-000000001804",
+              "name": "project_id",
+              "value": "={{ $('Process Approval Response').first().json.project_id }}",
+              "type": "string"
+            },
+            {
+              "id": "ab000000-ab00-4000-8000-000000001805",
+              "name": "scope_creep_detected",
+              "value": "={{ $('Detect Scope Creep').first().json.scope_creep_detected }}",
+              "type": "boolean"
+            }
+          ]
+        },
+        "includeOtherFields": false
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        4750,
+        150
+      ],
+      "id": "ab000000-ab00-4000-8000-000000000018",
+      "name": "Return Success"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE briefings SET status = 'revision_requested' WHERE id = $1::uuid",
+        "options": {
+          "queryReplacement": "={{ [$json.briefing_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        4000,
+        450
+      ],
+      "id": "ab000000-ab00-4000-8000-000000000019",
+      "name": "Update Briefing - Revision"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE approvals SET status = 'rejected', decided_by = 'architect', decided_at = NOW() WHERE id = $1::uuid",
+        "options": {
+          "queryReplacement": "={{ [$('Process Approval Response').first().json.approval_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        4250,
+        450
+      ],
+      "id": "ab000000-ab00-4000-8000-000000000020",
+      "name": "Update Approval - Rejected"
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "duplicateItem": false,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "ab000000-ab00-4000-8000-000000002101",
+              "name": "status",
+              "value": "revision_needed",
+              "type": "string"
+            },
+            {
+              "id": "ab000000-ab00-4000-8000-000000002102",
+              "name": "briefing_id",
+              "value": "={{ $('Process Approval Response').first().json.briefing_id }}",
+              "type": "string"
+            },
+            {
+              "id": "ab000000-ab00-4000-8000-000000002103",
+              "name": "phase",
+              "value": "intake",
+              "type": "string"
+            },
+            {
+              "id": "ab000000-ab00-4000-8000-000000002104",
+              "name": "project_id",
+              "value": "={{ $('Process Approval Response').first().json.project_id }}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": false
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        4500,
+        450
+      ],
+      "id": "ab000000-ab00-4000-8000-000000000021",
+      "name": "Return Revision"
+    },
+    {
+      "id": "ab-intel-brief",
+      "name": "Write Briefing Intelligence",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        4625,
+        150
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO project_intelligence (project_id, agent_name, key, value) VALUES ($1::uuid, 'agent_briefing', 'briefing_intelligence', $2::jsonb) ON CONFLICT (project_id, agent_name, key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
+        "options": {
+          "queryReplacement": "={{ [$('Receive Project').first().json.project_id, JSON.stringify({ project_type: $('Load Project + Client').first().json.project_type || '', location_city: $('Load Project + Client').first().json.location_city || '', location_province: $('Load Project + Client').first().json.location_province || '', property_type: $('Load Project + Client').first().json.property_type || '', property_area_m2: $('Load Project + Client').first().json.property_area_m2 || null, budget_target: $('Load Project + Client').first().json.budget_target || null, client_name: $('Load Project + Client').first().json.client_name || '' })] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ab-scope-creep",
+      "name": "Detect Scope Creep",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1875,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const parsed = $input.first().json;\nconst project = $('Load Project + Client').first().json;\nconst keyFields = {\n  rooms_affected: parsed.rooms_affected || [],\n  constraints: parsed.constraints || [],\n  project_type: project.project_type || '',\n  property_area_m2: project.property_area_m2 || null,\n  budget_target: project.budget_target || null\n};\nconst content = JSON.stringify(keyFields);\nlet hash = 5381;\nfor (let i = 0; i < content.length; i++) {\n  hash = ((hash << 5) + hash) + content.charCodeAt(i);\n  hash = hash & hash;\n}\nconst newHash = Math.abs(hash).toString(16);\nconst existingHash = project.briefing_hash || '';\nconst scopeCreep = existingHash !== '' && existingHash !== newHash;\nreturn [{ json: { ...parsed, new_hash: newHash, scope_creep_detected: scopeCreep } }];"
+      }
+    },
+    {
+      "id": "ab-update-hash",
+      "name": "Update Project Hash",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        4875,
+        150
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE projects SET briefing_hash = $1 WHERE id = $2::uuid",
+        "options": {
+          "queryReplacement": "={{ [$('Detect Scope Creep').first().json.new_hash, $('Receive Project').first().json.project_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ab-search-query",
+      "name": "Build Search Query",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1125,
+        460
+      ],
+      "parameters": {
+        "jsCode": "const project = $('Load Project + Client').first().json;\nconst metadata = project.metadata || {};\nconst notes = metadata.architect_intake_notes || metadata.notes || '';\nreturn [{ json: {\n  project_type: project.project_type,\n  location_zone: project.location_province || project.location_city || 'desconocido',\n  property_type: project.property_type || 'no especificado',\n  area_m2: project.property_area_m2 || null,\n  summary: notes.substring(0, 500),\n  briefing_summary: notes.substring(0, 1000),\n  exclude_project_id: project.id,\n  top_k: 3\n} }];"
+      }
+    },
+    {
+      "id": "ab-search-similar",
+      "name": "Search Similar Cases",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.1,
+      "position": [
+        1375,
+        460
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "U9U5GPfuWi7DI4TW",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "32ca2259-8628-4431-a96e-7bc21a99d79a",
+      "name": "Load Architect Email",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        375,
+        160
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT value FROM system_config WHERE key = 'architect_email'",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ab-load-studio",
+      "name": "Load Studio Profile",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1125,
+        580
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM get_active_studio_profile();",
+        "options": {
+          "alwaysOutputData": true
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Start Execution": {
+      "main": [
+        [
+          {
+            "node": "Load Project + Client",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Project + Client": {
+      "main": [
+        [
+          {
+            "node": "Load Existing Briefing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Existing Briefing": {
+      "main": [
+        [
+          {
+            "node": "Load Agent Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare LLM Payload": {
+      "main": [
+        [
+          {
+            "node": "Call LLM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call LLM": {
+      "main": [
+        [
+          {
+            "node": "Parse Briefing Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Briefing": {
+      "main": [
+        [
+          {
+            "node": "Create Approval",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Approval": {
+      "main": [
+        [
+          {
+            "node": "Build Approval Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Approval Email": {
+      "main": [
+        [
+          {
+            "node": "Send Approval Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Approval Email": {
+      "main": [
+        [
+          {
+            "node": "Log - Awaiting Approval",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log - Awaiting Approval": {
+      "main": [
+        [
+          {
+            "node": "Wait for Decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait for Decision": {
+      "main": [
+        [
+          {
+            "node": "Process Approval Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Approval Response": {
+      "main": [
+        [
+          {
+            "node": "Approved?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Approved?": {
+      "main": [
+        [
+          {
+            "node": "Update Briefing - Approved",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Update Briefing - Revision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Briefing - Approved": {
+      "main": [
+        [
+          {
+            "node": "Update Approval - Approved",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Approval - Approved": {
+      "main": [
+        [
+          {
+            "node": "Complete Execution",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Briefing - Revision": {
+      "main": [
+        [
+          {
+            "node": "Update Approval - Rejected",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Approval - Rejected": {
+      "main": [
+        [
+          {
+            "node": "Return Revision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Complete Execution": {
+      "main": [
+        [
+          {
+            "node": "Write Briefing Intelligence",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Briefing Response": {
+      "main": [
+        [
+          {
+            "node": "Detect Scope Creep",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Detect Scope Creep": {
+      "main": [
+        [
+          {
+            "node": "Save Briefing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write Briefing Intelligence": {
+      "main": [
+        [
+          {
+            "node": "Update Project Hash",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Project Hash": {
+      "main": [
+        [
+          {
+            "node": "Return Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Agent Prompt": {
+      "main": [
+        [
+          {
+            "node": "Build Search Query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Search Query": {
+      "main": [
+        [
+          {
+            "node": "Search Similar Cases",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Similar Cases": {
+      "main": [
+        [
+          {
+            "node": "Load Studio Profile",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Architect Email": {
+      "main": [
+        [
+          {
+            "node": "Start Execution",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Studio Profile": {
+      "main": [
+        [
+          {
+            "node": "Prepare LLM Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Receive Project": {
+      "main": [
+        [
+          {
+            "node": "Load Architect Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5"
+  },
+  "pinData": {},
+  "versionId": "b42246b1-70d0-49d3-8b92-e8911310de50",
+  "tags": []
+}

@@ -2,6 +2,40 @@
 
 Histórico cronológico de hitos del sistema. Generado a partir de git log.
 
+## 2026-05-03 — Bloque 52 (X3 CERRADO): 050 RLS aplicada + smoke E2E live
+
+Damian aplico migracion 050 en Supabase. RLS habilitada en 11 tablas raiz
+(tenant_id directo) + 23 tablas pipeline (heredan via project_id).
+
+Smoke E2E con RLS activo:
+- POST /webhook/new-project con payload TEST X3 RLS LIVE.
+- init_new_project execution 3274 (estimado): Status 201 en 6.83s. Proyecto
+  1f7889c1-... creado con tenant_id baseline.
+- Trigger Orchestrator disparo orchestrator (asincrono).
+- Orchestrator ejecuto agent_briefing (no logged en lista pero confirmado por
+  pending_approvals=1 generado en approvals).
+- Mi curl directo orchestrator (3286): success en 192ms, Load Project devolvio
+  el proyecto + tenant_id correcto. lock_acquired=false (lock previo TTL 10min).
+
+Conclusion: RLS funciona end-to-end. Patron CTE en los 19 workflows validado
+en produccion real.
+
+X3 cerrado al 100%:
+- BD: 049 + 049b + 050 aplicadas. RLS activa en ~30 tablas.
+- n8n: 19 workflows criticos con set_tenant_context(uuid) en CTE _ts.
+- Aislamiento real entre tenants disponible. Bloqueante para X4 (auth) y
+  X5 (API REST) liberado.
+
+Stubs E2E creados durante validacion (Damian limpiar):
+- 1f7889c1-b799-4c7d-b1a0-540c852447f6 (TEST X3 RLS LIVE)
+- 57969cbf-cdd7-4dfb-8736-31e8bba7606f (TEST X3 PRE-RLS FULL)
+- 07a90ae4-885d-43da-80e1-3a55c8bab872 (TEST X3 CTE PATTERN, ya archivado B51)
+
+Pendiente opcional Damian: ejecutar SQL test aislamiento 2-tenants para
+verificacion empirica final (tenant A ve todo, tenant B ve 0, sin contexto = 0).
+
+---
+
 ## 2026-05-03 — Bloque 51 (X3 paso 3 COMPLETO): 17 workflows con patron CTE
 
 Aplicado el patron correcto (set_config en CTE _ts dentro de la query existente)

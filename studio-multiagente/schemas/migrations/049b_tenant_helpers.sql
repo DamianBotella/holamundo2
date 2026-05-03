@@ -33,7 +33,12 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM tenants WHERE id = p_tenant_id AND active = true) THEN
     RAISE EXCEPTION 'tenant_id % no existe o esta inactivo', p_tenant_id;
   END IF;
-  PERFORM set_config('app.current_tenant', p_tenant_id::text, true);
+  -- is_local=false (session-scoped). Tras test empirico en n8n:
+  -- el setting persiste entre nodos Postgres distintos del mismo workflow
+  -- porque n8n reutiliza la connection del pool. Con true (tx-local) NO
+  -- persistiria al siguiente nodo (cada nodo Postgres en n8n abre su propia
+  -- transaccion). Con false el setting dura toda la session.
+  PERFORM set_config('app.current_tenant', p_tenant_id::text, false);
   RETURN p_tenant_id;
 END;
 $body$;

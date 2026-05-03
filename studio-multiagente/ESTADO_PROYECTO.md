@@ -141,6 +141,8 @@ git log --oneline -20
 | B50 | X3 paso 3 PARCIAL | Patrón nodo separado FALLÓ (rompe item del trigger). Revertido en 18 workflows. main_orchestrator parchado con patrón correcto (set_config en CTE de Load Project). init_new_project tenant_id hardcoded a damian-mtnz. Patrón correcto documentado en x3_workflow_patch_pattern.md. |
 | B51 | X3 paso 3 COMPLETO | 17 workflows parchados con patrón CTE (5 grupos por tipo de trigger). E2E validado en orchestrator: tenant_id resuelto correctamente + item preservado completo. |
 | B52 | X3 CERRADO 100% | Damián aplicó 050 (RLS habilitada en ~30 tablas). Smoke E2E live: init_new_project + orchestrator + agent_briefing con RLS activo funcionan. Patrón CTE validado en producción real. Aislamiento real disponible para X4/X5. |
+| B53 | Migration 050b: super_admin bypass | Audit estático detectó 47 crones at risk bajo RLS. Migration 050b añade `OR is_super_admin()` bypass a todas las policies. Damián aplicó. |
+| B54 | 47 crones blindados | Patch masivo: 1 nodo "Init Super Admin Context" al inicio de cada cron. 188 ops MCP. Audit final: 47/47 cubiertos, 0 at risk. Sistema blindado bajo RLS. |
 
 ---
 

@@ -2,6 +2,47 @@
 
 Histórico cronológico de hitos del sistema. Generado a partir de git log.
 
+## 2026-05-03 — Bloque 54 (X3 followup): 47 crones blindados bajo RLS
+
+Tras 050b aplicada (super_admin bypass), parche masivo a los 47 crones at risk
+detectados por audit estatico. Cada cron recibe un nodo "Init Super Admin
+Context" (postgres) justo despues del trigger:
+
+  SELECT set_config('app.role', 'super_admin', false) AS role_set
+
+Esto setea app.role='super_admin' en la sesion. Las policies RLS aplicadas
+en 050b incluyen `OR is_super_admin()` bypass, asi que los crones operan
+cross-tenant como antes.
+
+47 crones parchados (4 ops cada uno = 188 ops totales):
+- Infra: cron_access_log_purge, cron_blocklist_cleanup, cron_db_size_check,
+  cron_data_integrity, cron_vacuum_analyze, cron_workflow_audit, cron_health_check,
+  cron_security_alerts, cron_security_dashboard_alert, cron_security_events_*,
+  cron_normativa_*, cron_external_backup, cron_backup_verify.
+- Pipeline monitoring: cron_project_review, cron_aftercare_*, cron_pathology_review,
+  cron_permit_review, cron_qc_*, cron_compliance_*, cron_post_phase_audits,
+  cron_briefing_postprocess, cron_e2e_smoke_test.
+- Followups: cron_proposal_response_followup, cron_proposal_to_contract,
+  cron_invoice_approval_followup, cron_contract_followup (x2),
+  cron_quote_expiry, cron_collab_review (x2), cron_consultation_batch.
+- Reports: cron_weekly_kpis, cron_weekly_summary, cron_business_weekly_email,
+  cron_financial_review.
+- Otros: cron_agent_failure_rate, cron_anomaly_detect, cron_gdpr_retention,
+  cron_unknown_agent_alert, cron_stuck_executions, cron_onboarding_session_review,
+  cron_compliance_audit_weekly.
+
+Audit final post-patch: 47 con set_config / 0 at risk.
+
+Estado: el sistema esta blindado contra fallos RLS tanto en workflows cliente
+(19 con set_tenant_context CTE) como en crones internos (47 con super_admin
+bypass).
+
+V2 multi-tenant: los crones se refactorizaran para iterar tenants reales
+(Patron C del doc x3_multi_tenant_design.md). Por ahora bypass es OK porque
+solo hay 1 tenant.
+
+---
+
 ## 2026-05-03 — Bloque 52 (X3 CERRADO): 050 RLS aplicada + smoke E2E live
 
 Damian aplico migracion 050 en Supabase. RLS habilitada en 11 tablas raiz

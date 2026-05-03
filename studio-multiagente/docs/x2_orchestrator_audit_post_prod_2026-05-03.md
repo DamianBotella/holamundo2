@@ -7,18 +7,18 @@
 
 ## TL;DR
 
-Con MCP n8n arriba, snapshotada producción (87 nodos main_orchestrator + 18 críticos) y verificados PA-1..PA-6 contra el estado real. Aplicados los fixes seguros (PA-5, PA-6, PA-7). PA-1, PA-3, PA-4, PA-8 quedan pendientes con diseño detallado abajo.
+**X2 cerrado al 100%** en sesión 2026-05-03 (B44→B48). Snapshotada producción, los 8 PA verificados contra estado real, los 7 con bug aplicados, PA-2 descartado tras evidencia. E2E real validado para PA-3 y PA-4.
 
 | ID | Severidad | Estado real | Acción |
 |---|---|---|---|
-| PA-1 | 🔴 | CONFIRMADO | Diseño documentado, **pendiente Damián** |
+| PA-1 | 🔴 | CONFIRMADO | ✅ **APLICADO** B46 — Variante A (filter `approval_type IN`) |
 | PA-2 | — | **DESCARTADO** | No es bug en prod (mappingMode=defineBelow con project_id explícito) |
-| PA-3 | 🟡 | CONFIRMADO sistémico (1/31 con onError) | Diseño documentado, **pendiente sesión dirigida** |
-| PA-4 | 🟡 | CONFIRMADO | Diseño documentado, **pendiente** |
-| PA-5 | 🟡 | CONFIRMADO sistémico (23/25 fixed) | ✅ **APLICADO** |
-| PA-6 | 🟢 | CONFIRMADO | ✅ **RESUELTO** (snapshot multi-workflow guardado) |
-| PA-7 | 🆕 | CONFIRMADO | ✅ **APLICADO** (2 huérfanos eliminados) |
-| PA-8 | 🆕 | CONFIRMADO | ✅ **APLICADO** (B45 — branch false con Log + Respond) |
+| PA-3 | 🟡 | CONFIRMADO sistémico | ✅ **APLICADO** B46+B47 — orchestrator + 2 entrypoints HTTP. E2E validado |
+| PA-4 | 🟡 | CONFIRMADO | ✅ **APLICADO** B48 — Variante B (lock table TTL 10min). E2E race validado |
+| PA-5 | 🟡 | CONFIRMADO sistémico (23/25 fixed) | ✅ **APLICADO** B44 |
+| PA-6 | 🟢 | CONFIRMADO | ✅ **RESUELTO** B44 (snapshot multi-workflow guardado) |
+| PA-7 | 🆕 | CONFIRMADO | ✅ **APLICADO** B44 (2 huérfanos eliminados) |
+| PA-8 | 🆕 | CONFIRMADO | ✅ **APLICADO** B45 (branch false con Log + Respond) |
 
 ---
 
@@ -170,19 +170,22 @@ Resumen:
 
 **Justificación de no replicar a agent_X:** si Call LLM dentro de un agente lanza throw, el sub-workflow termina con exception → padre `Run agent_X` (con `onError: continueErrorOutput` aplicado en B46) lo captura en su rama error → Format Agent Error Context → Log Agent Error → Respond Agent Error. Replicar PA-3 dentro de cada agent_X duplicaría logs y aumentaría complejidad sin valor.
 
-### PA-4: advisory lock en Load Project
+### PA-4: advisory lock en Load Project — APLICADO ✅ (B48)
 
-**Plan ejecutable detallado:** [`pa4_advisory_lock_plan.md`](pa4_advisory_lock_plan.md)
+Variante B (passive TTL 10 min) aplicada. Damián ejecutó migración 054 en Supabase (tabla `orchestrator_locks` + función `cleanup_orchestrator_zombies()`).
 
-Resumen:
-- Migración 054 nueva: tabla `orchestrator_locks` + función `cleanup_orchestrator_zombies()` con TTL 10 min.
-- 3 nodos nuevos (`Lock Acquired?`, `Respond Lock Conflict`, `Release Lock`) + modificar `Load Project` SQL.
-- Pruebas explica por qué `pg_try_advisory_xact_lock` NO funciona (cada nodo postgres = transacción discreta).
-- 3 variantes de implementación (A=perfecta con 21+ conexiones, B=cleanup_zombies pasivo TTL 10min, C=cron proactivo cada 5min).
+7 ops MCP atómicas:
+- **Load Project SQL combinado**: `WITH zombies_cleanup AS (DELETE WHERE locked_at < now() - 10min), lock_attempt AS (INSERT ... ON CONFLICT DO NOTHING RETURNING) SELECT lock_acquired, p.*, pending_approvals (PA-1 filter)`. queryReplacement: `[$json.project_id, $execution.id]`.
+- **2 nodos nuevos**: `Lock Acquired?` (IF) + `Respond Lock Conflict` (Code statusCode 409).
+- **Reorganización**: `Load Project → Lock Acquired? → [true] Prepare Project Data | [false] Respond Lock Conflict`.
 
-**Decisión bloqueante (Damián):** elegir variante A/B/C + autorizar migración 054.
+**E2E test race condition validado** (executions 3210 single + 3212/3213/3214 concurrent):
+- Trigger 3210: `lock_acquired: true` → flow normal.
+- Triggers 3212/3213/3214 simultáneos (≤50ms tras 3210): `lock_acquired: false` → branch false → `{statusCode:409, status:'busy', retry_after:10, project_id}`.
 
-**Dependencia con PA-1:** PA-4 incorpora el cambio de PA-1 en el SQL del `Load Project`. **Aplicar PA-1 primero**, verificar, luego pasar a PA-4.
+**Side effect documentado de Variante B**: el lock NO se libera explícitamente al final del flow. TTL passive de 10 min via `cleanup_orchestrator_zombies()` que se llama al INICIO de cada nuevo trigger. Implica que re-invocar el orchestrator para el mismo `project_id` en menos de 10 min devuelve 409. Si esto se vuelve un problema operativo, migrar a Variante A (Release Lock explícito al final del flow, ~21 conexiones más invasivo).
+
+main_orchestrator: 90 → 92 nodos.
 
 ### PA-8: Regulatory Complete? sin branch false — APLICADO ✅ (B45)
 

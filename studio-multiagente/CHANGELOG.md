@@ -2,6 +2,47 @@
 
 Histórico cronológico de hitos del sistema. Generado a partir de git log.
 
+## 2026-05-03 — Bloque 48 (PA-4 aplicado): X2 cerrado al 100%
+
+PA-4 Variante B (passive TTL 10min) aplicado tras Damian ejecutar migracion 054
+en Supabase (orchestrator_locks table + cleanup_orchestrator_zombies function).
+
+7 ops MCP atomicas en main_orchestrator:
+- Load Project SQL combinado (PA-1 + PA-4): WITH zombies_cleanup AS (DELETE
+  WHERE locked_at < now() - 10min), lock_attempt AS (INSERT INTO orchestrator_locks
+  ON CONFLICT DO NOTHING RETURNING) SELECT lock_acquired, p.*, pending_approvals
+  (PA-1 filter approval_type IN). queryReplacement: [project_id, execution.id].
+- 2 nodos nuevos: Lock Acquired? (IF) at [-1140,240] + Respond Lock Conflict
+  (Code statusCode 409 + retry_after:10) at [-1140,400].
+- Reorganizacion: Load Project -> Lock Acquired? -> [true] Prepare Project Data
+  | [false] Respond Lock Conflict (terminal).
+
+E2E test race condition validado:
+- Trigger 3210 (single, t=0): lock_acquired=true -> branch true -> flow normal.
+- Triggers 3212/3213/3214 simultaneos (t+1.8s a +1.9s): lock_acquired=false ->
+  branch false -> Respond 409 con {statusCode:409, status:'busy', retry_after:10}.
+
+main_orchestrator: 90 -> 92 nodos.
+
+Side effect documentado: el lock NO se libera explicitamente al final del flow.
+TTL passive 10min via cleanup_orchestrator_zombies() llamada al inicio de cada
+nuevo trigger. Implica que re-invocar el orchestrator para el mismo project_id
+en menos de 10min devuelve 409. Si esto se vuelve problema operativo, migrar
+a Variante A (Release Lock explicito al final, ~21 conexiones).
+
+X2 al cierre B48 (100% cerrado):
+- Aplicados: PA-1, PA-3, PA-4, PA-5 (24/26), PA-6, PA-7, PA-8.
+- Descartado: PA-2.
+
+Stats finales:
+- main_orchestrator: 87 -> 92 nodos (-2 PA-7, +2 PA-8, +3 PA-3, +2 PA-4).
+- 24/26 INSERTs activity_log con details jsonb (92%).
+- 11/11 IF nodes con todas branches conectadas (100%).
+- Race condition resuelta E2E.
+- Path error sub-workflow validado E2E.
+
+---
+
 ## 2026-05-03 — Bloque 47 (PA-3 replicación a entrypoints HTTP)
 
 Replicación PA-3 a los 2 entrypoints HTTP webhook restantes con cliente externo.

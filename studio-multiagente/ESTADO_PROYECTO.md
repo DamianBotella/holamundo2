@@ -10,7 +10,7 @@
 | # | Bloque | Estado | Bloquea | Doc principal |
 |---|---|---|---|---|
 | **X1** | E2E real del pipeline | ✅ **COMPLETO** (B30-B34) | — | [`docs/e2e_evidence_FINAL_2026-04-29.md`](docs/e2e_evidence_FINAL_2026-04-29.md) |
-| **X2** | Auditoría main_orchestrator | ✅ **MVP CERRADO** (B44) — PA-5/6/7 aplicados, PA-1/3/4/8 diseñados pendiente sesión Damián | — | [`docs/x2_orchestrator_audit_post_prod_2026-05-03.md`](docs/x2_orchestrator_audit_post_prod_2026-05-03.md) |
+| **X2** | Auditoría main_orchestrator | ✅ **CERRADO 100%** (B44-B48) — PA-1/3/4/5/6/7/8 aplicados, PA-2 descartado. E2E validado | — | [`docs/x2_orchestrator_audit_post_prod_2026-05-03.md`](docs/x2_orchestrator_audit_post_prod_2026-05-03.md) |
 | **X3** | Multi-tenant + RLS | 📐 **DISEÑO DRAFT** (B36) | falta aplicar SQL + actualizar workflows | [`docs/x3_multi_tenant_design.md`](docs/x3_multi_tenant_design.md) |
 | **X4** | Auth Supabase | 📐 **DISEÑO COMPLETO** (B39) | bloqueado por X3 | [`docs/x4_auth_design.md`](docs/x4_auth_design.md) |
 | **X5** | API REST contractual | 📐 **CONTRACT v0.2 + 4 workflows** (B38) | bloqueado por X3+X4 | [`docs/api_v1.yaml`](docs/api_v1.yaml) |
@@ -136,6 +136,7 @@ git log --oneline -20
 | B45 | X2 cierre PA-8 | Branch false en `Regulatory Complete?` (Log Regulatory Pending + Respond Regulatory Pending). main_orchestrator vuelve a 87 nodos. |
 | B46 | PA-1 + PA-3 + E2E + Drive | Variant A approval_type filter + 27 ops orchestrator + E2E forzado validado (365ms, path error completo). Bug Drive credencial descubierto y arreglado por Damián. |
 | B47 | PA-3 replicación entrypoints HTTP | init_new_project (13 ops) + util_consultation (4 ops). Sub-workflows agente NO replican (cubiertos por PA-3 del orchestrator) |
+| B48 | PA-4 + X2 cerrado 100% | Variante B lock table TTL 10min. Damián aplicó migración 054. 7 ops MCP. E2E race con 3 triggers simultáneos validado (1 toma lock, 3 reciben 409). |
 
 ---
 

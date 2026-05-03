@@ -146,34 +146,14 @@ Probablemente nunca disparado en E2E porque agent_regulatory ha funcionado. Pero
 
 ### PA-1: scope `pending_approvals` por `approval_type`
 
-**Problema:** chequeo global bloquea cualquier fase si hay 1 approval pendiente.
+**Plan ejecutable detallado:** [`pa1_pending_approvals_plan.md`](pa1_pending_approvals_plan.md)
 
-**Diseño recomendado:**
+Resumen:
+- Variante A (recomendada): filtrar por `approval_type IN ('briefing_review','design_review','proposal_review')`. 1 op MCP.
+- Variante B: matriz CASE phase→type estricta.
+- approval_types confirmados en schema: 7 totales, 3 fase-bloqueantes.
 
-Modificar `Load Project` para que el subquery filtre por la `approval_type` relevante a la fase actual:
-
-```sql
-SELECT p.id, p.name, p.current_phase, p.status, p.budget_target, p.client_id,
-  (
-    SELECT COUNT(*) FROM approvals
-    WHERE project_id = p.id AND status = 'pending'
-      AND approval_type = CASE p.current_phase
-        WHEN 'intake'        THEN 'briefing'
-        WHEN 'briefing_done' THEN 'design'
-        WHEN 'design_done'   THEN 'documents'
-        WHEN 'analysis_done' THEN 'materials'
-        WHEN 'costs_done'    THEN 'costs'
-        WHEN 'trades_done'   THEN 'proposal'
-        WHEN 'proposal_done' THEN 'client_approval'
-        ELSE 'never_match'
-      END
-  ) as pending_approvals
-FROM projects p WHERE p.id = $1::uuid LIMIT 1
-```
-
-**Decisión bloqueante (Damián):** confirmar el mapeo `current_phase → approval_type`. Hoy no está documentado en un único lugar. Si el mapeo es distinto al de arriba, el fix bloquea o desbloquea fases incorrectamente.
-
-**Alternativa más simple:** mover el chequeo `pending_approvals > 0` DENTRO de cada case del Switch, scoped a la fase. Más invasivo (requiere 8 nodos IF nuevos) pero hace explícito el approval_type por fase.
+**Decisión bloqueante (Damián):** elegir variante A o B + ejecutar query de auditoría sobre Supabase para entender el universo actual de approvals pendientes.
 
 ### PA-3: error handling en 30 executeWorkflow
 
@@ -190,29 +170,17 @@ Resumen:
 
 ### PA-4: advisory lock en Load Project
 
-**Problema:** webhooks simultáneos disparan 2× el mismo agente.
+**Plan ejecutable detallado:** [`pa4_advisory_lock_plan.md`](pa4_advisory_lock_plan.md)
 
-**Diseño recomendado:**
+Resumen:
+- Migración 054 nueva: tabla `orchestrator_locks` + función `cleanup_orchestrator_zombies()` con TTL 10 min.
+- 3 nodos nuevos (`Lock Acquired?`, `Respond Lock Conflict`, `Release Lock`) + modificar `Load Project` SQL.
+- Pruebas explica por qué `pg_try_advisory_xact_lock` NO funciona (cada nodo postgres = transacción discreta).
+- 3 variantes de implementación (A=perfecta con 21+ conexiones, B=cleanup_zombies pasivo TTL 10min, C=cron proactivo cada 5min).
 
-```sql
-SELECT
-  pg_try_advisory_xact_lock(hashtext('orch:' || $1::text)) AS lock_acquired,
-  p.id, p.name, p.current_phase, p.status, p.budget_target, p.client_id,
-  (SELECT COUNT(*) FROM approvals
-     WHERE project_id = p.id AND status = 'pending'
-       AND approval_type = CASE p.current_phase ... END  -- combinado con PA-1
-  ) as pending_approvals
-FROM projects p WHERE p.id = $1::uuid LIMIT 1;
-```
+**Decisión bloqueante (Damián):** elegir variante A/B/C + autorizar migración 054.
 
-Después de Load Project, añadir:
-- `IF Lock Acquired?` (true → seguir; false → `Respond Lock Conflict` 409 con `{status:'busy', retry_after:5}`).
-
-**Tradeoff:** advisory_xact_lock libera al final de la transacción n8n. Como cada nodo postgres es su propia transacción, el lock no persiste entre Load Project y los nodos posteriores. Para que dure el flujo completo, hay que hacer un único nodo postgres "begin tx + lock + select + ... + commit" o usar `pg_advisory_lock` + manual unlock al final. Esto complica el diseño.
-
-**Alternativa simple:** crear tabla `orchestrator_locks(project_id uuid PK, locked_at timestamptz)` y hacer `INSERT ... ON CONFLICT DO NOTHING RETURNING locked_at`. Si retorna 0 rows → lock not acquired. Liberar con DELETE en el último Respond. Más fiable que advisory_lock entre nodos n8n.
-
-**Decisión bloqueante:** advisory_xact_lock vs lock table explícita. Recomendación: lock table (la tabla con DELETE manual). Migración nueva (054).
+**Dependencia con PA-1:** PA-4 incorpora el cambio de PA-1 en el SQL del `Load Project`. **Aplicar PA-1 primero**, verificar, luego pasar a PA-4.
 
 ### PA-8: Regulatory Complete? sin branch false — APLICADO ✅ (B45)
 

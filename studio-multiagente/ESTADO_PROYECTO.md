@@ -11,7 +11,7 @@
 |---|---|---|---|---|
 | **X1** | E2E real del pipeline | ✅ **COMPLETO** (B30-B34) | — | [`docs/e2e_evidence_FINAL_2026-04-29.md`](docs/e2e_evidence_FINAL_2026-04-29.md) |
 | **X2** | Auditoría main_orchestrator | ✅ **CERRADO 100%** (B44-B48) — PA-1/3/4/5/6/7/8 aplicados, PA-2 descartado. E2E validado | — | [`docs/x2_orchestrator_audit_post_prod_2026-05-03.md`](docs/x2_orchestrator_audit_post_prod_2026-05-03.md) |
-| **X3** | Multi-tenant + RLS | 🔄 **EN CURSO** (B49-B50) — 049+049b aplicadas, orchestrator parchado, 17 workflows pendientes con patron CTE | falta parchar 17 workflows + aplicar 050 | [`docs/x3_workflow_patch_pattern.md`](docs/x3_workflow_patch_pattern.md) |
+| **X3** | Multi-tenant + RLS | 🔄 **EN CURSO** (B49-B51) — 049+049b aplicadas, 19 workflows parchados con CTE, listo para 050 | falta aplicar 050 + smoke 2 tenants | [`docs/x3_workflow_patch_pattern.md`](docs/x3_workflow_patch_pattern.md) |
 | **X4** | Auth Supabase | 📐 **DISEÑO COMPLETO** (B39) | bloqueado por X3 | [`docs/x4_auth_design.md`](docs/x4_auth_design.md) |
 | **X5** | API REST contractual | 📐 **CONTRACT v0.2 + 4 workflows** (B38) | bloqueado por X3+X4 | [`docs/api_v1.yaml`](docs/api_v1.yaml) |
 | **X6** | UI Foxhole | 📐 **DISEÑO COMPLETO** (B40) | bloqueado por X1-X5 | [`docs/x6_foxhole_ui_design.md`](docs/x6_foxhole_ui_design.md) |
@@ -139,6 +139,7 @@ git log --oneline -20
 | B48 | PA-4 + X2 cerrado 100% | Variante B lock table TTL 10min. Damián aplicó migración 054. 7 ops MCP. E2E race con 3 triggers simultáneos validado (1 toma lock, 3 reciben 409). |
 | B49 | X3 inicio | 049 (tenant_id 8 tablas raíz) + 049b (helpers set_tenant_context, resolve_tenant_from_project, is_super_admin). Damián aplicó ambas. |
 | B50 | X3 paso 3 PARCIAL | Patrón nodo separado FALLÓ (rompe item del trigger). Revertido en 18 workflows. main_orchestrator parchado con patrón correcto (set_config en CTE de Load Project). init_new_project tenant_id hardcoded a damian-mtnz. Patrón correcto documentado en x3_workflow_patch_pattern.md. |
+| B51 | X3 paso 3 COMPLETO | 17 workflows parchados con patrón CTE (5 grupos por tipo de trigger). E2E validado en orchestrator: tenant_id resuelto correctamente + item preservado completo. |
 
 ---
 

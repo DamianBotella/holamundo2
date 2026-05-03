@@ -1,0 +1,252 @@
+{
+  "name": "agent_trades",
+  "active": true,
+  "nodes": [
+    {
+      "id": "at-00",
+      "name": "Receive Project",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    },
+    {
+      "id": "at-01",
+      "name": "Load Project",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        250,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      },
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH _ts AS (SELECT set_config('app.current_tenant', COALESCE(resolve_tenant_from_project($1::uuid)::text, ''), false) AS s) SELECT q.* FROM (SELECT p.id, p.name as project_name, p.project_type, p.current_phase, p.budget_target, p.location_city, c.name as client_name FROM projects p JOIN clients c ON c.id = p.client_id WHERE p.id = $1::uuid) q, _ts",
+        "options": {
+          "queryReplacement": "={{ [$json.project_id] }}"
+        }
+      }
+    },
+    {
+      "id": "at-02",
+      "name": "Load Cost Estimate",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        500,
+        300
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      },
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, breakdown, total_estimated FROM cost_estimates WHERE project_id = $1::uuid ORDER BY version DESC LIMIT 1",
+        "options": {
+          "queryReplacement": "={{ [$('Receive Project').first().json.project_id] }}"
+        }
+      }
+    },
+    {
+      "id": "at-03",
+      "name": "Load Materials",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        750,
+        300
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      },
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, name, quantity_estimated, unit, unit_price, total_estimated, category FROM material_items WHERE project_id = $1::uuid",
+        "options": {
+          "queryReplacement": "={{ [$('Receive Project').first().json.project_id] }}"
+        }
+      }
+    },
+    {
+      "id": "at-05",
+      "name": "Clear Previous Assignments",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1250,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      },
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "DELETE FROM trade_requests WHERE project_id = $1::uuid AND status = 'prepared'",
+        "options": {
+          "queryReplacement": "={{ [$('Receive Project').first().json.project_id] }}"
+        }
+      }
+    },
+    {
+      "id": "at-06",
+      "name": "Map to Gremios",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1500,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const projectId = $('Receive Project').first().json.project_id;\nconst costRow = $('Load Cost Estimate').first().json;\nconst rawBreakdown = costRow.breakdown;\nconst breakdown = typeof rawBreakdown === 'string'\n  ? JSON.parse(rawBreakdown)\n  : (Array.isArray(rawBreakdown) ? rawBreakdown : []);\nconst materials = $('Load Materials').all().map(i => i.json).filter(m => m.id);\n\nconst TRADE_MAP = [\n  { keywords: ['demolic', 'derribo', 'tabique', 'ladrillo', 'albanil', 'obra general', 'mamposter', 'solera', 'forjado', 'estructura', 'revestimiento'], trade_type: 'albanileria', label: 'Albañilería y obra general' },\n  { keywords: ['fontaner', 'plomer', 'inodoro', 'lavabo', 'ducha', 'bañera', 'desague', 'saneamient', 'sanitario', 'agua'], trade_type: 'fontaneria', label: 'Fontanería y sanitarios' },\n  { keywords: ['electric', 'iluminac', 'enchufe', 'cuadro', 'cableado', 'mecanismo', 'luminaria'], trade_type: 'electricidad', label: 'Electricidad' },\n  { keywords: ['cocina', 'encimera', 'electrodomest', 'campana'], trade_type: 'cocina', label: 'Instalación de cocina' },\n  { keywords: ['armario', 'mueble a medida', 'vestidor'], trade_type: 'armarios', label: 'Armarios y muebles a medida' },\n  { keywords: ['ventana', 'persiana', 'vidrio', 'acristalamiento'], trade_type: 'ventanas', label: 'Ventanas y carpintería exterior' },\n  { keywords: ['puerta', 'carpinter', 'tarima', 'parquet', 'suelo madera'], trade_type: 'carpinteria', label: 'Carpintería interior' },\n  { keywords: ['cerrajer', 'reja', 'barandil', 'herreria', 'metalic', 'acero'], trade_type: 'carpinteria_metalica', label: 'Carpintería metálica y cerrajería' },\n  { keywords: ['pintura', 'pintar', 'lacado', 'barniz', 'esmalte'], trade_type: 'pintura', label: 'Pintura' },\n  { keywords: ['climat', 'aire acondi', 'calefacc', 'radiador', 'suelo radiante', 'hvac', 'fancoil'], trade_type: 'climatizacion', label: 'Climatización' },\n];\n\nfunction normalize(s) {\n  return (s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');\n}\n\nfunction detectTradeType(text) {\n  const n = normalize(text);\n  for (const entry of TRADE_MAP) {\n    for (const kw of entry.keywords) {\n      if (n.includes(kw)) return entry;\n    }\n  }\n  return { trade_type: 'otro', label: 'Otros trabajos' };\n}\n\nconst grouped = {};\n\nfor (const item of breakdown) {\n  const entry = detectTradeType(item.partida || item.description || '');\n  const key = entry.trade_type;\n  if (!grouped[key]) grouped[key] = { label: entry.label, partidas: [], total: 0 };\n  grouped[key].partidas.push(item);\n  grouped[key].total += parseFloat(item.importe || item.amount || 0);\n}\n\nif (Object.keys(grouped).length === 0 && materials.length > 0) {\n  for (const mat of materials) {\n    const entry = detectTradeType(mat.name || mat.category || '');\n    const key = entry.trade_type;\n    if (!grouped[key]) grouped[key] = { label: entry.label, partidas: [], total: 0 };\n    grouped[key].partidas.push({ partida: mat.name, cantidad: mat.quantity_estimated, importe: mat.total_estimated });\n    grouped[key].total += parseFloat(mat.total_estimated || 0);\n  }\n}\n\nif (Object.keys(grouped).length === 0) {\n  return [{ json: {\n    project_id: projectId,\n    trade_type: 'albanileria',\n    scope_description: 'Obra general — sin desglose disponible',\n    scope_details: JSON.stringify([]),\n    status: 'prepared'\n  } }];\n}\n\nreturn Object.entries(grouped).map(([trade_type, data]) => {\n  const partidaLabels = data.partidas\n    .map(p => p.partida || p.description || '')\n    .filter(Boolean)\n    .slice(0, 3)\n    .join(', ');\n  return { json: {\n    project_id: projectId,\n    trade_type,\n    scope_description: data.label + (partidaLabels ? ': ' + partidaLabels : ''),\n    scope_details: JSON.stringify(data.partidas),\n    status: 'prepared'\n  } };\n});"
+      }
+    },
+    {
+      "id": "at-08",
+      "name": "Insert Trade Assignment",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2000,
+        150
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      },
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO trade_requests (project_id, trade_type, scope_description, scope_details, status) VALUES ($1::uuid, $2, $3, $4::jsonb, $5) RETURNING id",
+        "options": {
+          "queryReplacement": "={{ [$json.project_id, $json.trade_type, $json.scope_description, $json.scope_details, $json.status] }}"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "id": "at-09",
+      "name": "Return Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2000,
+        450
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const assignments = $('Map to Gremios').all();\nreturn [{ json: {\n  status: 'complete',\n  trades_count: assignments.length,\n  trade_types: assignments.map(a => a.json.trade_type)\n} }];"
+      }
+    }
+  ],
+  "connections": {
+    "Load Project": {
+      "main": [
+        [
+          {
+            "node": "Load Cost Estimate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Cost Estimate": {
+      "main": [
+        [
+          {
+            "node": "Load Materials",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clear Previous Assignments": {
+      "main": [
+        [
+          {
+            "node": "Map to Gremios",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Materials": {
+      "main": [
+        [
+          {
+            "node": "Clear Previous Assignments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Map to Gremios": {
+      "main": [
+        [
+          {
+            "node": "Insert Trade Assignment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Trade Assignment": {
+      "main": [
+        [
+          {
+            "node": "Return Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Receive Project": {
+      "main": [
+        [
+          {
+            "node": "Load Project",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": null,
+  "versionId": "ac2ed120-6b20-4c6c-b385-486805916598",
+  "tags": []
+}

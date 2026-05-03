@@ -2,6 +2,51 @@
 
 Histórico cronológico de hitos del sistema. Generado a partir de git log.
 
+## 2026-05-03 — Bloque 51 (X3 paso 3 COMPLETO): 17 workflows con patron CTE
+
+Aplicado el patron correcto (set_config en CTE _ts dentro de la query existente)
+a los 17 workflows criticos restantes. Cada query del primer Postgres
+post-trigger se wrappeo asi:
+
+  WITH _ts AS (SELECT set_config('app.current_tenant',
+    COALESCE(resolve_tenant_from_project($1::uuid)::text, ''),
+    false) AS s)
+  SELECT q.* FROM (<query original>) q, _ts
+
+Esto preserva el item original (cross join con _ts no afecta columnas) y
+fuerza la evaluacion del CTE.
+
+Distribucion por grupos:
+- Grupo D (8 agentes con primer postgres = Load Project/Project Data/All Project
+  Data): query completa wrappeada. Aplicado a accessibility, costs, documents,
+  materials, memory, planner, safety_plan, trades.
+- Grupo A (4 agentes + util_consultation con primer postgres = Load Architect
+  Email): la query no usaba project_id, ahora si para set_config. Aplicado a
+  briefing, design, regulatory, proposal, util_consultation.
+- Grupo B (util_notification + util_architect_presence): CASE para project_id
+  vacio que usa baseline tenant.
+- Grupo C (error_handler): hardcoded baseline (errorTrigger no garantiza
+  project_id en contexto).
+- Grupo E (util_llm_call Log Injection Check INSERT): CTE _ts referenciado en
+  FROM del SELECT del INSERT. CASE para project_id='no_project'.
+
+E2E validado:
+- main_orchestrator execution 3259: Load Project devolvio item completo
+  preservado (lock_acquired, id, name, current_phase, status, budget_target,
+  client_id, tenant_id='bbf3f07e-...', pending_approvals).
+- init_new_project execution 3249: success en 6s, project 07a90ae4-... creado.
+
+Stubs creados durante smoke (Damian limpiar):
+- 07a90ae4-885d-43da-80e1-3a55c8bab872 (TEST X3 CTE PATTERN - DELETE ME)
+
+Estado X3 al cierre B51:
+- BD: 049 + 049b aplicadas.
+- n8n: 19 workflows criticos parchados con set_tenant_context activo.
+- 050 (RLS) NO aplicada todavia. Listo para aplicar en sesion proxima
+  (con smoke E2E completo + verificacion 2do tenant aislamiento).
+
+---
+
 ## 2026-05-03 — Bloque 50 (X3 paso 3 PARCIAL): patron correcto descubierto
 
 Bloque exploratorio. Aplique el approach inicial (anadir nodo Postgres separado

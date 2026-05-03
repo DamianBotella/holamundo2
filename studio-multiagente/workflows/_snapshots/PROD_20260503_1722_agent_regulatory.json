@@ -1,0 +1,921 @@
+{
+  "name": "agent_regulatory",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "passthrough",
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "project_id",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        250,
+        300
+      ],
+      "id": "e1a2-0001",
+      "name": "Receive Project"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO agent_executions (project_id, agent_name, status) VALUES ($1::uuid, 'agent_regulatory', 'running') RETURNING id",
+        "options": {
+          "queryReplacement": "={{ [$('Receive Project').first().json.project_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        500,
+        160
+      ],
+      "id": "e1a2-exec-start",
+      "name": "Start Execution"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT p.id, p.name, p.project_type, p.location_city, p.location_province, p.property_type, p.property_area_m2, p.budget_target, c.name as client_name FROM projects p LEFT JOIN clients c ON c.id = p.client_id WHERE p.id = $1::uuid",
+        "options": {
+          "queryReplacement": "={{ [$('Receive Project').first().json.project_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        500,
+        300
+      ],
+      "id": "e1a2-0002",
+      "name": "Load Project"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, option_number, title, description, intervention_logic, rooms_layout, technical_notes, conflict_points, pros, cons FROM design_options WHERE project_id = $1::uuid AND is_selected = true LIMIT 1",
+        "options": {
+          "queryReplacement": "={{ [$('Receive Project').first().json.project_id] }}",
+          "alwaysOutputData": true
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        750,
+        300
+      ],
+      "id": "e1a2-0003",
+      "name": "Load Selected Design Option"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, version, summary, client_needs, objectives, constraints, style_preferences, rooms_affected FROM briefings WHERE project_id = $1::uuid AND status = 'approved' ORDER BY version DESC LIMIT 1",
+        "options": {
+          "queryReplacement": "={{ [$('Receive Project').first().json.project_id] }}",
+          "alwaysOutputData": true
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1000,
+        300
+      ],
+      "id": "e1a2-0004",
+      "name": "Load Briefing"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT content, model_recommended, temperature FROM agent_prompts WHERE agent_name = 'agent_regulatory' AND prompt_type = 'system' AND is_active = true LIMIT 1",
+        "options": {
+          "alwaysOutputData": true
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1250,
+        300
+      ],
+      "id": "e1a2-0005",
+      "name": "Load Agent Prompt"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const projectId = $('Receive Project').first().json.project_id;\nconst project = $('Load Project').first().json;\nconst design = $('Load Selected Design Option').first().json;\nconst briefing = $('Load Briefing').first().json;\nconst agentPrompt = $('Load Agent Prompt').first().json;\n\nconst designContent = design || {};\nconst briefingContent = briefing || {};\n\nconst designStr = JSON.stringify(designContent).toLowerCase();\nconst briefStr = JSON.stringify(briefingContent).toLowerCase();\nconst hasStructural = designStr.includes('estructur') || briefStr.includes('estructur') || designStr.includes('structural');\n\nconst roomsAffected = briefingContent.rooms_affected || [];\nconst constraints = briefingContent.constraints || [];\n\nconst designSummary = design.title\n  ? `Opción ${design.option_number}: ${design.title}\\n${design.description || ''}`\n  : JSON.stringify(designContent, null, 2);\n\nconst roomsText = roomsAffected.length > 0\n  ? roomsAffected.map(r => `- ${r.room}: ${r.intervention}`).join('\\n')\n  : '- Sin detalle disponible';\n\nconst constraintsText = constraints.length > 0\n  ? constraints.map(c => `- ${c.description}`).join('\\n')\n  : '- Sin restricciones específicas';\n\nconst CCAA_MAP = {\n  'A Coruña': 'Galicia', 'Lugo': 'Galicia', 'Ourense': 'Galicia', 'Pontevedra': 'Galicia',\n  'Álava': 'País Vasco', 'Vizcaya': 'País Vasco', 'Guipúzcoa': 'País Vasco',\n  'Navarra': 'Navarra', 'La Rioja': 'La Rioja',\n  'Huesca': 'Aragón', 'Teruel': 'Aragón', 'Zaragoza': 'Aragón',\n  'Barcelona': 'Cataluña', 'Girona': 'Cataluña', 'Lleida': 'Cataluña', 'Tarragona': 'Cataluña',\n  'Valencia': 'Comunitat Valenciana', 'Alicante': 'Comunitat Valenciana', 'Castellón': 'Comunitat Valenciana',\n  'Murcia': 'Región de Murcia', 'Illes Balears': 'Illes Balears',\n  'Las Palmas': 'Canarias', 'Santa Cruz de Tenerife': 'Canarias',\n  'Cantabria': 'Cantabria', 'Asturias': 'Asturias',\n  'Ávila': 'Castilla y León', 'Burgos': 'Castilla y León', 'León': 'Castilla y León',\n  'Palencia': 'Castilla y León', 'Salamanca': 'Castilla y León', 'Segovia': 'Castilla y León',\n  'Soria': 'Castilla y León', 'Valladolid': 'Castilla y León', 'Zamora': 'Castilla y León',\n  'Albacete': 'Castilla-La Mancha', 'Ciudad Real': 'Castilla-La Mancha', 'Cuenca': 'Castilla-La Mancha',\n  'Guadalajara': 'Castilla-La Mancha', 'Toledo': 'Castilla-La Mancha',\n  'Badajoz': 'Extremadura', 'Cáceres': 'Extremadura',\n  'Almería': 'Andalucía', 'Cádiz': 'Andalucía', 'Córdoba': 'Andalucía', 'Granada': 'Andalucía',\n  'Huelva': 'Andalucía', 'Jaén': 'Andalucía', 'Málaga': 'Andalucía', 'Sevilla': 'Andalucía',\n  'Madrid': 'Comunidad de Madrid', 'Ceuta': 'Ceuta', 'Melilla': 'Melilla'\n};\nconst province = project.location_province || '';\nconst city = project.location_city || '';\nconst ccaa = CCAA_MAP[province] || province || 'no especificada';\n\nconst outputFormat = '{\\n  \"regulatory_tasks\": [\\n    {\\n      \"task_type\": \"licencia_obra|comunicacion_previa|permiso_comunidad|certificado_habitabilidad|cedula_urbanistica|informe_tecnico|otro\",\\n      \"title\": \"string\",\\n      \"description\": \"string\",\\n      \"entity\": \"string\",\\n      \"required_docs\": [\"string\"],\\n      \"estimated_timeline\": \"string\",\\n      \"estimated_cost\": null,\\n      \"priority\": \"critico|importante|recomendable|informativo\",\\n      \"normativa_confidence\": \"high|medium|low\",\\n      \"citation_source\": \"Referencia legal específica: artículo, norma, plan urbanístico\",\\n      \"draft_message\": \"string\",\\n      \"notes\": \"string\"\\n    }\\n  ]\\n}';\n\nconst userPrompt = `Detecta trámites y permisos potencialmente necesarios para este proyecto.\\n\\nPROYECTO:\\n- Tipo de intervención: ${project.project_type || 'reforma'}\\n- Localización: ${city}, ${province}\\n- Comunidad Autónoma: ${ccaa}\\n- Tipo de inmueble: ${project.property_type || ''}\\n- Superficie: ${project.property_area_m2 || ''} m²\\n\\nPROPUESTA DE DISTRIBUCIÓN SELECCIONADA:\\n${designSummary}\\n\\nINTERVENCIONES PREVISTAS:\\n${roomsText}\\n\\nRESTRICCIONES CONOCIDAS:\\n${constraintsText}\\n\\n¿HAY AFECTACIÓN ESTRUCTURAL PREVISTA?: ${hasStructural ? 'Posiblemente sí' : 'No indicado explícitamente'}\\n\\nINSTRUCCIÓN CRÍTICA — NORMATIVA ESTRATIFICADA:\\nAnaliza y distingue trámites según las tres capas normativas aplicables en España:\\n\\n1. CAPA NACIONAL (CTE, LOE, RD):\\n   Aplica en toda España: CTE (DB-SI, DB-SUA, DB-HS, DB-HE, DB-SE), LOE, RITE.\\n   En citation_source indica: CTE [Documento Básico] Art. [número] o RD [número]/[año].\\n\\n2. CAPA AUTONÓMICA (normativa de ${ccaa}):\\n   Legislación propia de ${ccaa}: habitabilidad, accesibilidad, eficiencia energética, patrimonio.\\n   En citation_source: Decreto/Ley [número] ${ccaa} Art. [número].\\n   Si desconoces la normativa de ${ccaa}, usa normativa_confidence low y explícalo en notes.\\n\\n3. CAPA MUNICIPAL/LOCAL (Ayuntamiento de ${city}, PGOU):\\n   Ordenanzas municipales, PGOU, licencias, comunicaciones previas.\\n   En citation_source: PGOU ${city} Art. [número] u Ordenanza [nombre] Art. [número].\\n   Si el PGOU de ${city} no está en tu base de conocimiento, usa normativa_confidence low e indica Verificar en Ayuntamiento.\\n\\nPara cada trámite especifica en qué capa normativa se basa y la referencia concreta.\\n\\nResponde EXCLUSIVAMENTE con un objeto JSON válido:\\n${outputFormat}`;\n\n// === STUDIO PROFILE INJECTION (B23) ===\nconst _studio = $('Load Studio Profile').first().json || {};\nfunction _safeStudio(v){ if(v==null)return null; if(typeof v==='string'){try{return JSON.parse(v);}catch(e){return v;}} return v; }\nconst _id=_safeStudio(_studio.identity)||{},_priorities=_safeStudio(_studio.priorities)||[],_redLines=_safeStudio(_studio.red_lines)||[],_jur=_safeStudio(_studio.jurisdiction)||{};\nconst _SP_REG_LINES=[];\n_SP_REG_LINES.push('Estudio: '+(_id.nombre_estudio||'estudio')+' en '+(_id.ciudad||'Espana')+'.');\n_SP_REG_LINES.push('JURISDICCION DEL ESTUDIO: '+(_jur.ccaa||'Espana')+'. Ayuntamientos habituales: '+((_jur.ayuntamientos_habituales||[]).join(', ')||'-')+'.');\n_SP_REG_LINES.push('PRIORIDADES (orden estricto):');\n(_priorities||[]).forEach(p=>_SP_REG_LINES.push((p.orden||'?')+'. '+(p.prioridad||'')));\n_SP_REG_LINES.push('LINEAS ROJAS:');\n(_redLines||[]).forEach(l=>_SP_REG_LINES.push('- '+(l.texto||'')));\nconst _SP_REG=_SP_REG_LINES.join('\\n');\n// === END STUDIO PROFILE INJECTION ===\nreturn [{ json: { agent_name: 'agent_regulatory',\n  project_id: projectId,\n  prompt_system: _SP_REG + '\\n\\n' + (agentPrompt.content || 'Eres el Agente de Normativa y Tramitación.'),\n  prompt_user: userPrompt,\n  model: (agentPrompt.model_recommended || 'claude-sonnet-4-20250514').trim(),\n  temperature: agentPrompt.temperature || 0.2\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1500,
+        300
+      ],
+      "id": "e1a2-0006",
+      "name": "Prepare Regulatory Prompt"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "JoKqGZ8pDzhJohV2",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.1,
+      "position": [
+        1750,
+        300
+      ],
+      "id": "e1a2-0007",
+      "name": "Call LLM"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const llmResponse = $input.first().json;\nconst projectId = $('Receive Project').first().json.project_id;\n\nlet content = llmResponse.text || llmResponse.content || llmResponse.response || '';\nif (typeof content === 'object') content = JSON.stringify(content);\ncontent = content.replace(/```json\\n?/g, '').replace(/```\\n?/g, '').trim();\n\nlet parsed = {};\ntry {\n  parsed = JSON.parse(content);\n} catch(e) {\n  const match = content.match(/\\{[\\s\\S]*\\}/);\n  if (match) { try { parsed = JSON.parse(match[0]); } catch(e2) {} }\n}\n\nconst tasks = parsed.regulatory_tasks || [];\n\nif (tasks.length === 0) {\n  return [{ json: {\n    project_id: projectId,\n    task_type: 'otro',\n    title: 'Análisis normativo preliminar',\n    description: 'No se detectaron trámites específicos. Verificar manualmente con técnico.',\n    entity: 'Ayuntamiento local',\n    required_docs: '[]',\n    estimated_timeline: 'Por determinar',\n    estimated_cost: null,\n    priority: 'informativo',\n    normativa_confidence: 'low',\n    citation_source: '',\n    draft_message: '',\n    notes: 'El LLM no devolvió trámites específicos.'\n  }}];\n}\n\nreturn tasks.map(task => ({ json: {\n  project_id: projectId,\n  task_type: task.task_type || 'otro',\n  title: task.title || 'Trámite sin título',\n  description: task.description || '',\n  entity: task.entity || '',\n  required_docs: JSON.stringify(task.required_docs || []),\n  estimated_timeline: task.estimated_timeline || '',\n  estimated_cost: task.estimated_cost || null,\n  priority: task.priority || 'informativo',\n  normativa_confidence: task.normativa_confidence || 'low',\n  citation_source: task.citation_source || '',\n  draft_message: task.draft_message || '',\n  notes: task.notes || ''\n}}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2000,
+        300
+      ],
+      "id": "e1a2-0008",
+      "name": "Parse Regulatory Tasks"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO regulatory_tasks (project_id, execution_id, exec_status, task_type, title, description, entity, required_docs, estimated_timeline, estimated_cost, priority, draft_message, notes, status, normativa_confidence, citation_source, normativa_fetched_at) VALUES ($1::uuid, $2::uuid, 'draft', $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, 'detected', $13, $14, NOW()) RETURNING id, task_type, priority, title",
+        "options": {
+          "queryReplacement": "={{ [$json.project_id, $('Start Execution').first().json.id, $json.task_type, $json.title, $json.description, $json.entity, $json.required_docs, $json.estimated_timeline, $json.estimated_cost, $json.priority, $json.draft_message, $json.notes, $json.normativa_confidence, $json.citation_source] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2250,
+        300
+      ],
+      "id": "e1a2-0009",
+      "name": "Insert Regulatory Task"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const all = $input.all(); const pid = $('Receive Project').first().json.project_id; const tasks = all.map(i=>i.json); const tc = tasks.length; const cc = tasks.filter(t=>t.priority==='critico').length; return [{ json: { project_id: pid, tasks_count: tc, critical_count: cc, needs_external_contact: cc > 0, tasks_summary: tasks.map(t=>`[${t.priority}] ${t.title}`).join('\\n') } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2500,
+        300
+      ],
+      "id": "e1a2-0010",
+      "name": "Collect All Tasks"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "e1a2-0110",
+              "leftValue": "={{ $json.needs_external_contact }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2750,
+        300
+      ],
+      "id": "e1a2-0011",
+      "name": "External Contact Needed?"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO approvals (project_id, approval_type, requested_by, context_data, status) VALUES ($1::uuid, 'external_contact', 'agent_regulatory', $2::jsonb, 'pending') RETURNING id",
+        "options": {
+          "queryReplacement": "={{ [$json.project_id, JSON.stringify({tasks_count: $json.tasks_count, critical_count: $json.critical_count})] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        3000,
+        440
+      ],
+      "id": "e1a2-0013",
+      "name": "Create Approval"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const approval = $('Create Approval').first().json;\nconst data = $('Collect All Tasks').first().json;\nconst resumeUrl = $execution.resumeUrl;\n\nconst approveUrl = resumeUrl + '?action=approve';\nconst rejectUrl = resumeUrl + '?action=reject';\n\nconst htmlBody = `<div style=\"font-family:Arial,sans-serif;max-width:600px;margin:0 auto;\"><h2 style=\"color:#2c3e50;\">Studio AI — Revisión normativa</h2><p>El análisis normativo ha detectado <strong>${data.critical_count} trámite(s) crítico(s)</strong> que pueden requerir consulta con organismos oficiales.</p><h3 style=\"color:#e67e22;\">Trámites detectados:</h3><pre style=\"background:#f8f9fa;padding:16px;border-radius:4px;font-size:13px;white-space:pre-wrap;\">${data.tasks_summary}</pre><p><strong>¿Autoriza preparar el contacto con los organismos correspondientes?</strong><br><em>Los borradores de comunicación están listos. El envío real requerirá su aprobación final.</em></p><div style=\"margin:30px 0;\"><a href=\"${approveUrl}\" style=\"background-color:#27ae60;color:white;padding:12px 24px;text-decoration:none;border-radius:4px;margin-right:16px;\">✅ Autorizar contacto</a>&nbsp;&nbsp;<a href=\"${rejectUrl}\" style=\"background-color:#95a5a6;color:white;padding:12px 24px;text-decoration:none;border-radius:4px;\">⏸️ No por ahora</a></div><p style=\"color:#95a5a6;font-size:12px;\">Este enlace expira en 72 horas.</p></div>`;\n\nconst archEmail = ($('Load Architect Email').first()?.json?.value) || 'botelladesdeel98@gmail.com';\nreturn [{ json: {\n  html_body: htmlBody,\n  subject: `[Studio AI] Revisión normativa — ${data.critical_count} trámite(s) crítico(s)`,\n  to: archEmail,\n  project_id: data.project_id,\n  tasks_count: data.tasks_count,\n  critical_count: data.critical_count,\n  approval_id: approval.id\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3250,
+        440
+      ],
+      "id": "e1a2-0014",
+      "name": "Build Contact Email"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.to }}",
+        "subject": "={{ $json.subject }}",
+        "emailType": "html",
+        "message": "={{ $json.html_body }}",
+        "options": {}
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "PLACEHOLDER",
+          "name": "Gmail DamianDomeya@"
+        }
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        3500,
+        440
+      ],
+      "id": "e1a2-0015",
+      "name": "Send Contact Notification"
+    },
+    {
+      "parameters": {
+        "resume": "webhook",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        3750,
+        440
+      ],
+      "id": "e1a2-0016",
+      "name": "Wait for Contact Approval"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const d = $input.first().json; const action = (d.query?.action || d.body?.action || 'reject').toLowerCase(); const data = $('Collect All Tasks').first().json; return [{ json: { action, is_approved: action === 'approve', project_id: data.project_id, tasks_count: data.tasks_count, critical_count: data.critical_count } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4000,
+        440
+      ],
+      "id": "e1a2-0017",
+      "name": "Process Contact Decision"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "e1a2-0180",
+              "leftValue": "={{ $json.is_approved }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        4250,
+        440
+      ],
+      "id": "e1a2-0018",
+      "name": "Contact Approved?"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE regulatory_tasks SET status = 'confirmed' WHERE project_id = $1::uuid AND priority = 'critico'",
+        "options": {
+          "queryReplacement": "={{ [$json.project_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        4500,
+        300
+      ],
+      "id": "e1a2-0019",
+      "name": "Mark Tasks Confirmed"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE agent_executions SET status = 'completed', finished_at = now() WHERE id = $1::uuid; UPDATE regulatory_tasks SET exec_status = 'confirmed' WHERE execution_id = $1::uuid",
+        "options": {
+          "queryReplacement": "={{ [$('Start Execution').first().json.id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        5000,
+        300
+      ],
+      "id": "e1a2-exec-complete",
+      "name": "Complete Execution"
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "duplicateItem": false,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "e1a2-0201",
+              "name": "status",
+              "value": "complete",
+              "type": "string"
+            },
+            {
+              "id": "e1a2-0202",
+              "name": "phase",
+              "value": "analysis_done",
+              "type": "string"
+            },
+            {
+              "id": "e1a2-0203",
+              "name": "tasks_count",
+              "value": "={{ $('Collect All Tasks').first().json.tasks_count }}",
+              "type": "number"
+            },
+            {
+              "id": "e1a2-0204",
+              "name": "critical_count",
+              "value": "={{ $('Collect All Tasks').first().json.critical_count }}",
+              "type": "number"
+            },
+            {
+              "id": "e1a2-0205",
+              "name": "external_contact_approved",
+              "value": "=true",
+              "type": "boolean"
+            }
+          ]
+        },
+        "includeOtherFields": false
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        5250,
+        300
+      ],
+      "id": "e1a2-0020",
+      "name": "Return Approved"
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "duplicateItem": false,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "e1a2-0211",
+              "name": "status",
+              "value": "complete",
+              "type": "string"
+            },
+            {
+              "id": "e1a2-0212",
+              "name": "phase",
+              "value": "analysis_done",
+              "type": "string"
+            },
+            {
+              "id": "e1a2-0213",
+              "name": "tasks_count",
+              "value": "={{ $('Process Contact Decision').first().json.tasks_count }}",
+              "type": "number"
+            },
+            {
+              "id": "e1a2-0214",
+              "name": "critical_count",
+              "value": "={{ $('Process Contact Decision').first().json.critical_count }}",
+              "type": "number"
+            },
+            {
+              "id": "e1a2-0215",
+              "name": "external_contact_approved",
+              "value": "=false",
+              "type": "boolean"
+            }
+          ]
+        },
+        "includeOtherFields": false
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        4500,
+        580
+      ],
+      "id": "e1a2-0021",
+      "name": "Return Not Approved"
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "duplicateItem": false,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "e1a2-0301",
+              "name": "status",
+              "value": "complete",
+              "type": "string"
+            },
+            {
+              "id": "e1a2-0302",
+              "name": "phase",
+              "value": "analysis_done",
+              "type": "string"
+            },
+            {
+              "id": "e1a2-0303",
+              "name": "external_contact_approved",
+              "value": "=false",
+              "type": "boolean"
+            }
+          ]
+        },
+        "includeOtherFields": false
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        5250,
+        440
+      ],
+      "id": "e1a2-0022",
+      "name": "Return No Contact Needed"
+    },
+    {
+      "id": "e1a2-intel-reg",
+      "name": "Write Regulatory Intelligence",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2625,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO project_intelligence (project_id, agent_name, key, value) VALUES ($1::uuid, 'agent_regulatory', 'regulatory_intelligence', $2::jsonb) ON CONFLICT (project_id, agent_name, key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
+        "options": {
+          "queryReplacement": "={{ [$json.project_id, JSON.stringify({ critical_count: $json.critical_count, tasks_count: $json.tasks_count, structural_risk: ($json.tasks_summary || '').toLowerCase().includes('estructur'), needs_external_contact: $json.needs_external_contact, tasks_summary: $json.tasks_summary })] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "f2c13069-6907-4cc9-896e-8cd9c04cc79b",
+      "name": "Load Architect Email",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        375,
+        160
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH _ts AS (SELECT set_config('app.current_tenant', COALESCE(resolve_tenant_from_project($1::uuid)::text, ''), false) AS s) SELECT q.value FROM (SELECT value FROM system_config WHERE key = 'architect_email') q, _ts",
+        "options": {
+          "queryReplacement": "={{ [$json.project_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ar-load-studio",
+      "name": "Load Studio Profile",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1125,
+        460
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM get_active_studio_profile();",
+        "options": {
+          "alwaysOutputData": true
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Start Execution": {
+      "main": [
+        [
+          {
+            "node": "Load Project",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Project": {
+      "main": [
+        [
+          {
+            "node": "Load Selected Design Option",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Selected Design Option": {
+      "main": [
+        [
+          {
+            "node": "Load Briefing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Briefing": {
+      "main": [
+        [
+          {
+            "node": "Load Agent Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Regulatory Prompt": {
+      "main": [
+        [
+          {
+            "node": "Call LLM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call LLM": {
+      "main": [
+        [
+          {
+            "node": "Parse Regulatory Tasks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Regulatory Tasks": {
+      "main": [
+        [
+          {
+            "node": "Insert Regulatory Task",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Regulatory Task": {
+      "main": [
+        [
+          {
+            "node": "Collect All Tasks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "External Contact Needed?": {
+      "main": [
+        [
+          {
+            "node": "Create Approval",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Complete Execution",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Approval": {
+      "main": [
+        [
+          {
+            "node": "Build Contact Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Contact Email": {
+      "main": [
+        [
+          {
+            "node": "Send Contact Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Contact Notification": {
+      "main": [
+        [
+          {
+            "node": "Wait for Contact Approval",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait for Contact Approval": {
+      "main": [
+        [
+          {
+            "node": "Process Contact Decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Contact Decision": {
+      "main": [
+        [
+          {
+            "node": "Contact Approved?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Contact Approved?": {
+      "main": [
+        [
+          {
+            "node": "Mark Tasks Confirmed",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Not Approved",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Tasks Confirmed": {
+      "main": [
+        [
+          {
+            "node": "Complete Execution",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Complete Execution": {
+      "main": [
+        [
+          {
+            "node": "Return Approved",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return No Contact Needed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect All Tasks": {
+      "main": [
+        [
+          {
+            "node": "Write Regulatory Intelligence",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write Regulatory Intelligence": {
+      "main": [
+        [
+          {
+            "node": "External Contact Needed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Architect Email": {
+      "main": [
+        [
+          {
+            "node": "Start Execution",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Agent Prompt": {
+      "main": [
+        [
+          {
+            "node": "Load Studio Profile",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Studio Profile": {
+      "main": [
+        [
+          {
+            "node": "Prepare Regulatory Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Receive Project": {
+      "main": [
+        [
+          {
+            "node": "Load Architect Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": null,
+  "versionId": "48c7909c-b7b2-4dac-8930-3255e2c832ae",
+  "tags": []
+}

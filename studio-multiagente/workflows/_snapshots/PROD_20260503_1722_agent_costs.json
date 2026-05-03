@@ -1,0 +1,660 @@
+{
+  "name": "agent_costs",
+  "active": true,
+  "nodes": [
+    {
+      "id": "ac-0001",
+      "name": "Receive Project",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [
+        300,
+        300
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "ac-0002",
+      "name": "Load Project",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        500,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH _ts AS (SELECT set_config('app.current_tenant', COALESCE(resolve_tenant_from_project($1::uuid)::text, ''), false) AS s) SELECT q.* FROM (SELECT * FROM projects WHERE id = $1::uuid LIMIT 1) q, _ts",
+        "options": {
+          "queryReplacement": "={{ [$('Receive Project').first().json.project_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ac-0003",
+      "name": "Load Design Option",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        700,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, option_number, title, description, intervention_logic, rooms_layout, technical_notes FROM design_options WHERE project_id = $1::uuid AND exec_status = 'confirmed' ORDER BY CASE WHEN is_selected = true THEN 0 ELSE 1 END, created_at DESC LIMIT 1",
+        "options": {
+          "queryReplacement": "={{ [$('Receive Project').first().json.project_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ac-0004",
+      "name": "Load Materials",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        900,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, category, name, unit_price, unit, quantity_estimated, total_estimated, room_area, notes FROM material_items WHERE project_id = $1::uuid AND status = 'approved' ORDER BY category",
+        "options": {
+          "queryReplacement": "={{ [$('Receive Project').first().json.project_id] }}"
+        },
+        "additionalFields": {
+          "alwaysOutputData": true
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      },
+      "continueOnFail": true,
+      "alwaysOutputData": true
+    },
+    {
+      "id": "ac-0005",
+      "name": "Load Regulatory Tasks",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1100,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM regulatory_tasks WHERE project_id = $1::uuid AND exec_status = 'confirmed' ORDER BY priority",
+        "options": {
+          "queryReplacement": "={{ [$('Receive Project').first().json.project_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      },
+      "alwaysOutputData": true,
+      "continueOnFail": true
+    },
+    {
+      "id": "ac-0006",
+      "name": "Load Price References",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1300,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM price_references ORDER BY partida",
+        "additionalFields": {
+          "alwaysOutputData": true
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      },
+      "continueOnFail": true,
+      "alwaysOutputData": true
+    },
+    {
+      "id": "ac-0007",
+      "name": "Load Memory Cases",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1500,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT mc.* FROM memory_cases mc JOIN projects p ON p.id = $1::uuid WHERE mc.project_type = p.project_type AND mc.cost_final IS NOT NULL ORDER BY mc.created_at DESC LIMIT 5",
+        "options": {
+          "queryReplacement": "={{ [$('Receive Project').first().json.project_id] }}",
+          "alwaysOutputData": true
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      },
+      "continueOnFail": true,
+      "alwaysOutputData": true
+    },
+    {
+      "id": "ac-0008",
+      "name": "Load Agent Prompt",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1700,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM agent_prompts WHERE agent_name = 'agent_costs' AND is_active = true ORDER BY created_at DESC LIMIT 1",
+        "additionalFields": {
+          "alwaysOutputData": true
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      },
+      "alwaysOutputData": true,
+      "continueOnFail": true
+    },
+    {
+      "id": "ac-0009",
+      "name": "Start Execution",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1900,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO agent_executions (project_id, agent_name, status) VALUES ($1::uuid, 'agent_costs', 'running') RETURNING id",
+        "options": {
+          "queryReplacement": "={{ [$('Receive Project').first().json.project_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ac-0010",
+      "name": "Prepare Costs Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2100,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const projectId = $('Receive Project').first().json.project_id;\nconst project = $('Load Project').first().json;\nconst design = $('Load Design Option').first().json;\nconst agentPrompt = $('Load Agent Prompt').first().json;\nconst executionId = $('Start Execution').first().json.id;\n\nconst materials = $('Load Materials').all().map(i => i.json).filter(i => i.id);\nconst matByCategory = {};\nmaterials.forEach(m => {\n  if (!matByCategory[m.category]) matByCategory[m.category] = [];\n  const priceInfo = m.unit_price ? m.unit_price + 'eur' : 'sin precio';\n  matByCategory[m.category].push('  - ' + m.name + ': ' + (m.quantity_estimated || '?') + ' ' + (m.unit || 'ud') + ' x ' + priceInfo);\n});\nconst materialsText = Object.entries(matByCategory).map(([cat, items]) => cat.toUpperCase() + ':\\n' + items.join('\\n')).join('\\n') || '  (Sin materiales cargados)';\n\nconst regTasks = $('Load Regulatory Tasks').all().map(i => i.json).filter(i => i.id);\nconst regText = regTasks.length > 0\n  ? regTasks.map(t => '  - ' + t.title + ': ' + (t.estimated_cost ? t.estimated_cost + 'eur' : 'coste no estimado') + ' (' + (t.task_type || 'tramite') + ')').join('\\n')\n  : '  - No hay tramites con coste estimado';\n\nconst priceRefs = $('Load Price References').all().map(i => i.json).filter(i => i.avg_price);\nlet priceRefsText = '';\nif (priceRefs.length > 0) {\n  priceRefsText = '\\n\\nPRECIOS VERIFICADOS PARTIDAS DE OBRA (fuente: CYPE 2024-2025):\\n';\n  priceRefs.forEach(p => {\n    priceRefsText += '  - ' + p.partida + ' (' + p.unit + '): min ' + (p.min_price || '?') + ' / avg ' + p.avg_price + ' / max ' + (p.max_price || '?') + ' eur\\n';\n  });\n  priceRefsText += 'USA estos precios como base para mano de obra en las partidas correspondientes.';\n}\n\n// Patologias detectadas (agent_pathology) — sumar como partidas extra\nconst pathologies = $('Load Pathology Findings').all().map(i => i.json).filter(p => p.id);\nlet pathologiesText = '';\nif (pathologies.length > 0) {\n  pathologiesText = '\\n\\nPATOLOGIAS DETECTADAS EN INSPECCION PREVIA (sumar como partidas extra al breakdown):\\n';\n  pathologies.forEach(p => {\n    const cost = (p.estimated_intervention_cost_min || p.estimated_intervention_cost_max)\n      ? (p.estimated_intervention_cost_min || 0) + '-' + (p.estimated_intervention_cost_max || 0) + 'eur'\n      : 'sin estimar';\n    pathologiesText += '  - [' + (p.severity || '?').toUpperCase() + '] ' + (p.pathology_type || '?') + (p.location_in_property ? ' (' + p.location_in_property + ')' : '') + ': ' + (p.description || '?') + ' — ' + (p.recommended_action || 'accion no definida') + ' — estimado ' + cost + '\\n';\n  });\n  pathologiesText += 'IMPORTANTE: Incluye una partida \"Tratamiento de patologias detectadas\" en el breakdown con la suma de las cost_min de las patologias high/critical, y mencionalas en risk_notes.';\n}\n\nconst memoryCases = $('Load Memory Cases').all().map(i => i.json).filter(i => i.id && i.cost_final);\nlet calibText = '';\nif (memoryCases.length > 0) {\n  calibText = '\\n\\nPROYECTOS SIMILARES DEL ESTUDIO (calibracion):\\n';\n  memoryCases.forEach(mc => {\n    let meta = {};\n    try { meta = typeof mc.metadata === 'string' ? JSON.parse(mc.metadata) : (mc.metadata || {}); } catch(e) {}\n    const area = meta.area_m2 || project.property_area_m2 || null;\n    const cpSqm = area ? Math.round(mc.cost_final / area) : null;\n    calibText += '  - ' + (mc.project_type || 'reforma') + (area ? ' ~' + area + 'm2' : '') + ': ' + mc.cost_final + 'eur' + (cpSqm ? ' (' + cpSqm + 'eur/m2)' : '') + '\\n';\n  });\n}\n\nconst outputFormat = '{\"total_estimated\":0,\"breakdown\":[{\"partida\":\"string\",\"importe\":0,\"notes\":\"string\"}],\"scenarios\":{\"economico\":{\"total\":0,\"notes\":\"string\"},\"estandar\":{\"total\":0,\"notes\":\"string\"},\"premium\":{\"total\":0,\"notes\":\"string\"}},\"adjustments_if_over\":[\"string\"],\"assumptions\":[\"string\"],\"risk_notes\":\"string\"}';\n\nconst userPrompt = 'Genera una estimacion de costes detallada para el proyecto de reforma.\\n\\nPROYECTO:\\n- Tipo: ' + (project.project_type || 'reforma') + '\\n- Localizacion: ' + (project.location_city || '') + ', ' + (project.location_province || '') + '\\n- Superficie: ' + (project.property_area_m2 || '?') + ' m2\\n- Presupuesto objetivo: ' + (project.budget_target ? project.budget_target + 'eur' : 'No especificado') + '\\n\\nOPCION DE DISENO SELECCIONADA:\\n' + (design.title ? (design.option_number || '') + ': ' + design.title + '\\n' + (design.description || '') : 'Sin detalle') + '\\n\\nMATERIALES IDENTIFICADOS:\\n' + materialsText + '\\n\\nTRAMITES Y COSTES:\\n' + regText + priceRefsText\n  + pathologiesText + calibText + '\\n\\nINSTRUCCIONES:\\n- Desglose por PARTIDAS DE OBRA (no por materiales individuales)\\n- Partidas estandar: Demoliciones, Albanileria, Pavimentos y revestimientos, Fontaneria, Electricidad, Carpinteria, Pintura, Sanitarios y griferia, Cocina mobiliario e instalacion, Honorarios tecnicos, Tasas y licencias, Gestion residuos, Imprevistos\\n- OBLIGATORIO incluir Imprevistos minimo 10% del subtotal\\n- USA los precios CYPE como base para mano de obra\\n- total_estimated debe ser la SUMA EXACTA de todos los importes del breakdown\\n- Genera 3 escenarios: economico (-20-25%), estandar (esta estimacion), premium (+25-35%)\\n- adjustments_if_over: recortes concretos con ahorro si supera presupuesto objetivo\\n- assumptions: supuestos que podrian cambiar el precio si son incorrectos\\n\\nResponde EXCLUSIVAMENTE con JSON valido:\\n' + outputFormat;\n\n// === STUDIO PROFILE INJECTION (B23) ===\nconst _studio = $('Load Studio Profile').first().json || {};\nfunction _safeStudio(v){ if(v==null)return null; if(typeof v==='string'){try{return JSON.parse(v);}catch(e){return v;}} return v; }\nconst _id=_safeStudio(_studio.identity)||{},_priorities=_safeStudio(_studio.priorities)||[],_redLines=_safeStudio(_studio.red_lines)||[];\nconst _SP_COST_LINES=[];\n_SP_COST_LINES.push('Estudio: '+(_id.nombre_estudio||'estudio')+' en '+(_id.ciudad||'Espana')+'.');\n_SP_COST_LINES.push('PRIORIDADES (orden estricto, aplicalas al desglose presupuestario):');\n(_priorities||[]).forEach(p=>_SP_COST_LINES.push((p.orden||'?')+'. '+(p.prioridad||'')+(p.detalle?' - '+p.detalle:'')));\n_SP_COST_LINES.push('LINEAS ROJAS:');\n(_redLines||[]).forEach(l=>_SP_COST_LINES.push('- '+(l.texto||'')));\n_SP_COST_LINES.push('REGLA: Si veas que algo del briefing requiere una solucion que el estudio NUNCA hace, no la incluyas en el breakdown; senalalo en notes.');\nconst _SP_COST=_SP_COST_LINES.join('\\n');\n// === END STUDIO PROFILE INJECTION ===\nreturn [{ json: { agent_name: 'agent_costs',\n  project_id: projectId,\n  execution_id: executionId,\n  budget_target: project.budget_target || null,\n  prompt_system: _SP_COST + '\\n\\n' + ((agentPrompt.content) || 'Eres el Agente de Costes de un estudio de arquitectura tecnica. Generas estimaciones economicas precisas y desglosadas por partidas de obra, usando precios reales del mercado espanol de construccion y los materiales ya seleccionados.'),\n  prompt_user: userPrompt,\n  model: (agentPrompt.model_recommended || 'claude-sonnet-4-20250514').trim(),\n  temperature: agentPrompt.temperature || 0.2\n}}];"
+      }
+    },
+    {
+      "id": "ac-0011",
+      "name": "Call LLM",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.1,
+      "position": [
+        2300,
+        300
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "JoKqGZ8pDzhJohV2",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ac-0012",
+      "name": "Parse and Validate Costs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2500,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const llmResponse = $('Call LLM').first().json;\nconst projectId = $('Receive Project').first().json.project_id;\nconst executionId = $('Start Execution').first().json.id;\nconst budgetTarget = $('Prepare Costs Prompt').first().json.budget_target;\n\nlet parsed = {};\ntry {\n  const content = llmResponse.content || llmResponse.text || llmResponse.message || JSON.stringify(llmResponse);\n  const jsonMatch = content.match(/\\{[\\s\\S]*\\}/);\n  if (jsonMatch) parsed = JSON.parse(jsonMatch[0]);\n} catch(e) {\n  parsed = { total_estimated: 0, breakdown: [], scenarios: {}, adjustments_if_over: [], assumptions: [], risk_notes: 'Error parsing: ' + e.message };\n}\n\nlet breakdown = parsed.breakdown || [];\n\nconst sumBreakdown = breakdown.reduce((acc, p) => acc + (Number(p.importe) || 0), 0);\nconst totalLLM = Number(parsed.total_estimated) || 0;\nconst diffPct = totalLLM > 0 ? Math.abs((sumBreakdown - totalLLM) / totalLLM) * 100 : 0;\nif (diffPct > 5 && sumBreakdown > 0) parsed.total_estimated = sumBreakdown;\n\nconst hasImprevistos = breakdown.some(p => p.partida && p.partida.toLowerCase().includes('imprevisto'));\nif (!hasImprevistos && breakdown.length > 0) {\n  const subtotal = breakdown.reduce((acc, p) => acc + (Number(p.importe) || 0), 0);\n  const imprevisto = Math.round(subtotal * 0.10);\n  breakdown.push({ partida: 'Imprevistos (10%)', importe: imprevisto, notes: 'Reserva estandar anadida automaticamente' });\n  parsed.total_estimated = subtotal + imprevisto;\n}\n\nconst finalTotal = Number(parsed.total_estimated) || 0;\nconst deviationPct = (budgetTarget && Number(budgetTarget) > 0)\n  ? Math.round(((finalTotal - Number(budgetTarget)) / Number(budgetTarget)) * 100 * 100) / 100\n  : null;\n\nlet deviationStatus = 'unknown';\nif (deviationPct !== null) {\n  if (deviationPct <= 5) deviationStatus = 'within_budget';\n  else if (deviationPct <= 20) deviationStatus = 'slight_over';\n  else if (deviationPct <= 40) deviationStatus = 'over_budget';\n  else deviationStatus = 'critical_over';\n}\n\nconst priceRefs = $('Load Price References').all().map(i => i.json).filter(i => i.avg_price);\nconst breakdownFinal = breakdown.map(item => {\n  const itemKey = (item.partida || '').toLowerCase().split(' ')[0];\n  const ref = priceRefs.find(p => (p.partida || '').toLowerCase().startsWith(itemKey));\n  if (ref && ref.avg_price && item.importe) {\n    const ratio = Number(item.importe) / Number(ref.avg_price);\n    return { ...item, price_verified: true, price_warning: ratio < 0.2 || ratio > 10 };\n  }\n  return { ...item, price_verified: false, price_warning: false };\n});\n\nreturn [{ json: {\n  project_id: projectId,\n  execution_id: executionId,\n  budget_target: budgetTarget ? Number(budgetTarget) : null,\n  total_estimated: finalTotal,\n  deviation_pct: deviationPct,\n  deviation_status: deviationStatus,\n  breakdown: breakdownFinal,\n  adjustments_suggested: parsed.adjustments_if_over || [],\n  scenarios: parsed.scenarios || {},\n  assumptions: parsed.assumptions || [],\n  risk_notes: parsed.risk_notes || ''\n}}];"
+      }
+    },
+    {
+      "id": "ac-0013",
+      "name": "Insert Cost Estimate",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2700,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO cost_estimates (project_id, version, total_estimated, budget_target, deviation_pct, deviation_status, breakdown, adjustments_suggested, scenarios, assumptions, risk_notes, status) VALUES ($1::uuid, COALESCE((SELECT MAX(version) FROM cost_estimates WHERE project_id = $1::uuid), 0) + 1, $2::numeric, $3::numeric, $4::numeric, $5, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, $10, 'draft') RETURNING id",
+        "options": {
+          "queryReplacement": "={{ [$json.project_id, $json.total_estimated, $json.budget_target, $json.deviation_pct, $json.deviation_status, JSON.stringify($json.breakdown), JSON.stringify($json.adjustments_suggested), JSON.stringify($json.scenarios), JSON.stringify($json.assumptions), $json.risk_notes] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ac-0014",
+      "name": "Confirm Data",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2900,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE cost_estimates SET status = 'reviewed' WHERE id = $1::uuid",
+        "options": {
+          "queryReplacement": "={{ [$json.id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ac-0015",
+      "name": "Complete Execution",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        3100,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE agent_executions SET status = 'completed', finished_at = NOW() WHERE id = $1::uuid",
+        "options": {
+          "queryReplacement": "={{ [$('Start Execution').first().json.id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ac-0016",
+      "name": "Notify Architect",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.1,
+      "position": [
+        3300,
+        300
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "ks2CqrtJCxLJTPdV",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "project_id": "={{ $('Receive Project').first().json.project_id }}",
+            "agent": "agent_costs",
+            "message": "={{ 'Estimacion de costes generada: ' + $('Parse and Validate Costs').first().json.total_estimated + 'eur. Estado: ' + $('Parse and Validate Costs').first().json.deviation_status }}",
+            "type": "={{ $('Parse and Validate Costs').first().json.deviation_status === 'critical_over' ? 'warning' : 'info' }}"
+          },
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ac-0017",
+      "name": "Return Result",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        3500,
+        300
+      ],
+      "parameters": {
+        "mode": "manual",
+        "includeOtherFields": false,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "1",
+              "name": "status",
+              "value": "complete",
+              "type": "string"
+            },
+            {
+              "id": "2",
+              "name": "total_estimated",
+              "value": "={{ $('Parse and Validate Costs').first().json.total_estimated }}",
+              "type": "number"
+            },
+            {
+              "id": "3",
+              "name": "deviation_pct",
+              "value": "={{ $('Parse and Validate Costs').first().json.deviation_pct }}",
+              "type": "number"
+            },
+            {
+              "id": "4",
+              "name": "deviation_status",
+              "value": "={{ $('Parse and Validate Costs').first().json.deviation_status }}",
+              "type": "string"
+            },
+            {
+              "id": "5",
+              "name": "cost_estimate_id",
+              "value": "={{ $('Insert Cost Estimate').first().json.id }}",
+              "type": "string"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "ac-pat",
+      "name": "Load Pathology Findings",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1600,
+        380
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, pathology_type, severity, urgency, structural, affects_safety, affects_habitability, location_in_property, description, recommended_action, estimated_intervention_cost_min, estimated_intervention_cost_max, requires_specialist, specialist_type FROM pathology_findings WHERE project_id = $1::uuid AND status NOT IN ('repaired','dismissed') ORDER BY CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END;",
+        "options": {
+          "queryReplacement": "={{ [$('Receive Project').first().json.project_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "id": "ac-load-studio",
+      "name": "Load Studio Profile",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1450,
+        460
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM get_active_studio_profile();",
+        "options": {
+          "alwaysOutputData": true
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Load Project": {
+      "main": [
+        [
+          {
+            "node": "Load Design Option",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Design Option": {
+      "main": [
+        [
+          {
+            "node": "Load Materials",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Materials": {
+      "main": [
+        [
+          {
+            "node": "Load Regulatory Tasks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Regulatory Tasks": {
+      "main": [
+        [
+          {
+            "node": "Load Price References",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Price References": {
+      "main": [
+        [
+          {
+            "node": "Load Memory Cases",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Agent Prompt": {
+      "main": [
+        [
+          {
+            "node": "Start Execution",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Costs Prompt": {
+      "main": [
+        [
+          {
+            "node": "Call LLM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call LLM": {
+      "main": [
+        [
+          {
+            "node": "Parse and Validate Costs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse and Validate Costs": {
+      "main": [
+        [
+          {
+            "node": "Insert Cost Estimate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Cost Estimate": {
+      "main": [
+        [
+          {
+            "node": "Confirm Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Confirm Data": {
+      "main": [
+        [
+          {
+            "node": "Complete Execution",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Complete Execution": {
+      "main": [
+        [
+          {
+            "node": "Return Result",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Notify Architect",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Memory Cases": {
+      "main": [
+        [
+          {
+            "node": "Load Pathology Findings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Pathology Findings": {
+      "main": [
+        [
+          {
+            "node": "Load Agent Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Start Execution": {
+      "main": [
+        [
+          {
+            "node": "Load Studio Profile",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Studio Profile": {
+      "main": [
+        [
+          {
+            "node": "Prepare Costs Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Receive Project": {
+      "main": [
+        [
+          {
+            "node": "Load Project",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": null,
+  "versionId": "75c07e3f-a742-4478-bf32-2606409fa3b6",
+  "tags": []
+}

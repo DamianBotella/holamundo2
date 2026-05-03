@@ -177,23 +177,16 @@ FROM projects p WHERE p.id = $1::uuid LIMIT 1
 
 ### PA-3: error handling en 30 executeWorkflow
 
-**Problema:** sub-workflow exception → padre cuelga 30s → cliente timeout.
+**Plan ejecutable detallado:** [`pa3_error_handling_plan.md`](pa3_error_handling_plan.md)
 
-**Diseño recomendado (orchestrator):**
+Resumen:
+- 3 nodos nuevos en `main_orchestrator`: `Format Agent Error Context` (Code) + `Log Agent Error` (Postgres) + `Respond Agent Error` (Code/respondToWebhook).
+- 27 operaciones MCP listas para aplicar en una sola llamada atómica.
+- Las 11 ramas error de los 11 `Run agent_X` convergen en el subgraph común.
+- Plan de validación + rollback granular en el doc.
+- Replicación al resto de los 18 executeWorkflow (~3h) tras certificar el orchestrator.
 
-1. Para cada `Run agent_X` en main_orchestrator: añadir `onError: "continueErrorOutput"`.
-2. Crear un único subgraph común "Handle Agent Error":
-   - `Code: Format Error Context` — extrae `error.message`, `node_name`, agent_name, project_id.
-   - `Postgres: Log Agent Error` — INSERT en activity_log con `status='error'`, `error_message`, `details`.
-   - `Postgres: Mark Project as Errored` — UPDATE projects SET `current_phase` = `<phase>_errored` WHERE id = $1 (opcional, requiere migración para nuevos enum values).
-   - `RespondToWebhook: Respond Agent Error` — código 500 + payload `{status:'error', agent, error_message_preview}`.
-3. Conectar las 11 ramas error de los 11 `Run agent_X` al `Format Error Context`.
-
-**Nodos nuevos:** 4. **Conexiones nuevas:** 11 (una por agente). **Modificaciones:** 11 (añadir `onError`).
-
-**Decisión bloqueante (Damián):** ¿se quiere un enum `<phase>_errored` o basta con activity_log? Sugerencia: empezar sin enum, sólo activity_log + email a arquitecto.
-
-Replicar el mismo patrón en los 19 executeWorkflow restantes en otros workflows (init_new_project, agent_costs, agent_materials, etc.) — sesión dedicada, ~4h.
+**Decisión bloqueante (Damián):** revisar el JSON de los 3 nodos en sección 2 del plan + confirmar variante de Respond Agent Error (Code statusCode vs respondToWebhook 500 con cambio en webhook entry).
 
 ### PA-4: advisory lock en Load Project
 

@@ -2,6 +2,32 @@
 
 Histórico cronológico de hitos del sistema. Generado a partir de git log.
 
+## 2026-05-03 — Bloque 44 (X2 sobre PROD): snapshot + fixes PA-5/PA-6/PA-7
+
+Sesión autónoma con MCP n8n recuperado. Auditoría real sobre los 19 workflows críticos en producción (151 totales).
+
+**Snapshots creados**: 19 workflows críticos sincronizados al repo en `_snapshots/PROD_20260503_*.json` (3 timestamps: pre-fix baseline, intermedio orchestrator, post-fix). Resuelve **PA-6** (drift severo entre repo y producción).
+
+**Fixes aplicados**:
+- **PA-5** (`activity_log.details` jsonb): patch a 23/25 INSERTs. 16 en `main_orchestrator` + 7 en otros workflows (agent_briefing, agent_design, agent_documents, error_handler, init_new_project, util_notification). 92% cobertura. Los 2 INSERTs de `util_llm_call` excluidos por tener ya schema rico (llm_model, llm_tokens_in/out, llm_cost dedicados).
+- **PA-7** (huérfanos): eliminados `Log Trades Not Implemented` + `Respond Trades Not Implemented` del `main_orchestrator`. Restos legacy de cuando `agent_trades` no estaba implementado. Workflow pasa de 87 → 85 nodos.
+- **PA-6** (drift): resuelto vía snapshot multi-workflow.
+
+**Hallazgo descartado**:
+- **PA-2** (executeWorkflow sin input explícito → bug 9 X1): NO es bug en prod. Los 11 `Run agent_X` usan `mappingMode: defineBelow` con `project_id` mapeado explícitamente.
+
+**Hallazgos pendientes con diseño detallado**:
+- **PA-1** pending_approvals scoped por approval_type (requiere mapeo phase→approval_type confirmado por Damián).
+- **PA-3** sistémico: 30/31 executeWorkflow sin onError. Diseño con un único subgraph "Handle Agent Error" reusable.
+- **PA-4** advisory lock en Load Project: recomendación lock table explícita (migración 054 nueva) sobre advisory_xact_lock.
+- **PA-8** (NUEVO): `Regulatory Complete?` IF sin branch [1] (false). Si agent_regulatory devuelve advance_phase=false el flow queda en limbo. ~10min para fix.
+
+**Doc canónico**: [`docs/x2_orchestrator_audit_post_prod_2026-05-03.md`](docs/x2_orchestrator_audit_post_prod_2026-05-03.md). Reemplaza el TL;DR del audit estático del 01-05.
+
+**Stats**: 19 snapshots producción, 2 nodos huérfanos eliminados, 23 INSERTs activity_log enriquecidos con jsonb details, 1 workflow afectado por PA-7.
+
+---
+
 ## 2026-04-29 — Bloque 34 (X1 COMPLETO): 13/13 agentes certificados E2E
 
 ### Bloque 34 — X1v6: HITO HISTORICO. Pipeline E2E completo con datos reales.

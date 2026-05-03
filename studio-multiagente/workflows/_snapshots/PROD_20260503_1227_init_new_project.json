@@ -1,0 +1,807 @@
+{
+  "name": "init_new_project",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "new-project",
+        "responseMode": "responseNode",
+        "authentication": "headerAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -1504,
+        208
+      ],
+      "id": "4dfa3668-3d72-4c08-8ae8-665519b1fe3b",
+      "name": "New Project Webhook",
+      "webhookId": "dcaf3299-0f8e-45c8-b804-47506b80f7c6",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "PLACEHOLDER",
+          "name": "Webhook API Key (entrante)"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || $input.first().json;\n\nconst required = ['client_name', 'project_name', 'project_type'];\nconst missing = required.filter(f => !body[f] || body[f].toString().trim() === '');\n\nif (missing.length > 0) {\n  return [{ json: { valid: false, error: 'Campos obligatorios faltantes: ' + missing.join(', '), missing_fields: missing } }];\n}\n\nconst validTypes = ['reforma_integral', 'redistribucion', 'cambio_uso', 'adecuacion', 'apoyo_tecnico', 'obra_nueva', 'otro'];\nif (!validTypes.includes(body.project_type)) {\n  return [{ json: { valid: false, error: 'project_type invalido. Valores permitidos: ' + validTypes.join(', '), received: body.project_type } }];\n}\n\nconst validUrgency = ['normal', 'alta', 'urgente'];\nconst urgency = body.urgency && validUrgency.includes(body.urgency) ? body.urgency : 'normal';\n\nconst validPropertyTypes = ['piso', 'casa', 'local', 'atico', 'bajo', 'duplex', 'solar', 'otro'];\nconst propertyType = body.property_type && validPropertyTypes.includes(body.property_type) ? body.property_type : null;\n\nreturn [{\n  json: {\n    valid: true,\n    client_name: body.client_name.trim(),\n    client_email: body.client_email || null,\n    client_phone: body.client_phone || null,\n    project_name: body.project_name.trim(),\n    project_type: body.project_type,\n    location_address: body.location_address || null,\n    location_city: body.location_city || null,\n    location_province: body.location_province || null,\n    property_type: propertyType,\n    property_area_m2: body.property_area_m2 ? parseFloat(body.property_area_m2) : null,\n    budget_target: body.budget_target ? parseFloat(body.budget_target) : null,\n    budget_flexible: body.budget_flexible === true || body.budget_flexible === 'true',\n    urgency: urgency,\n    architect_intake_notes: body.architect_intake_notes || body.notes || body.raw_client_input || null,\n    architect_observations: body.architect_observations || null,\n    client_stated_preferences: body.client_stated_preferences || null,\n    visit_date: body.visit_date || null,\n    photos_urls: Array.isArray(body.photos_urls) ? body.photos_urls : [],\n    plan_2d_url: body.plan_2d_url || null,\n    coordinates: body.coordinates || null\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1248,
+        208
+      ],
+      "id": "4a27e436-44b4-4330-8587-0617de0647cb",
+      "name": "Validate Input"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "e1f2a3b4-c5d6-4e7f-8a9b-000000000031",
+              "leftValue": "={{ $json.valid }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -1008,
+        208
+      ],
+      "id": "7eb0b4fd-8c08-44ac-b607-0bf661f0c17f",
+      "name": "Input Valid?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ status: 'error', error: $('Validate Input').first().json.error, missing_fields: $('Validate Input').first().json.missing_fields || [] }) }}",
+        "options": {
+          "responseCode": 400
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        -752,
+        400
+      ],
+      "id": "110bc1c1-ab97-4ed8-ba90-028abe95aa93",
+      "name": "Respond 400 Error"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id FROM clients WHERE email = $1 LIMIT 1",
+        "options": {
+          "queryReplacement": "={{ [$json.client_email || ''] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -752,
+        112
+      ],
+      "id": "63178958-3618-4cc5-8c9f-60e26aa16e19",
+      "name": "Find Existing Client",
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $('Validate Input').first().json;\nconst existing = $input.first().json;\n\n// Si el cliente ya existe, devolvemos su ID\nif (existing.id) {\n  return [{\n    json: {\n      client_id: existing.id,\n      client_exists: true,\n      ...input\n    }\n  }];\n}\n\n// Si no existe, marcamos para crear\nreturn [{\n  json: {\n    client_id: null,\n    client_exists: false,\n    ...input\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -496,
+        112
+      ],
+      "id": "7372ce28-0846-4b61-a462-6c17086e496b",
+      "name": "Check Client Exists"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "e1f2a3b4-c5d6-4e7f-8a9b-000000000071",
+              "leftValue": "={{ $json.client_exists }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "false",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -256,
+        112
+      ],
+      "id": "f800fcda-bee2-468e-9043-abda012bf16e",
+      "name": "Client Exists?"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO clients (name, email, phone) VALUES ($1, $2, $3) RETURNING id",
+        "options": {
+          "queryReplacement": "={{ [$('Check Client Exists').first().json.client_name, $('Check Client Exists').first().json.client_email, $('Check Client Exists').first().json.client_phone] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        0,
+        0
+      ],
+      "id": "873a3464-6580-49b3-9902-620efaeecfbd",
+      "name": "Create Client",
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        256,
+        112
+      ],
+      "id": "ba710d67-afa7-4984-a4c2-217eef624c60",
+      "name": "Merge Client ID"
+    },
+    {
+      "parameters": {
+        "jsCode": "const merged = $input.first().json;\nconst validated = $('Check Client Exists').first().json;\nconst clientId = merged.id || validated.client_id;\n\nreturn [{\n  json: {\n    client_id: clientId,\n    project_name: validated.project_name,\n    project_type: validated.project_type,\n    budget_target: validated.budget_target,\n    budget_flexible: validated.budget_flexible,\n    location_address: validated.location_address,\n    location_city: validated.location_city,\n    location_province: validated.location_province,\n    property_type: validated.property_type,\n    property_area_m2: validated.property_area_m2,\n    urgency: validated.urgency,\n    architect_intake_notes: validated.architect_intake_notes,\n    architect_observations: validated.architect_observations,\n    client_stated_preferences: validated.client_stated_preferences,\n    visit_date: validated.visit_date,\n    photos_urls: validated.photos_urls,\n    plan_2d_url: validated.plan_2d_url,\n    coordinates: validated.coordinates\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        512,
+        112
+      ],
+      "id": "e6075267-6343-4a7b-9f68-773d0766f25c",
+      "name": "Prepare Project Data"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO projects (client_id, name, project_type, budget_target, budget_flexible, location_address, location_city, location_province, property_type, property_area_m2, urgency, current_phase, status, metadata) VALUES ($1::uuid, $2, $3, $4::numeric, $5::boolean, $6, $7, $8, $9, $10::numeric, $11, 'intake', 'active', $12::jsonb) RETURNING id, name",
+        "options": {
+          "queryReplacement": "={{ [$json.client_id, $json.project_name, $json.project_type, $json.budget_target, $json.budget_flexible, $json.location_address, $json.location_city, $json.location_province, $json.property_type, $json.property_area_m2, $json.urgency, JSON.stringify({ architect_intake_notes: $json.architect_intake_notes, architect_observations: $json.architect_observations, client_stated_preferences: $json.client_stated_preferences, visit_date: $json.visit_date, photos_urls: $json.photos_urls, plan_2d_url: $json.plan_2d_url, coordinates: $json.coordinates })] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        752,
+        112
+      ],
+      "id": "5f8c4185-2262-4156-8ccb-e5ec57ebf361",
+      "name": "Create Project",
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, status, output_summary) VALUES ($1::uuid, 'init_new_project', 'project_created', 'success', $2)",
+        "options": {
+          "queryReplacement": "={{ [$('Create Project').first().json.id, 'Proyecto ' + $('Create Project').first().json.name + ' creado correctamente'] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1264,
+        112
+      ],
+      "id": "726d336f-177c-40a2-8dc7-8b82880e43d2",
+      "name": "Log Project Creation",
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://n8n-n8n.zzeluw.easypanel.host/webhook/orchestrator",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ project_id: $('Create Project').first().json.id, action: 'advance' }) }}",
+        "options": {
+          "timeout": 5000,
+          "response": {
+            "response": {
+              "responseFormat": "text",
+              "neverError": true
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1760,
+        112
+      ],
+      "id": "2f2e57e9-56e4-4a48-a3d5-ac447e5f06d6",
+      "name": "Trigger Orchestrator",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "PLACEHOLDER",
+          "name": "Webhook API Key (entrante)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({\n  status: 'created',\n  project_id: $('Create Project').first().json.id,\n  project_name: $('Create Project').first().json.name,\n  message: 'Proyecto creado correctamente. El sistema comenzará el briefing automáticamente.'\n}) }}",
+        "options": {
+          "responseCode": 201
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        2000,
+        112
+      ],
+      "id": "5062834d-1427-49cf-9327-639326a61298",
+      "name": "Respond 201 Created"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "QFEaO5gJEC7c0wvf",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/QFEaO5gJEC7c0wvf",
+          "cachedResultName": "util_file_organizer"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "action": "create_structure",
+            "project_id": "={{ $('Create Project').first().json.id }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "action",
+              "displayName": "action",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "project_id",
+              "displayName": "project_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        992,
+        112
+      ],
+      "id": "3272afb5-809b-4180-a863-f6e5c032cc01",
+      "name": "Call 'util_file_organizer'"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "ks2CqrtJCxLJTPdV",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/ks2CqrtJCxLJTPdV",
+          "cachedResultName": "util_notification"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "project_id": "={{ $('Create Project').first().json.id }}",
+            "type": "info",
+            "subject": "Nuevo proyecto creado",
+            "message": "=\tSe ha creado el proyecto {{ $('Create Project').first().json.name }}. El sistema comenzará el briefing automáticamente."
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "project_id",
+              "displayName": "project_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "type",
+              "displayName": "type",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "subject",
+              "displayName": "subject",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "message",
+              "displayName": "message",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "approval_id",
+              "displayName": "approval_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "recipient",
+              "displayName": "recipient",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        1504,
+        112
+      ],
+      "id": "83d79c68-8fcb-49a6-8a0d-a65b0dd6fa36",
+      "name": "Call 'util_notification'"
+    },
+    {
+      "id": "inp-prep-orch",
+      "name": "Prepare Orchestrator Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1640,
+        112
+      ],
+      "parameters": {
+        "jsCode": "const projectId = $('Create Project').first().json.id;\nreturn [{ json: { project_id: projectId, action: 'advance' } }];"
+      }
+    },
+    {
+      "id": "sec-prep",
+      "name": "Prepare Security Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1376,
+        80
+      ],
+      "parameters": {
+        "jsCode": "const wh = $('New Project Webhook').first().json || {};\nconst headers = wh.headers || {};\nconst sourceIp = headers['x-real-ip']\n  || (headers['x-forwarded-for'] || '').toString().split(',')[0].trim()\n  || 'unknown';\nconst out = {\n  source_ip: sourceIp,\n  user_agent: headers['user-agent'] || 'unknown',\n  endpoint: '/webhook/new-project',\n  max_per_minute: 30,\n  agent_name: 'init_new_project'\n};\nreturn [{ json: out }];"
+      }
+    },
+    {
+      "id": "sec-call",
+      "name": "Webhook Security",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        -1248,
+        80
+      ],
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "value": "EipFM8h08uTX1mBn",
+          "mode": "id"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "sec-if",
+      "name": "Security Allowed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -1120,
+        80
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.allowed }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "sec-restore",
+      "name": "Restore Webhook Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -992,
+        80
+      ],
+      "parameters": {
+        "jsCode": "const wh = $('New Project Webhook').first().json || {};\nreturn [{ json: wh }];"
+      }
+    },
+    {
+      "id": "sec-block",
+      "name": "Respond 429 Blocked",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        -992,
+        280
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({error: 'rate_limit_exceeded', verdict: $json.verdict}) }}",
+        "options": {
+          "responseCode": 429
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Validate Input": {
+      "main": [
+        [
+          {
+            "node": "Input Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Input Valid?": {
+      "main": [
+        [
+          {
+            "node": "Find Existing Client",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 400 Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Existing Client": {
+      "main": [
+        [
+          {
+            "node": "Check Client Exists",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Client Exists": {
+      "main": [
+        [
+          {
+            "node": "Client Exists?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Client Exists?": {
+      "main": [
+        [
+          {
+            "node": "Create Client",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Merge Client ID",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Create Client": {
+      "main": [
+        [
+          {
+            "node": "Merge Client ID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Client ID": {
+      "main": [
+        [
+          {
+            "node": "Prepare Project Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Project Data": {
+      "main": [
+        [
+          {
+            "node": "Create Project",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Trigger Orchestrator": {
+      "main": [
+        [
+          {
+            "node": "Respond 201 Created",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Project": {
+      "main": [
+        [
+          {
+            "node": "Call 'util_file_organizer'",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call 'util_file_organizer'": {
+      "main": [
+        [
+          {
+            "node": "Log Project Creation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Project Creation": {
+      "main": [
+        [
+          {
+            "node": "Call 'util_notification'",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call 'util_notification'": {
+      "main": [
+        [
+          {
+            "node": "Prepare Orchestrator Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Orchestrator Payload": {
+      "main": [
+        [
+          {
+            "node": "Trigger Orchestrator",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "New Project Webhook": {
+      "main": [
+        [
+          {
+            "node": "Prepare Security Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Security Input": {
+      "main": [
+        [
+          {
+            "node": "Webhook Security",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook Security": {
+      "main": [
+        [
+          {
+            "node": "Security Allowed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Security Allowed?": {
+      "main": [
+        [
+          {
+            "node": "Restore Webhook Payload",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 429 Blocked",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Restore Webhook Payload": {
+      "main": [
+        [
+          {
+            "node": "Validate Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "pinData": {},
+  "versionId": "57bd920f-5957-4e02-9115-5f8f577f7226",
+  "tags": []
+}

@@ -1,0 +1,710 @@
+{
+  "name": "agent_materials",
+  "active": true,
+  "nodes": [
+    {
+      "id": "e5a3-0001",
+      "name": "Receive Project",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [
+        300,
+        300
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "e5a3-0002",
+      "name": "Load Project",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        500,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM projects WHERE id = $1::uuid LIMIT 1",
+        "options": {
+          "queryReplacement": "={{ [$('Receive Project').first().json.project_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "e5a3-0003",
+      "name": "Load Selected Design Option",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        700,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, option_number, title, description, intervention_logic, rooms_layout, technical_notes, conflict_points, pros, cons, is_selected FROM design_options WHERE project_id = $1::uuid AND exec_status = 'confirmed' ORDER BY CASE WHEN is_selected = true THEN 0 ELSE 1 END, created_at DESC LIMIT 1",
+        "options": {
+          "queryReplacement": "={{ [$('Receive Project').first().json.project_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "e5a3-0004",
+      "name": "Load Briefing",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        900,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, version, summary, client_needs, objectives, constraints, style_preferences, rooms_affected FROM briefings WHERE project_id = $1::uuid AND exec_status = 'confirmed' ORDER BY created_at DESC LIMIT 1",
+        "options": {
+          "queryReplacement": "={{ [$('Receive Project').first().json.project_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "e5a3-0005",
+      "name": "Load Agent Prompt",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1100,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM agent_prompts WHERE agent_name = 'agent_materials' AND is_active = true ORDER BY created_at DESC LIMIT 1",
+        "additionalFields": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "e5a3-0006",
+      "name": "Start Execution",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1350,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO agent_executions (project_id, agent_name, status) VALUES ($1::uuid, 'agent_materials', 'running') RETURNING id",
+        "options": {
+          "queryReplacement": "={{ [$('Receive Project').first().json.project_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "e5a3-0007",
+      "name": "Prepare Materials Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1550,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const projectId = $('Receive Project').first().json.project_id;\nconst project = $('Load Project').first().json;\nconst design = $('Load Selected Design Option').first().json;\nconst briefing = $('Load Briefing').first().json;\nconst agentPrompt = $('Load Agent Prompt').first().json;\nconst executionId = $('Start Execution').first().json.id;\n\nconst designContent = design || {};\nconst briefingContent = briefing || {};\n\nconst roomsAffected = briefingContent.rooms_affected || [];\nconst constraints = briefingContent.constraints || [];\n\nconst designSummary = design.title\n  ? `Opcion ${design.option_number}: ${design.title}\\n${design.description || ''}`\n  : JSON.stringify(designContent, null, 2);\n\nconst roomsText = roomsAffected.length > 0\n  ? roomsAffected.map(r => `- ${r.room}: ${r.intervention}`).join('\\n')\n  : '- Sin detalle disponible';\n\nconst constraintsText = constraints.length > 0\n  ? constraints.map(c => `- ${c.description}`).join('\\n')\n  : '- Sin restricciones especificas';\n\nconst catalogItems = $('Load Supplier Catalog').all().map(i => i.json).filter(i => i.id);\nlet catalogText = '';\nif (catalogItems.length > 0) {\n  const byCategory = {};\n  catalogItems.forEach(item => {\n    if (!byCategory[item.category]) byCategory[item.category] = [];\n    byCategory[item.category].push(`  - ${item.item_name}${item.brand ? ' (' + item.brand + ')' : ''}: ${item.unit_price}€/${item.unit || 'ud'} [${item.quality_tier || 'media'}]${item.notes ? ' — ' + item.notes : ''}`);\n  });\n  catalogText = `\\n\\nCATÁLOGO DE PROVEEDORES DEL ARQUITECTO (usa estos materiales preferentemente):\\n`;\n  Object.entries(byCategory).forEach(([cat, items]) => {\n    catalogText += `${cat.toUpperCase()}:\\n${items.join('\\n')}\\n`;\n  });\n  catalogText += '\\nSi el catálogo no cubre alguna categoría, propón materiales estándar del mercado español con precio estimado.';\n} else {\n  catalogText = '\\n\\n(Sin catálogo de proveedores — proponer materiales estándar del mercado español con precios estimados 2024-2025)';\n}\n\nconst outputFormat = `{\\n  \"materials\": [\\n    {\\n      \"category\": \"revestimientos|fontaneria|electricidad|carpinteria|estructura|acabados|instalaciones|otro\",\\n      \"name\": \"string\",\\n      \"description\": \"string\",\\n      \"specification\": \"string\",\\n      \"quantity\": 0,\\n      \"unit\": \"m2|ml|ud|kg|l|otro\",\\n      \"estimated_unit_cost\": null,\\n      \"room\": \"string|null\",\\n      \"priority\": \"esencial|recomendable|opcional\",\\n      \"notes\": \"string|null\"\\n    }\\n  ],\\n  \"analysis_summary\": \"string\"\\n}`;\n\nconst userPrompt = `Analiza el proyecto de reforma y genera la lista completa de materiales necesarios para ejecutar la opcion de diseno seleccionada.\\n\\nPROYECTO:\\n- Tipo: ${project.project_type || 'reforma'}\\n- Localizacion: ${project.location_city || ''}, ${project.location_province || ''}\\n- Inmueble: ${project.property_type || ''}\\n- Superficie: ${project.property_area_m2 || ''} m2\\n\\nOPCION DE DISENO SELECCIONADA:\\n${designSummary}\\n\\nINTERVENCIONES PREVISTAS:\\n${roomsText}\\n\\nRESTRICCIONES:\\n${constraintsText}${catalogText}\\n\\nINSTRUCCIONES:\\n- Genera un material por cada elemento constructivo relevante\\n- Usa PREFERENTEMENTE materiales del catálogo del arquitecto cuando correspondan\\n- Para materiales del catálogo usa su precio exacto en estimated_unit_cost\\n- Para materiales no en catálogo estima precios del mercado español 2024-2025\\n- Incluye materiales de demolicion, construccion, acabados e instalaciones\\n- Para cantidad y unidad usa valores realistas estimados segun la superficie del proyecto\\n- Marca como esencial los materiales criticos\\n- Usa el campo room para agrupar por estancia cuando sea posible\\n- Incluye especificaciones tecnicas en el campo specification\\n\\nResponde EXCLUSIVAMENTE con JSON valido:\\n${outputFormat}`;\n\n// === STUDIO PROFILE INJECTION (B23) ===\nconst _studio = $('Load Studio Profile').first().json || {};\nfunction _safeStudio(v){ if(v==null)return null; if(typeof v==='string'){try{return JSON.parse(v);}catch(e){return v;}} return v; }\nconst _id=_safeStudio(_studio.identity)||{},_priorities=_safeStudio(_studio.priorities)||[],_matPref=_safeStudio(_studio.materials_pref)||{};\nconst _SP_MAT_LINES=[];\n_SP_MAT_LINES.push('Estudio: '+(_id.nombre_estudio||'estudio')+' en '+(_id.ciudad||'Espana')+'.');\n_SP_MAT_LINES.push('GAMA POR DEFECTO del estudio: '+(_matPref.gama_default||'media')+'. Prefiere proveedores locales: '+(_matPref.prefiere_local?'si':'no')+'.');\nconst _marcas = _matPref.marcas_preferidas_por_categoria || {};\nif (Object.keys(_marcas).length>0) {\n  _SP_MAT_LINES.push('MARCAS PREFERIDAS por categoria del estudio:');\n  Object.entries(_marcas).forEach(([k,v])=>_SP_MAT_LINES.push('- '+k+': '+(Array.isArray(v)?v.join(', '):v)));\n}\n_SP_MAT_LINES.push('PRIORIDADES (orden estricto):');\n(_priorities||[]).forEach(p=>_SP_MAT_LINES.push((p.orden||'?')+'. '+(p.prioridad||'')));\nconst _SP_MAT=_SP_MAT_LINES.join('\\n');\n// === END STUDIO PROFILE INJECTION ===\nreturn [{ json: { agent_name: 'agent_materials',\n  project_id: projectId,\n  execution_id: executionId,\n  prompt_system: _SP_MAT + '\\n\\n' + (agentPrompt.content || 'Eres el Agente de Materiales de un estudio de arquitectura. Tu funcion es generar listas de materiales precisas y detalladas para proyectos de reforma, con especificaciones tecnicas y estimaciones de cantidad realistas.'),\n  prompt_user: userPrompt,\n  model: (agentPrompt.model_recommended || 'claude-sonnet-4-20250514').trim(),\n  temperature: agentPrompt.temperature || 0.3\n}}];"
+      }
+    },
+    {
+      "id": "e5a3-0008",
+      "name": "Call LLM",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.1,
+      "position": [
+        1750,
+        300
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "JoKqGZ8pDzhJohV2",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "e5a3-0009",
+      "name": "Parse Materials",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1950,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const llmResponse = $('Call LLM').first().json;\nconst projectId = $('Receive Project').first().json.project_id;\nconst executionId = $('Start Execution').first().json.id;\n\nlet parsed = {};\ntry {\n  const content = llmResponse.content || llmResponse.text || llmResponse.message || JSON.stringify(llmResponse);\n  const jsonMatch = content.match(/\\{[\\s\\S]*\\}/);\n  if (jsonMatch) parsed = JSON.parse(jsonMatch[0]);\n} catch(e) {\n  parsed = { materials: [], analysis_summary: 'Error parsing LLM response: ' + e.message };\n}\n\nconst materials = parsed.materials || [];\nconst summary = parsed.analysis_summary || '';\n\nif (materials.length === 0) {\n  return [{ json: {\n    project_id: projectId,\n    execution_id: executionId,\n    category: 'otro',\n    name: 'Sin materiales identificados',\n    description: summary,\n    specification: '',\n    quantity: null,\n    unit: 'ud',\n    estimated_unit_cost: null,\n    room: null,\n    priority: 'informativo',\n    notes: null,\n    analysis_summary: summary\n  }}];\n}\n\nreturn materials.map(m => ({ json: {\n  project_id: projectId,\n  execution_id: executionId,\n  category: m.category || 'otro',\n  name: m.name || 'Sin nombre',\n  description: m.description || '',\n  specification: m.specification || '',\n  quantity: m.quantity != null ? m.quantity : null,\n  unit: m.unit || 'ud',\n  estimated_unit_cost: m.estimated_unit_cost != null ? m.estimated_unit_cost : null,\n  room: m.room || null,\n  priority: m.priority || 'recomendable',\n  notes: m.notes || null,\n  analysis_summary: summary\n}}));"
+      }
+    },
+    {
+      "id": "e5a3-0017",
+      "name": "Extract Main Items",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2000,
+        100
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const allMaterials = $input.all().map(i => i.json);\nconst seen = new Set();\nconst mainItems = [];\nfor (const m of allMaterials) {\n  if (!seen.has(m.category) && m.category !== 'otro') {\n    seen.add(m.category);\n    mainItems.push({ json: {\n      material_name: m.name,\n      category: m.category,\n      quality_tier: 'media'\n    }});\n  }\n}\nif (mainItems.length === 0) {\n  return [{ json: { material_name: 'placeholder', category: 'placeholder', quality_tier: 'media', _skip: true } }];\n}\nreturn mainItems.slice(0, 6);"
+      }
+    },
+    {
+      "id": "e5a3-0018",
+      "name": "Split for Price Lookup",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        2200,
+        100
+      ],
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      }
+    },
+    {
+      "id": "e5a3-0019",
+      "name": "Search Material Price",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.1,
+      "position": [
+        2400,
+        100
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "PsKCThwfby9t9Zfz",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "material_name": "={{ $json.material_name }}",
+            "category": "={{ $json.category }}",
+            "quality_tier": "={{ $json.quality_tier }}"
+          },
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "continueOnFail": true
+    },
+    {
+      "id": "e5a3-0020",
+      "name": "Apply Enriched Prices",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2600,
+        100
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const priceItems = $input.all().map(i => i.json);\nconst allMaterials = $('Parse Materials').all().map(i => i.json);\nconst priceMap = {};\npriceItems.forEach(p => {\n  if (p.avg_price && p.category) {\n    priceMap[p.category] = p;\n  }\n});\nreturn allMaterials.map(m => {\n  const enrichment = priceMap[m.category];\n  if (enrichment && enrichment.avg_price && !m.estimated_unit_cost) {\n    return { json: {\n      ...m,\n      estimated_unit_cost: enrichment.avg_price,\n      price_source: enrichment.source || 'web_search',\n      source_url: enrichment.source_url || null\n    }};\n  }\n  return { json: {\n    ...m,\n    price_source: m.estimated_unit_cost ? 'llm_estimate' : 'not_found',\n    source_url: null\n  }};\n});"
+      }
+    },
+    {
+      "id": "e5a3-0010",
+      "name": "Split Materials",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        2800,
+        300
+      ],
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      }
+    },
+    {
+      "id": "e5a3-0011",
+      "name": "Insert Material",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        3000,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO material_items (project_id, category, name, unit_price, unit, quantity_estimated, total_estimated, quality_tier, room_area, source_url, notes, status) VALUES ($1::uuid, CASE $2 WHEN 'revestimientos' THEN 'revestimiento' WHEN 'fontaneria' THEN 'sanitarios' WHEN 'electricidad' THEN 'otro' WHEN 'estructura' THEN 'otro' WHEN 'acabados' THEN 'otro' WHEN 'instalaciones' THEN 'otro' ELSE COALESCE(NULLIF($2,''),'otro') END, $3, $4::numeric, CASE WHEN $5 IN ('m2','ml','ud','m3','kg','l') THEN $5 ELSE 'ud' END, $6::numeric, CASE WHEN $4::numeric IS NOT NULL AND $6::numeric IS NOT NULL THEN ROUND(($4::numeric * $6::numeric)::numeric,2) ELSE NULL END, 'media', $7, $8, $9, 'suggested') RETURNING id",
+        "options": {
+          "queryReplacement": "={{ [$json.project_id, $json.category, $json.name, $json.estimated_unit_cost, $json.unit, $json.quantity, $json.room || null, $json.source_url || null, $json.notes || null] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "id": "e5a3-0012",
+      "name": "Collect All Materials",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3000,
+        500
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const items = $input.all();\nreturn [{ json: {\n  project_id: $('Receive Project').first().json.project_id,\n  execution_id: $('Start Execution').first().json.id,\n  materials_count: items.length,\n  analysis_summary: $('Parse Materials').first().json.analysis_summary || ''\n}}];"
+      }
+    },
+    {
+      "id": "e5a3-0013",
+      "name": "Confirm Data",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        3200,
+        500
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE material_items SET status = 'approved' WHERE project_id = $1::uuid AND status = 'suggested'",
+        "options": {
+          "queryReplacement": "={{ [$json.project_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "e5a3-0014",
+      "name": "Complete Execution",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        3400,
+        500
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE agent_executions SET status = 'completed', finished_at = NOW() WHERE id = $1::uuid",
+        "options": {
+          "queryReplacement": "={{ [$('Start Execution').first().json.id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "e5a3-0015",
+      "name": "Notify Architect",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.1,
+      "position": [
+        3600,
+        500
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "ks2CqrtJCxLJTPdV",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "project_id": "={{ $('Receive Project').first().json.project_id }}",
+            "agent": "agent_materials",
+            "message": "={{ 'Lista de materiales generada: ' + $('Collect All Materials').first().json.materials_count + ' materiales identificados para el proyecto.' }}",
+            "type": "info"
+          },
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "continueOnFail": true
+    },
+    {
+      "id": "e5a3-0021",
+      "name": "Return Success",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        3800,
+        500
+      ],
+      "parameters": {
+        "mode": "manual",
+        "includeOtherFields": false,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "1",
+              "name": "status",
+              "value": "complete",
+              "type": "string"
+            },
+            {
+              "id": "2",
+              "name": "materials_count",
+              "value": "={{ $('Collect All Materials').first().json.materials_count }}",
+              "type": "number"
+            },
+            {
+              "id": "3",
+              "name": "analysis_summary",
+              "value": "={{ $('Collect All Materials').first().json.analysis_summary }}",
+              "type": "string"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "am-load-catalog",
+      "name": "Load Supplier Catalog",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1225,
+        100
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, supplier_name, category, item_name, brand, model_ref, unit_price, unit, quality_tier, notes FROM supplier_catalog WHERE valid_until IS NULL OR valid_until >= CURRENT_DATE ORDER BY category, CASE quality_tier WHEN 'economica' THEN 1 WHEN 'media' THEN 2 WHEN 'alta' THEN 3 WHEN 'premium' THEN 4 ELSE 5 END",
+        "options": {
+          "alwaysOutputData": true
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "am-load-studio",
+      "name": "Load Studio Profile",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1450,
+        460
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM get_active_studio_profile();",
+        "options": {
+          "alwaysOutputData": true
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Receive Project": {
+      "main": [
+        [
+          {
+            "node": "Load Project",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Project": {
+      "main": [
+        [
+          {
+            "node": "Load Selected Design Option",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Selected Design Option": {
+      "main": [
+        [
+          {
+            "node": "Load Briefing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Briefing": {
+      "main": [
+        [
+          {
+            "node": "Load Agent Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Materials Prompt": {
+      "main": [
+        [
+          {
+            "node": "Call LLM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call LLM": {
+      "main": [
+        [
+          {
+            "node": "Parse Materials",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Materials": {
+      "main": [
+        [
+          {
+            "node": "Extract Main Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Main Items": {
+      "main": [
+        [
+          {
+            "node": "Split for Price Lookup",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split for Price Lookup": {
+      "main": [
+        [
+          {
+            "node": "Search Material Price",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Apply Enriched Prices",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Material Price": {
+      "main": [
+        [
+          {
+            "node": "Split for Price Lookup",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply Enriched Prices": {
+      "main": [
+        [
+          {
+            "node": "Split Materials",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Materials": {
+      "main": [
+        [
+          {
+            "node": "Insert Material",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Collect All Materials",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Material": {
+      "main": [
+        [
+          {
+            "node": "Split Materials",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect All Materials": {
+      "main": [
+        [
+          {
+            "node": "Confirm Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Confirm Data": {
+      "main": [
+        [
+          {
+            "node": "Complete Execution",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Complete Execution": {
+      "main": [
+        [
+          {
+            "node": "Return Success",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Notify Architect",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Agent Prompt": {
+      "main": [
+        [
+          {
+            "node": "Load Supplier Catalog",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Supplier Catalog": {
+      "main": [
+        [
+          {
+            "node": "Start Execution",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Start Execution": {
+      "main": [
+        [
+          {
+            "node": "Load Studio Profile",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Studio Profile": {
+      "main": [
+        [
+          {
+            "node": "Prepare Materials Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": null,
+  "versionId": "83feff9f-3d1f-4b71-9e4d-d96a0e6d362b",
+  "tags": []
+}

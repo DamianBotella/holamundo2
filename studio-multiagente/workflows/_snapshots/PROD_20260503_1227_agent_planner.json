@@ -1,0 +1,524 @@
+{
+  "name": "agent_planner",
+  "active": true,
+  "nodes": [
+    {
+      "id": "ap-01",
+      "name": "Receive Project",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    },
+    {
+      "id": "ap-02",
+      "name": "Load Project Data",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        250,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT p.id, p.name as project_name, p.project_type, p.budget_target, p.location_address, p.location_city, p.location_province, p.property_type, p.property_area_m2, p.urgency, c.name as client_name, c.email as client_email, (SELECT row_to_json(b.*) FROM briefings b WHERE b.project_id = p.id AND b.status = 'approved' ORDER BY b.created_at DESC LIMIT 1) as briefing, (SELECT row_to_json(d.*) FROM design_options d WHERE d.project_id = p.id AND d.is_selected = true LIMIT 1) as design_option, (SELECT row_to_json(ce.*) FROM cost_estimates ce WHERE ce.project_id = p.id ORDER BY ce.version DESC LIMIT 1) as cost_estimate, (SELECT json_agg(json_build_object('trade_type', tr.trade_type, 'scope_description', tr.scope_description) ORDER BY tr.trade_type) FROM trade_requests tr WHERE tr.project_id = p.id AND tr.status = 'prepared') as trade_assignments FROM projects p JOIN clients c ON c.id = p.client_id WHERE p.id = $1::uuid",
+        "options": {
+          "queryReplacement": "={{ [$json.project_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ap-03",
+      "name": "Preflight Check",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        500,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const d = $input.first().json;\nconst missing = [];\n\nif (!d.briefing) missing.push('briefing aprobado');\nif (!d.design_option) missing.push('opción de diseño seleccionada');\nif (!d.cost_estimate) missing.push('estimación de costes');\nif (!d.trade_assignments || d.trade_assignments.length === 0) missing.push('asignaciones de gremios');\n\nconst preflight_passed = missing.length === 0;\n\nreturn [{ json: { ...d, preflight_passed, missing_items: missing } }];"
+      }
+    },
+    {
+      "id": "ap-04",
+      "name": "Check Pass?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        750,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.preflight_passed }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ap-05",
+      "name": "Create Execution",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1000,
+        150
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO agent_executions (project_id, agent_name, status, started_at) VALUES ($1::uuid, 'agent_planner', 'running', NOW()) RETURNING id",
+        "options": {
+          "queryReplacement": "={{ [$('Preflight Check').first().json.id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ap-06",
+      "name": "Build Plan Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1250,
+        150
+      ],
+      "parameters": {
+        "jsCode": "const project = $('Preflight Check').first().json;\nconst createExec = $('Create Execution').first().json;\nconst execution_id = createExec.id;\nconst dbPrompt = $input.first().json;\n\nconst briefing = typeof project.briefing === 'string' ? JSON.parse(project.briefing) : (project.briefing || {});\nconst design = typeof project.design_option === 'string' ? JSON.parse(project.design_option) : (project.design_option || {});\nconst costs = typeof project.cost_estimate === 'string' ? JSON.parse(project.cost_estimate) : (project.cost_estimate || {});\nconst trades = Array.isArray(project.trade_assignments) ? project.trade_assignments : [];\nconst breakdown = Array.isArray(costs.breakdown) ? costs.breakdown : [];\n\nconst tradesList = trades.map(t =>\n  `- ${t.trade_type || t.specialty}: ${t.scope_description || 'alcance por confirmar'}`\n).join('\\n');\n\nconst partidas = breakdown.slice(0, 15).map(p =>\n  `- ${p.partida || p.description || 'Partida'}: ${p.importe || p.amount || '?'}€`\n).join('\\n');\n\nconst objetivos = Array.isArray(briefing.objectives) ? briefing.objectives.join('; ') : (briefing.objectives || '');\nconst constraints = Array.isArray(briefing.constraints) ? briefing.constraints.join('; ') : '';\n\nconst prompt_system_fallback = `Eres un jefe de obra experto en reformas de vivienda en España con más de 20 años de experiencia coordinando proyectos de rehabilitación.\nGenera un plan de trabajo detallado y realista para el proyecto de reforma que se describe.\nDevuelve ÚNICAMENTE un objeto JSON válido, sin texto adicional antes ni después.\n\nEl JSON debe seguir esta estructura exacta:\n{\n  \"total_weeks\": number,\n  \"phases\": [\n    {\n      \"order\": number,\n      \"phase_name\": string,\n      \"specialty\": string,\n      \"duration_weeks\": number,\n      \"dependencies\": number[],\n      \"notes\": string\n    }\n  ],\n  \"milestones\": [\n    {\"week\": number, \"description\": string}\n  ],\n  \"critical_path\": string[],\n  \"notes\": string\n}\n\nReglas:\n- Ordena las fases en secuencia técnica correcta: demolición → obra civil → instalaciones ocultas → tabiquería → acabados → equipamiento\n- Las dependencias son los números 'order' de fases que deben completarse antes\n- La duración se basa en el área del inmueble (${project.property_area_m2 || '?'} m²)\n- Incluye al menos 4 hitos: inicio de obra, fin de trabajos estructurales, inicio de acabados, entrega\n- critical_path lista los nombres de las fases cuyo retraso retrasa la entrega total\n- Pinturas y acabados son siempre las últimas fases`;\n// === STUDIO PROFILE INJECTION (B24) ===\nconst _studio = $('Load Studio Profile').first().json || {};\nfunction _safeStudio(v){ if(v==null)return null; if(typeof v==='string'){try{return JSON.parse(v);}catch(e){return v;}} return v; }\nconst _id=_safeStudio(_studio.identity)||{},_priorities=_safeStudio(_studio.priorities)||[],_redLines=_safeStudio(_studio.red_lines)||[];\nconst _SP_PLAN_LINES=[];\n_SP_PLAN_LINES.push('Estudio: '+(_id.nombre_estudio||'estudio')+' en '+(_id.ciudad||'Espana')+'.');\n_SP_PLAN_LINES.push('PRIORIDADES (orden estricto al planificar fases y rutas criticas):');\n(_priorities||[]).forEach(p=>_SP_PLAN_LINES.push((p.orden||'?')+'. '+(p.prioridad||'')+(p.detalle?' - '+p.detalle:'')));\n_SP_PLAN_LINES.push('LINEAS ROJAS:');\n(_redLines||[]).forEach(l=>_SP_PLAN_LINES.push('- '+(l.texto||'')));\nconst _SP_PLAN=_SP_PLAN_LINES.join('\\n');\n// === END STUDIO PROFILE INJECTION ===\nconst prompt_system = _SP_PLAN + '\\n\\n' + ((dbPrompt && dbPrompt.content) ? dbPrompt.content : prompt_system_fallback);\n\nconst prompt_user = `PROYECTO: ${project.project_name}\nTipo: ${project.project_type} | Área: ${project.property_area_m2} m²\nUbicación: ${project.location_city}, ${project.location_province}\nTipo propiedad: ${project.property_type || 'piso'}\nPresupuesto: ${costs.total_estimated || costs.total_amount || '?'}€\n\nTRABAJOS POR GREMIO:\n${tradesList || 'Sin asignaciones registradas'}\n\nPRINCIPALES PARTIDAS:\n${partidas || 'Sin desglose disponible'}\n\nOBJETIVOS: ${objetivos || 'Sin especificar'}\n${constraints ? '\\nCONDICIONANTES: ' + constraints : ''}\n\nGenera el plan de trabajo en JSON.`;\n\nreturn [{\n  json: {\n    ...project,\n    execution_id,\n    prompt_system,\n    prompt_user,\n    model: 'gpt-4o',\n    temperature: 0.3,\n    project_id: project.id,\n    agent_name: 'agent_planner'\n  }\n}];"
+      }
+    },
+    {
+      "id": "ap-07",
+      "name": "Call LLM",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.1,
+      "position": [
+        1500,
+        150
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "JoKqGZ8pDzhJohV2",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ap-08",
+      "name": "Parse Plan Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1750,
+        150
+      ],
+      "parameters": {
+        "jsCode": "const project = $('Build Plan Prompt').first().json;\nconst llm = $input.first().json;\nconst text = llm.text || '';\n\nlet plan = {};\nlet parse_error = null;\n\ntry {\n  const match = text.match(/\\{[\\s\\S]*\\}/);\n  if (!match) throw new Error('No JSON object found in LLM response');\n  plan = JSON.parse(match[0]);\n} catch(e) {\n  parse_error = e.message;\n  plan = {\n    total_weeks: 8,\n    phases: [],\n    milestones: [\n      { week: 0, description: 'Inicio de obra' },\n      { week: 8, description: 'Entrega de obra' }\n    ],\n    critical_path: [],\n    notes: 'Plan con valores por defecto — error al parsear: ' + e.message\n  };\n}\n\nconst totalWeeks = plan.total_weeks || 8;\nconst totalDays = totalWeeks * 7;\n\nreturn [{\n  json: {\n    project_id: project.id,\n    execution_id: project.execution_id,\n    project_name: project.project_name,\n    total_duration_days: totalDays,\n    total_weeks: totalWeeks,\n    phases_count: (plan.phases || []).length,\n    phases_json: JSON.stringify(plan.phases || []),\n    milestones_json: JSON.stringify(plan.milestones || []),\n    critical_path_json: JSON.stringify(plan.critical_path || []),\n    plan_notes: plan.notes || '',\n    parse_error: parse_error || null\n  }\n}];"
+      }
+    },
+    {
+      "id": "ap-09",
+      "name": "Save Draft Plan",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2000,
+        150
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO project_plans (project_id, total_duration_days, phases, milestones, critical_path, notes, status) VALUES ($1::uuid, $2, $3::jsonb, $4::jsonb, $5::jsonb, $6, 'draft') RETURNING id",
+        "options": {
+          "queryReplacement": "={{ [$json.project_id, $json.total_duration_days, $json.phases_json, $json.milestones_json, $json.critical_path_json, $json.plan_notes] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ap-10",
+      "name": "Complete Execution",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2250,
+        150
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE agent_executions SET status = 'completed', finished_at = NOW() WHERE id = $1::uuid",
+        "options": {
+          "queryReplacement": "={{ [$('Parse Plan Response').first().json.execution_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ap-11",
+      "name": "Write Intelligence",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2500,
+        150
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO project_intelligence (project_id, agent_name, key, value) VALUES ($1::uuid, 'agent_planner', 'plan_generated', $2::jsonb) ON CONFLICT (project_id, agent_name, key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()",
+        "options": {
+          "queryReplacement": "={{ [$('Parse Plan Response').first().json.project_id, JSON.stringify({total_weeks: $('Parse Plan Response').first().json.total_weeks, total_duration_days: $('Parse Plan Response').first().json.total_duration_days, phases_count: $('Parse Plan Response').first().json.phases_count, plan_id: $('Save Draft Plan').first().json.id})] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ap-12",
+      "name": "Return Success",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2750,
+        150
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "r1",
+              "name": "status",
+              "value": "complete",
+              "type": "string"
+            },
+            {
+              "id": "r2",
+              "name": "plan_id",
+              "value": "={{ $('Save Draft Plan').first().json.id }}",
+              "type": "string"
+            },
+            {
+              "id": "r3",
+              "name": "total_duration_days",
+              "value": "={{ $('Parse Plan Response').first().json.total_duration_days }}",
+              "type": "number"
+            },
+            {
+              "id": "r4",
+              "name": "total_weeks",
+              "value": "={{ $('Parse Plan Response').first().json.total_weeks }}",
+              "type": "number"
+            },
+            {
+              "id": "r5",
+              "name": "phases_count",
+              "value": "={{ $('Parse Plan Response').first().json.phases_count }}",
+              "type": "number"
+            },
+            {
+              "id": "r6",
+              "name": "project_id",
+              "value": "={{ $('Parse Plan Response').first().json.project_id }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ap-13",
+      "name": "Return Preflight Fail",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1000,
+        450
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "e1",
+              "name": "status",
+              "value": "error",
+              "type": "string"
+            },
+            {
+              "id": "e2",
+              "name": "error",
+              "value": "Preflight check failed — faltan datos requeridos",
+              "type": "string"
+            },
+            {
+              "id": "e3",
+              "name": "missing_items",
+              "value": "={{ $('Preflight Check').first().json.missing_items }}",
+              "type": "array"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ap-load-prompt",
+      "name": "Load Planner Prompt",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1125,
+        0
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT content, model_recommended, temperature FROM agent_prompts WHERE agent_name = 'agent_planner' AND prompt_type = 'system' AND is_active = true LIMIT 1",
+        "options": {
+          "alwaysOutputData": true
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ap-load-studio",
+      "name": "Load Studio Profile",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1125,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM get_active_studio_profile();",
+        "options": {
+          "alwaysOutputData": true
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Receive Project": {
+      "main": [
+        [
+          {
+            "node": "Load Project Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Project Data": {
+      "main": [
+        [
+          {
+            "node": "Preflight Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preflight Check": {
+      "main": [
+        [
+          {
+            "node": "Check Pass?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Pass?": {
+      "main": [
+        [
+          {
+            "node": "Create Execution",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Preflight Fail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Plan Prompt": {
+      "main": [
+        [
+          {
+            "node": "Call LLM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call LLM": {
+      "main": [
+        [
+          {
+            "node": "Parse Plan Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Plan Response": {
+      "main": [
+        [
+          {
+            "node": "Save Draft Plan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Draft Plan": {
+      "main": [
+        [
+          {
+            "node": "Complete Execution",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Complete Execution": {
+      "main": [
+        [
+          {
+            "node": "Write Intelligence",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write Intelligence": {
+      "main": [
+        [
+          {
+            "node": "Return Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Execution": {
+      "main": [
+        [
+          {
+            "node": "Load Planner Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Planner Prompt": {
+      "main": [
+        [
+          {
+            "node": "Load Studio Profile",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Studio Profile": {
+      "main": [
+        [
+          {
+            "node": "Build Plan Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": null,
+  "versionId": "eb8afdbc-175e-44c0-96fc-e1b82c2df59a",
+  "tags": []
+}

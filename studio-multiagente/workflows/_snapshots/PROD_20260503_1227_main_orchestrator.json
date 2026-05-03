@@ -1,0 +1,2910 @@
+{
+  "name": "main_orchestrator",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "orchestrator",
+        "responseMode": "onReceived",
+        "authentication": "headerAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -2496,
+        304
+      ],
+      "id": "dbe59c34-6f60-4240-b177-2b2a9cdb8f54",
+      "name": "Orchestrator Entry",
+      "webhookId": "a30826a2-4d34-4731-adeb-9ea55318705c",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "PLACEHOLDER",
+          "name": "Webhook API Key (entrante)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || $input.first().json;\n\nconst projectId = body.project_id || null;\nconst action    = body.action    || 'advance';\n\nif (!projectId) {\n  throw new Error('project_id es obligatorio');\n}\n\nreturn [{ json: { project_id: projectId, action: action } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2256,
+        304
+      ],
+      "id": "b0706658-0ce4-48dc-b430-2a65ba31ea5c",
+      "name": "Extract Input"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT p.id, p.name, p.current_phase, p.status, p.budget_target, p.client_id, (SELECT COUNT(*) FROM approvals WHERE project_id = p.id AND status = 'pending') as pending_approvals FROM projects p WHERE p.id = $1::uuid LIMIT 1",
+        "options": {
+          "queryReplacement": "={{ [$json.project_id] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -2000,
+        304
+      ],
+      "id": "bf3b6d60-15cb-4276-8804-daf9ecdf735e",
+      "name": "Load Project",
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const project = $input.first().json;\nconst action  = $('Extract Input').first().json.action;\n\nif (!project || !project.id) {\n  throw new Error('Proyecto no encontrado: ' + $('Extract Input').first().json.project_id);\n}\n\nreturn [{\n  json: {\n    ...project,\n    project_id:          project.id,\n    action:              action,\n    pending_approvals:   parseInt(project.pending_approvals) || 0\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1744,
+        304
+      ],
+      "id": "30a20126-f40e-4c19-acc4-b786f04dad64",
+      "name": "Prepare Project Data"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": false,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "f1a2b3c4-d5e6-4f7a-8b9c-000000000051",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "active",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -1504,
+        304
+      ],
+      "id": "239d0bad-3bc8-454f-901e-7a27ccf89c31",
+      "name": "Project Active?"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        -1248,
+        512
+      ],
+      "id": "4fcd1634-f03a-4004-83c1-dd40c874fdd1",
+      "name": "Respond Inactive"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": false,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "f1a2b3c4-d5e6-4f7a-8b9c-000000000071",
+              "leftValue": "={{ $json.pending_approvals }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -1248,
+        304
+      ],
+      "id": "eb736a6b-9526-45d0-93e2-69dbb24c029b",
+      "name": "Pending Approvals?"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        -1008,
+        512
+      ],
+      "id": "4566252a-02a3-4cc8-9ade-c2830b005a5f",
+      "name": "Respond Waiting Approval"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "f1a2b3c4-d5e6-4f7a-8b9c-000000000091",
+                    "leftValue": "={{ $json.current_phase }}",
+                    "rightValue": "intake",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "mo-switch-002",
+                    "leftValue": "={{ $json.current_phase }}",
+                    "rightValue": "briefing_done",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "mo-switch-003",
+                    "leftValue": "={{ $json.current_phase }}",
+                    "rightValue": "design_done",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "mo-switch-004",
+                    "leftValue": "={{ $json.current_phase }}",
+                    "rightValue": "analysis_done",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "mo-switch-005",
+                    "leftValue": "={{ $json.current_phase }}",
+                    "rightValue": "costs_done",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "mo-switch-006",
+                    "leftValue": "={{ $json.current_phase }}",
+                    "rightValue": "trades_done",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "mo-switch-007",
+                    "leftValue": "={{ $json.current_phase }}",
+                    "rightValue": "approved",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "mo-switch-008",
+                    "leftValue": "={{ $json.current_phase }}",
+                    "rightValue": "planning_done",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        -1008,
+        304
+      ],
+      "id": "b4ea465e-155f-47b8-9c3d-c3e442ca0f85",
+      "name": "Route by Phase"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "uq3GQWSdmoIV4ZdR",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "project_id": "={{ $json.id }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "project_id",
+              "displayName": "project_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.1,
+      "position": [
+        -752,
+        112
+      ],
+      "id": "18ce331e-1afa-4a8e-b515-a885345d3735",
+      "name": "Run agent_briefing"
+    },
+    {
+      "parameters": {
+        "jsCode": "const briefingResult = $input.first().json;\nconst project = $('Prepare Project Data').first().json;\n\n// Evaluar resultado del agente de briefing\nconst status = briefingResult.status || 'unknown';\n\nreturn [{\n  json: {\n    project_id:      project.id,\n    project_name:    project.name,\n    phase_executed:  'intake',\n    agent_result:    status,\n    briefing_status: status,\n    advance_phase:   status === 'complete'\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -496,
+        112
+      ],
+      "id": "3d03a8e2-1379-483f-923c-f18f16293d2f",
+      "name": "Evaluate Briefing Result"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": false,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "f1a2b3c4-d5e6-4f7a-8b9c-000000000121",
+              "leftValue": "={{ $json.advance_phase }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -256,
+        112
+      ],
+      "id": "e925c58b-29e4-4235-b0b2-26b2e5811b82",
+      "name": "Briefing Complete?"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE projects SET current_phase = 'briefing_done', updated_at = now() WHERE id = $1::uuid",
+        "options": {
+          "queryReplacement": "={{ [$('Prepare Project Data').first().json.id] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        0,
+        0
+      ],
+      "id": "fc58e135-4c28-44ed-98e9-92ae59f60266",
+      "name": "Update Phase briefing_done",
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, status, output_summary) VALUES ($1::uuid, 'main_orchestrator', 'phase_advanced', 'success', $2)",
+        "options": {
+          "queryReplacement": "={{ [$('Prepare Project Data').first().json.id, 'intake → briefing_done'] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        256,
+        0
+      ],
+      "id": "6a4cfe7c-af28-4bc7-a3b8-6ccff44cac0d",
+      "name": "Log Phase Advanced",
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        512,
+        0
+      ],
+      "id": "bc46810e-e38b-4d46-b126-f8c97a2ffb59",
+      "name": "Respond Phase Advanced"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, status, output_summary) VALUES ($1::uuid, 'main_orchestrator', 'briefing_pending_review', 'success', $2)",
+        "options": {
+          "queryReplacement": "={{ [$('Prepare Project Data').first().json.id, 'Briefing generado, pendiente de revisión'] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        0,
+        208
+      ],
+      "id": "e9328d50-079a-457b-b097-04ec43f474e0",
+      "name": "Log Briefing Pending",
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        256,
+        208
+      ],
+      "id": "69e7beae-046f-4890-94d6-c2b8893bfc27",
+      "name": "Respond Pending Review"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, status, output_summary) VALUES ($1::uuid, 'main_orchestrator', 'phase_skipped', 'success', $2)",
+        "options": {
+          "queryReplacement": "={{ [$('Prepare Project Data').first().json.id, 'Fase ' + $('Prepare Project Data').first().json.current_phase + ' no implementada en v1'] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -752,
+        464
+      ],
+      "id": "a331ebcd-ce5d-43dd-b8d3-4e5869149724",
+      "name": "Log Phase Not Implemented",
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        -496,
+        464
+      ],
+      "id": "265179db-0619-4226-92f7-fa955d9ff8d7",
+      "name": "Respond Not Implemented"
+    },
+    {
+      "id": "mo-run-design",
+      "name": "Run agent_design",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.1,
+      "position": [
+        -752,
+        380
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "sMGf7e8CSnsBQa1q",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "project_id": "={{ $json.id }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "project_id",
+              "displayName": "project_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "mo-eval-design",
+      "name": "Evaluate Design Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -496,
+        380
+      ],
+      "parameters": {
+        "jsCode": "const r=$input.first().json;const p=$('Prepare Project Data').first().json;const s=r.status||'unknown';return [{json:{project_id:p.id,project_name:p.name,phase_executed:'briefing_done',agent_result:s,advance_phase:s==='complete'}}];"
+      }
+    },
+    {
+      "id": "mo-check-design",
+      "name": "Design Complete?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -256,
+        380
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": false,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "mo-cond-design-001",
+              "leftValue": "={{ $json.advance_phase }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "mo-update-design-done",
+      "name": "Update Phase design_done",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE projects SET current_phase = 'design_done', updated_at = now() WHERE id = $1::uuid",
+        "options": {
+          "queryReplacement": "={{ [$('Prepare Project Data').first().json.id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "mo-log-design-adv",
+      "name": "Log Design Advanced",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        256,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, status, output_summary) VALUES ($1::uuid, 'main_orchestrator', 'phase_advanced', 'success', $2)",
+        "options": {
+          "queryReplacement": "={{ [$('Prepare Project Data').first().json.id, 'briefing_done → design_done'] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "mo-respond-design-adv",
+      "name": "Respond Design Advanced",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        512,
+        300
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "mo-log-design-pend",
+      "name": "Log Design Pending",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        0,
+        480
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, status, output_summary) VALUES ($1::uuid, 'main_orchestrator', 'design_pending_review', 'success', $2)",
+        "options": {
+          "queryReplacement": "={{ [$('Prepare Project Data').first().json.id, 'Diseño generado, pendiente de revisión'] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "mo-respond-design-pend",
+      "name": "Respond Design Pending",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        256,
+        480
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "mo-run-regulatory",
+      "name": "Run agent_regulatory",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.1,
+      "position": [
+        -752,
+        640
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "QbRMmQs0oyVHplgE",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "project_id": "={{ $json.id }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "project_id",
+              "displayName": "project_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "mo-eval-regulatory",
+      "name": "Evaluate Regulatory Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -496,
+        640
+      ],
+      "parameters": {
+        "jsCode": "const r=$input.first().json;const p=$('Prepare Project Data').first().json;const s=r.status||'unknown';return [{json:{project_id:p.id,project_name:p.name,phase_executed:'design_done',agent_result:s,tasks_count:r.tasks_count||0,critical_count:r.critical_count||0,advance_phase:s==='complete'}}];"
+      }
+    },
+    {
+      "id": "mo-check-regulatory",
+      "name": "Regulatory Complete?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -256,
+        640
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": false,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "mo-cond-reg-001",
+              "leftValue": "={{ $json.advance_phase }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "mo-update-analysis-done",
+      "name": "Update Phase analysis_done",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        0,
+        560
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE projects SET current_phase = 'analysis_done', updated_at = now() WHERE id = $1::uuid",
+        "options": {
+          "queryReplacement": "={{ [$('Prepare Project Data').first().json.id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "mo-log-regulatory-adv",
+      "name": "Log Regulatory Advanced",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        256,
+        560
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, status, output_summary) VALUES ($1::uuid, 'main_orchestrator', 'phase_advanced', 'success', $2)",
+        "options": {
+          "queryReplacement": "={{ [$('Prepare Project Data').first().json.id, 'design_done → analysis_done'] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "mo-respond-regulatory-adv",
+      "name": "Respond Regulatory Advanced",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        512,
+        560
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "mo-run-materials",
+      "name": "Run agent_materials",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.1,
+      "position": [
+        -752,
+        900
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "SOJW7SgCrJebLRP8",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "project_id": "={{ $json.id }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "project_id",
+              "displayName": "project_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "mo-eval-materials",
+      "name": "Evaluate Materials Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -496,
+        900
+      ],
+      "parameters": {
+        "jsCode": "const r=$input.first().json;const p=$('Prepare Project Data').first().json;const s=r.status||'unknown';return [{json:{project_id:p.id,project_name:p.name,phase_executed:'analysis_done',agent_result:s,materials_count:r.materials_count||0,advance_phase:s==='complete'}}];"
+      }
+    },
+    {
+      "id": "mo-check-materials",
+      "name": "Materials Complete?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -256,
+        900
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": false,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "mo-cond-mat-001",
+              "leftValue": "={{ $json.advance_phase }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "mo-run-costs",
+      "name": "Run agent_costs",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        820
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "FhF8zelE1KehUD4Z",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "project_id": "={{ $('Prepare Project Data').first().json.id }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "project_id",
+              "displayName": "project_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "mo-eval-costs",
+      "name": "Evaluate Costs Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        256,
+        820
+      ],
+      "parameters": {
+        "jsCode": "const r=$input.first().json;const p=$('Prepare Project Data').first().json;const s=r.status||'unknown';return [{json:{project_id:p.id,project_name:p.name,phase_executed:'analysis_done_costs',agent_result:s,total_estimated:r.total_estimated||null,deviation_status:r.deviation_status||null,cost_estimate_id:r.cost_estimate_id||null,advance_phase:s==='complete'}}];"
+      }
+    },
+    {
+      "id": "mo-check-costs",
+      "name": "Costs Complete?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        512,
+        820
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": false,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "mo-cond-costs-001",
+              "leftValue": "={{ $json.advance_phase }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "mo-update-costs-done",
+      "name": "Update Phase costs_done",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        752,
+        740
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE projects SET current_phase = 'costs_done', updated_at = now() WHERE id = $1::uuid",
+        "options": {
+          "queryReplacement": "={{ [$('Prepare Project Data').first().json.id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "mo-log-costs-adv",
+      "name": "Log Costs Advanced",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1000,
+        740
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, status, output_summary) VALUES ($1::uuid, 'main_orchestrator', 'phase_advanced', 'success', $2)",
+        "options": {
+          "queryReplacement": "={{ [$('Prepare Project Data').first().json.id, 'analysis_done → costs_done'] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "mo-respond-costs-adv",
+      "name": "Respond Costs Advanced",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1248,
+        740
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "mo-log-costs-pend",
+      "name": "Log Costs Pending",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        752,
+        900
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, status, output_summary) VALUES ($1::uuid, 'main_orchestrator', 'costs_pending_review', 'success', $2)",
+        "options": {
+          "queryReplacement": "={{ [$('Prepare Project Data').first().json.id, 'Estimación de costes generada, pendiente de revisión'] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "mo-respond-costs-pend",
+      "name": "Respond Costs Pending",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1000,
+        900
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "mo-log-mat-pend",
+      "name": "Log Materials Pending",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        0,
+        1020
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, status, output_summary) VALUES ($1::uuid, 'main_orchestrator', 'materials_pending_review', 'success', $2)",
+        "options": {
+          "queryReplacement": "={{ [$('Prepare Project Data').first().json.id, 'Materiales generados, pendiente de revisión'] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "mo-respond-mat-pend",
+      "name": "Respond Materials Pending",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        256,
+        1020
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "mo-run-docs-design",
+      "name": "Run agent_documents (diseño)",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.1,
+      "position": [
+        -904,
+        640
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "E5uOVocm8GwNH278",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "project_id": "={{ $json.id }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "project_id",
+              "displayName": "project_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "id": "mo-run-docs-proposal",
+      "name": "Run agent_documents (propuesta)",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.1,
+      "position": [
+        -752,
+        1060
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "E5uOVocm8GwNH278",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "project_id": "={{ $json.id }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "project_id",
+              "displayName": "project_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "id": "mo-log-trades-ni",
+      "name": "Log Trades Not Implemented",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -496,
+        1060
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, status, output_summary) VALUES ($1::uuid, 'main_orchestrator', 'phase_skipped', 'success', $2)",
+        "options": {
+          "queryReplacement": "={{ [$('Prepare Project Data').first().json.id, 'costs_done: documentos sincronizados, agent_trades pendiente de implementar'] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "mo-respond-trades-ni",
+      "name": "Respond Trades Not Implemented",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        -240,
+        1060
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "mo-run-trades",
+      "name": "Run agent_trades",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.1,
+      "position": [
+        -496,
+        1060
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "NHTZkeLUL7qUQPLG",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "project_id": "={{ $('Prepare Project Data').first().json.id }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "project_id",
+              "displayName": "project_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "mo-eval-trades",
+      "name": "Evaluate Trades Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -256,
+        1060
+      ],
+      "parameters": {
+        "jsCode": "const r=$input.first().json;const p=$('Prepare Project Data').first().json;const s=r.status||'unknown';return [{json:{project_id:p.id,project_name:p.name,phase_executed:'costs_done',agent_result:s,trades_count:r.trades_count||0,assigned_count:r.assigned_count||0,specialties:r.specialties||[],advance_phase:s==='complete'}}];"
+      }
+    },
+    {
+      "id": "mo-check-trades",
+      "name": "Trades Complete?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        0,
+        1060
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": false,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "mo-cond-trades-001",
+              "leftValue": "={{ $json.advance_phase }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "mo-update-trades-done",
+      "name": "Update Phase trades_done",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        256,
+        980
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE projects SET current_phase = 'trades_done', updated_at = now() WHERE id = $1::uuid",
+        "options": {
+          "queryReplacement": "={{ [$('Prepare Project Data').first().json.id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "mo-log-trades-adv",
+      "name": "Log Trades Advanced",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        512,
+        980
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, status, output_summary) VALUES ($1::uuid, 'main_orchestrator', 'phase_advanced', 'success', $2)",
+        "options": {
+          "queryReplacement": "={{ [$('Prepare Project Data').first().json.id, 'costs_done → trades_done'] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "mo-respond-trades-adv",
+      "name": "Respond Trades Advanced",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        752,
+        980
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "mo-log-trades-pend",
+      "name": "Log Trades Pending",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        256,
+        1140
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, status, output_summary) VALUES ($1::uuid, 'main_orchestrator', 'trades_pending_review', 'success', $2)",
+        "options": {
+          "queryReplacement": "={{ [$('Prepare Project Data').first().json.id, 'Gremios mapeados, pendiente de revisión'] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "mo-respond-trades-pend",
+      "name": "Respond Trades Pending",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        512,
+        1140
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "mo-run-proposal",
+      "name": "Run agent_proposal",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.1,
+      "position": [
+        -752,
+        1280
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "Mqx8S6nR6exbRY86",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "project_id": "={{ $('Prepare Project Data').first().json.id }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "project_id",
+              "displayName": "project_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "mo-eval-proposal",
+      "name": "Evaluate Proposal Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -496,
+        1280
+      ],
+      "parameters": {
+        "jsCode": "const r=$input.first().json;const p=$('Prepare Project Data').first().json;const s=r.status||'unknown';const approved=r.proposal_approved===true;return [{json:{project_id:p.id,project_name:p.name,phase_executed:'trades_done',agent_result:s,proposal_approved:approved,advance_phase:approved&&s==='complete'}}];"
+      }
+    },
+    {
+      "id": "mo-check-proposal",
+      "name": "Proposal Complete?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -256,
+        1280
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": false,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "mo-cond-prop-001",
+              "leftValue": "={{ $json.advance_phase }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "mo-update-proposal-done",
+      "name": "Update Phase proposal_done",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        0,
+        1200
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE projects SET current_phase = 'proposal_done', updated_at = now() WHERE id = $1::uuid",
+        "options": {
+          "queryReplacement": "={{ [$('Prepare Project Data').first().json.id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "mo-log-proposal-adv",
+      "name": "Log Proposal Advanced",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        256,
+        1200
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, status, output_summary) VALUES ($1::uuid, 'main_orchestrator', 'phase_advanced', 'success', $2)",
+        "options": {
+          "queryReplacement": "={{ [$('Prepare Project Data').first().json.id, 'trades_done → proposal_done'] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "mo-respond-proposal-adv",
+      "name": "Respond Proposal Advanced",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        512,
+        1200
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "mo-log-proposal-pend",
+      "name": "Log Proposal Pending",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        0,
+        1380
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, status, output_summary) VALUES ($1::uuid, 'main_orchestrator', 'proposal_pending_review', 'success', $2)",
+        "options": {
+          "queryReplacement": "={{ [$('Prepare Project Data').first().json.id, 'Propuesta generada, pendiente de aprobación o rechazada por el arquitecto'] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "mo-respond-proposal-pend",
+      "name": "Respond Proposal Pending",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        256,
+        1380
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "mo-run-planner",
+      "name": "Run agent_planner",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.1,
+      "position": [
+        -752,
+        1500
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "lSUfNw61YfbERI8n",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "project_id": "={{ $('Prepare Project Data').first().json.id }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "project_id",
+              "displayName": "project_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "mo-eval-planner",
+      "name": "Evaluate Planner Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -496,
+        1500
+      ],
+      "parameters": {
+        "jsCode": "const r = $input.first().json;\nconst p = $('Prepare Project Data').first().json;\nconst s = r.status || 'unknown';\nconst complete = s === 'complete';\nreturn [{ json: {\n  project_id: p.id,\n  current_phase: p.current_phase,\n  agent_result: s,\n  advance_phase: complete,\n  plan_id: r.plan_id || null,\n  total_weeks: r.total_weeks || null,\n  phases_count: r.phases_count || null,\n  total_duration_days: r.total_duration_days || null\n} }];"
+      }
+    },
+    {
+      "id": "mo-check-planner",
+      "name": "Planner Complete?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -256,
+        1500
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "planner-check-1",
+              "leftValue": "={{ $json.advance_phase }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "mo-update-planning-done",
+      "name": "Update Phase planning_done",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        0,
+        1420
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE projects SET current_phase = 'planning_done', updated_at = NOW() WHERE id = $1::uuid",
+        "options": {
+          "queryReplacement": "={{ [$json.project_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "mo-log-planner-adv",
+      "name": "Log Planner Advanced",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        256,
+        1420
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, phase_at_time, output_summary, status) VALUES ($1::uuid, 'agent_planner', 'phase_advanced_to_planning_done', 'approved', $2, 'success')",
+        "options": {
+          "queryReplacement": "={{ [$('Evaluate Planner Result').first().json.project_id, JSON.stringify({plan_id: $('Evaluate Planner Result').first().json.plan_id, total_weeks: $('Evaluate Planner Result').first().json.total_weeks, phases_count: $('Evaluate Planner Result').first().json.phases_count})] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "mo-respond-planner-adv",
+      "name": "Respond Planner Advanced",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        512,
+        1420
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "mo-log-planner-pend",
+      "name": "Log Planner Pending",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        0,
+        1600
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, phase_at_time, output_summary, status) VALUES ($1::uuid, 'agent_planner', 'planner_pending', 'approved', $2, 'warning')",
+        "options": {
+          "queryReplacement": "={{ [$('Evaluate Planner Result').first().json.project_id, JSON.stringify({agent_result: $('Evaluate Planner Result').first().json.agent_result})] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "mo-respond-planner-pend",
+      "name": "Respond Planner Pending",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        256,
+        1600
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "mo-run-memory",
+      "name": "Run agent_memory",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.1,
+      "position": [
+        -752,
+        1720
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "gLxmy7M0UmC7Yzye",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "project_id": "={{ $('Prepare Project Data').first().json.id }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "project_id",
+              "displayName": "project_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "mo-eval-memory",
+      "name": "Evaluate Memory Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -496,
+        1720
+      ],
+      "parameters": {
+        "jsCode": "const r = $input.first().json;\nconst p = $('Prepare Project Data').first().json;\nreturn [{ json: {\n  project_id: p.id,\n  agent_result: r.status || 'unknown',\n  memory_case_id: r.memory_case_id || null,\n  lessons_count: r.lessons_count || 0,\n  success: r.status === 'complete'\n} }];"
+      }
+    },
+    {
+      "id": "mo-log-memory",
+      "name": "Log Memory Captured",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -256,
+        1720
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, phase_at_time, output_summary, status) VALUES ($1::uuid, 'agent_memory', 'memory_captured', 'planning_done', $2, 'success')",
+        "options": {
+          "queryReplacement": "={{ [$json.project_id, JSON.stringify({memory_case_id: $json.memory_case_id, lessons_count: $json.lessons_count})] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "mo-respond-memory",
+      "name": "Respond Memory Done",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        0,
+        1720
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "mo-respond-accepted",
+      "name": "Respond Accepted",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        -2128,
+        304
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "mo-ewf-trigger",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [
+        -2496,
+        100
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "mo-prep-regulatory-input",
+      "name": "Prepare Regulatory Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -830,
+        640
+      ],
+      "parameters": {
+        "jsCode": "const projectId = $('Prepare Project Data').first().json.project_id;\nreturn [{ json: { project_id: projectId } }];"
+      }
+    },
+    {
+      "id": "mo-restore-trades-input",
+      "name": "Restore Trades Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -624,
+        1060
+      ],
+      "parameters": {
+        "jsCode": "const project_id = $('Route by Phase').first().json.project_id;\nreturn [{ json: { project_id, action: 'advance' } }];"
+      }
+    },
+    {
+      "id": "orch-sec-prep",
+      "name": "Prepare Security Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2368,
+        100
+      ],
+      "parameters": {
+        "jsCode": "const wh = $('Orchestrator Entry').first().json || {};\nconst headers = wh.headers || {};\nconst sourceIp = headers['x-real-ip']\n  || (headers['x-forwarded-for'] || '').toString().split(',')[0].trim()\n  || 'unknown';\nconst body = wh.body || {};\nconst out = {\n  source_ip: sourceIp,\n  user_agent: headers['user-agent'] || 'unknown',\n  endpoint: '/webhook/orchestrator',\n  max_per_minute: 60,\n  agent_name: 'main_orchestrator',\n  project_id: body.project_id || null\n};\nreturn [{ json: out }];"
+      }
+    },
+    {
+      "id": "orch-sec-call",
+      "name": "Webhook Security",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        -2240,
+        100
+      ],
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "value": "EipFM8h08uTX1mBn",
+          "mode": "id"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "orch-sec-if",
+      "name": "Security Allowed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -2112,
+        100
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.allowed }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "orch-sec-drop",
+      "name": "Drop Blocked",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        -2112,
+        250
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "orch-sec-restore",
+      "name": "Restore Webhook Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1984,
+        100
+      ],
+      "parameters": {
+        "jsCode": "const wh = $('Orchestrator Entry').first().json || {};\nreturn [{ json: wh }];"
+      }
+    }
+  ],
+  "connections": {
+    "Load Project": {
+      "main": [
+        [
+          {
+            "node": "Prepare Project Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Project Data": {
+      "main": [
+        [
+          {
+            "node": "Project Active?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Project Active?": {
+      "main": [
+        [
+          {
+            "node": "Pending Approvals?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond Inactive",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pending Approvals?": {
+      "main": [
+        [
+          {
+            "node": "Respond Waiting Approval",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Route by Phase",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluate Briefing Result": {
+      "main": [
+        [
+          {
+            "node": "Briefing Complete?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Briefing Complete?": {
+      "main": [
+        [
+          {
+            "node": "Update Phase briefing_done",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Briefing Pending",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Phase briefing_done": {
+      "main": [
+        [
+          {
+            "node": "Log Phase Advanced",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Phase Advanced": {
+      "main": [
+        [
+          {
+            "node": "Respond Phase Advanced",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Briefing Pending": {
+      "main": [
+        [
+          {
+            "node": "Respond Pending Review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Phase Not Implemented": {
+      "main": [
+        [
+          {
+            "node": "Respond Not Implemented",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by Phase": {
+      "main": [
+        [
+          {
+            "node": "Run agent_briefing",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Run agent_design",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Run agent_documents (diseño)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Run agent_materials",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Run agent_documents (propuesta)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Run agent_proposal",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Run agent_planner",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Run agent_memory",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Phase Not Implemented",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run agent_briefing": {
+      "main": [
+        [
+          {
+            "node": "Evaluate Briefing Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run agent_design": {
+      "main": [
+        [
+          {
+            "node": "Evaluate Design Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluate Design Result": {
+      "main": [
+        [
+          {
+            "node": "Design Complete?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Design Complete?": {
+      "main": [
+        [
+          {
+            "node": "Update Phase design_done",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Design Pending",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Phase design_done": {
+      "main": [
+        [
+          {
+            "node": "Log Design Advanced",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Design Advanced": {
+      "main": [
+        [
+          {
+            "node": "Respond Design Advanced",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Design Pending": {
+      "main": [
+        [
+          {
+            "node": "Respond Design Pending",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run agent_regulatory": {
+      "main": [
+        [
+          {
+            "node": "Evaluate Regulatory Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluate Regulatory Result": {
+      "main": [
+        [
+          {
+            "node": "Regulatory Complete?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Regulatory Complete?": {
+      "main": [
+        [
+          {
+            "node": "Update Phase analysis_done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Phase analysis_done": {
+      "main": [
+        [
+          {
+            "node": "Log Regulatory Advanced",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Regulatory Advanced": {
+      "main": [
+        [
+          {
+            "node": "Respond Regulatory Advanced",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run agent_materials": {
+      "main": [
+        [
+          {
+            "node": "Evaluate Materials Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluate Materials Result": {
+      "main": [
+        [
+          {
+            "node": "Materials Complete?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Materials Complete?": {
+      "main": [
+        [
+          {
+            "node": "Run agent_costs",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Materials Pending",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run agent_costs": {
+      "main": [
+        [
+          {
+            "node": "Evaluate Costs Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluate Costs Result": {
+      "main": [
+        [
+          {
+            "node": "Costs Complete?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Costs Complete?": {
+      "main": [
+        [
+          {
+            "node": "Update Phase costs_done",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Costs Pending",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Phase costs_done": {
+      "main": [
+        [
+          {
+            "node": "Log Costs Advanced",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Costs Advanced": {
+      "main": [
+        [
+          {
+            "node": "Respond Costs Advanced",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Costs Pending": {
+      "main": [
+        [
+          {
+            "node": "Respond Costs Pending",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Materials Pending": {
+      "main": [
+        [
+          {
+            "node": "Respond Materials Pending",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Trades Not Implemented": {
+      "main": [
+        [
+          {
+            "node": "Respond Trades Not Implemented",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run agent_trades": {
+      "main": [
+        [
+          {
+            "node": "Evaluate Trades Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluate Trades Result": {
+      "main": [
+        [
+          {
+            "node": "Trades Complete?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Trades Complete?": {
+      "main": [
+        [
+          {
+            "node": "Update Phase trades_done",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Trades Pending",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Phase trades_done": {
+      "main": [
+        [
+          {
+            "node": "Log Trades Advanced",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Trades Advanced": {
+      "main": [
+        [
+          {
+            "node": "Respond Trades Advanced",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Trades Pending": {
+      "main": [
+        [
+          {
+            "node": "Respond Trades Pending",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run agent_proposal": {
+      "main": [
+        [
+          {
+            "node": "Evaluate Proposal Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluate Proposal Result": {
+      "main": [
+        [
+          {
+            "node": "Proposal Complete?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Proposal Complete?": {
+      "main": [
+        [
+          {
+            "node": "Update Phase proposal_done",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Proposal Pending",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Phase proposal_done": {
+      "main": [
+        [
+          {
+            "node": "Log Proposal Advanced",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Proposal Advanced": {
+      "main": [
+        [
+          {
+            "node": "Respond Proposal Advanced",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Proposal Pending": {
+      "main": [
+        [
+          {
+            "node": "Respond Proposal Pending",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run agent_planner": {
+      "main": [
+        [
+          {
+            "node": "Evaluate Planner Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluate Planner Result": {
+      "main": [
+        [
+          {
+            "node": "Planner Complete?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Planner Complete?": {
+      "main": [
+        [
+          {
+            "node": "Update Phase planning_done",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Planner Pending",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Phase planning_done": {
+      "main": [
+        [
+          {
+            "node": "Log Planner Advanced",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Planner Advanced": {
+      "main": [
+        [
+          {
+            "node": "Respond Planner Advanced",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Planner Pending": {
+      "main": [
+        [
+          {
+            "node": "Respond Planner Pending",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run agent_memory": {
+      "main": [
+        [
+          {
+            "node": "Evaluate Memory Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluate Memory Result": {
+      "main": [
+        [
+          {
+            "node": "Log Memory Captured",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Memory Captured": {
+      "main": [
+        [
+          {
+            "node": "Respond Memory Done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Input": {
+      "main": [
+        [
+          {
+            "node": "Respond Accepted",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Load Project",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "Extract Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run agent_documents (diseño)": {
+      "main": [
+        [
+          {
+            "node": "Prepare Regulatory Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Regulatory Input": {
+      "main": [
+        [
+          {
+            "node": "Run agent_regulatory",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run agent_documents (propuesta)": {
+      "main": [
+        [
+          {
+            "node": "Restore Trades Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Restore Trades Input": {
+      "main": [
+        [
+          {
+            "node": "Run agent_trades",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Orchestrator Entry": {
+      "main": [
+        [
+          {
+            "node": "Prepare Security Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Security Input": {
+      "main": [
+        [
+          {
+            "node": "Webhook Security",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook Security": {
+      "main": [
+        [
+          {
+            "node": "Security Allowed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Security Allowed?": {
+      "main": [
+        [
+          {
+            "node": "Restore Webhook Payload",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Drop Blocked",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Restore Webhook Payload": {
+      "main": [
+        [
+          {
+            "node": "Extract Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false,
+    "timeSavedMode": "fixed",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "pinData": {},
+  "versionId": "ffff7f96-144d-438a-b846-686c4cf9ba38",
+  "tags": []
+}

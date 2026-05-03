@@ -201,7 +201,7 @@ def main() -> int:
                     diffs.append(f"CHANGED {name}")
         else:
             out = write_snapshot(name, sanitized, ts)
-            print(f"  ✓ {name:40s} -> {out.relative_to(REPO_ROOT)}")
+            print(f"  OK {name:40s} -> {out.relative_to(REPO_ROOT)}")
 
     if args.diff:
         if diffs:

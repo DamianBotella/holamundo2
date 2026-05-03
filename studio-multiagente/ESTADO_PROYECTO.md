@@ -1,6 +1,6 @@
 # ESTADO_PROYECTO — ArquitAI
 
-**Fecha**: 2026-05-01 (post-B42).
+**Fecha**: 2026-05-03 (post-B44).
 **Documento**: índice consolidado para Damián. Para retomar el proyecto en cualquier momento, leer ESTE primero.
 
 ---
@@ -10,7 +10,7 @@
 | # | Bloque | Estado | Bloquea | Doc principal |
 |---|---|---|---|---|
 | **X1** | E2E real del pipeline | ✅ **COMPLETO** (B30-B34) | — | [`docs/e2e_evidence_FINAL_2026-04-29.md`](docs/e2e_evidence_FINAL_2026-04-29.md) |
-| **X2** | Auditoría main_orchestrator | 📋 **AUDIT ESTÁTICO** (B37) | falta sobre prod (necesita MCP) | [`docs/x2_orchestrator_audit_2026-05-01.md`](docs/x2_orchestrator_audit_2026-05-01.md) |
+| **X2** | Auditoría main_orchestrator | ✅ **MVP CERRADO** (B44) — PA-5/6/7 aplicados, PA-1/3/4/8 diseñados pendiente sesión Damián | — | [`docs/x2_orchestrator_audit_post_prod_2026-05-03.md`](docs/x2_orchestrator_audit_post_prod_2026-05-03.md) |
 | **X3** | Multi-tenant + RLS | 📐 **DISEÑO DRAFT** (B36) | falta aplicar SQL + actualizar workflows | [`docs/x3_multi_tenant_design.md`](docs/x3_multi_tenant_design.md) |
 | **X4** | Auth Supabase | 📐 **DISEÑO COMPLETO** (B39) | bloqueado por X3 | [`docs/x4_auth_design.md`](docs/x4_auth_design.md) |
 | **X5** | API REST contractual | 📐 **CONTRACT v0.2 + 4 workflows** (B38) | bloqueado por X3+X4 | [`docs/api_v1.yaml`](docs/api_v1.yaml) |
@@ -112,7 +112,9 @@ git log --oneline -20
 
 ---
 
-## Logs por sesión (jornada 2026-05-01)
+## Logs por sesión
+
+### Jornada 2026-05-01 (B35-B43)
 
 | Commit | Hash | Bloque | Producto |
 |---|---|---|---|
@@ -124,6 +126,13 @@ git log --oneline -20
 | B40 | f5b7c00 | X6 wireframes | x6_foxhole_ui_design.md + roadmap M1-M5 |
 | B41 | 4b0e824 | Scripts | snapshot_workflows.py + apply_x3_migrations.py |
 | B42 | 62e6c79 | error_handler v2 | error_handler_v2.json + v_recent_errors + spec |
+| B43 | 1e33416 | Cierre jornada | ESTADO_PROYECTO + 3 workflows API + requirements |
+
+### Jornada 2026-05-03 (B44)
+
+| Commit | Bloque | Producto |
+|---|---|---|
+| B44 | X2 sobre PROD (sesión autónoma) | Snapshot 19 workflows críticos + PA-5 a 23 INSERTs activity_log + PA-7 elimina 2 huérfanos + doc audit_post_prod |
 
 ---
 

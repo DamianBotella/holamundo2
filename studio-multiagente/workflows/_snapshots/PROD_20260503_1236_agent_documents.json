@@ -1,0 +1,551 @@
+{
+  "name": "agent_documents",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "project_id"
+            },
+            {
+              "name": "trigger_agent"
+            }
+          ]
+        }
+      },
+      "id": "ad-01",
+      "name": "Receive Project",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        112,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, name as project_name, current_phase, project_type, metadata FROM projects WHERE id = $1::uuid",
+        "options": {
+          "queryReplacement": "={{ [$json.project_id] }}"
+        }
+      },
+      "id": "ad-02",
+      "name": "Load Project",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        304,
+        304
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, title, file_name, drive_file_id, doc_type, tags FROM documents WHERE project_id = $1::uuid AND status = 'active'",
+        "options": {
+          "queryReplacement": "={{ [$json.id] }}"
+        }
+      },
+      "id": "ad-03",
+      "name": "Load Existing Documents",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        512,
+        304
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const project = $('Load Project').first().json;\nconst allDocs = $input.all().map(i => i.json);\nconst existingDocs = allDocs.filter(d => d.doc_type);\nconst meta = typeof project.metadata === 'string' ? JSON.parse(project.metadata) : (project.metadata || {});\nconst folder_id = meta.drive_root_id || null;\nreturn [{json: {project, existingDocs, folder_id, has_folder: !!folder_id, project_id: project.id, current_phase: project.current_phase}}];"
+      },
+      "id": "ad-04",
+      "name": "Prepare Drive Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        704,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.has_folder }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "ad-05",
+      "name": "IF Has Drive Folder?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        912,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "fileFolder",
+        "searchMethod": "query",
+        "queryString": "={{ `'${$json.folder_id}' in parents and trashed = false` }}",
+        "returnAll": true,
+        "filter": {
+          "driveId": {
+            "mode": "list",
+            "value": "My Drive"
+          }
+        },
+        "options": {}
+      },
+      "id": "ad-06",
+      "name": "List Project Files",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        1104,
+        160
+      ],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "PLACEHOLDER",
+          "name": "damian2botella"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const pd = $('Prepare Drive Request').first().json;\nconst project = pd.project;\nconst existingDocs = pd.existingDocs;\nlet driveFiles = [];\nif (pd.has_folder) {\n  driveFiles = $input.all().map(i => i.json).filter(f => f.id && f.name && f.mimeType !== 'application/vnd.google-apps.folder');\n}\nconst existingIds = new Set(existingDocs.map(d => d.drive_file_id).filter(Boolean));\nfunction classify(n) {\n  const ext = n.split('.').pop().toLowerCase();\n  const nl = n.toLowerCase();\n  if (['dwg','dxf'].includes(ext) || nl.includes('plano')) return 'plano';\n  if (['jpg','jpeg','png','heic'].includes(ext) || nl.includes('foto')) return 'foto';\n  if (nl.includes('presupuesto') || nl.includes('oferta')) return 'presupuesto';\n  if (nl.includes('contrato')) return 'contrato';\n  if (nl.includes('informe') || nl.includes('certificado')) return 'informe';\n  if (nl.includes('acta')) return 'acta';\n  if (nl.includes('factura')) return 'factura';\n  if (ext === 'pdf') return 'informe';\n  return 'otro';\n}\nconst newFiles = driveFiles.filter(f => !existingIds.has(f.id)).map(f => ({id: f.id, name: f.name, doc_type: classify(f.name), title: f.name.replace(/\\.[^/.]+$/, ''), tags: [classify(f.name), 'auto_detected']}));\nconst expectedDocs = {intake: ['foto_estado_actual'], briefing_done: ['foto_estado_actual','plano_acotado'], design_done: ['foto_estado_actual','plano_acotado','plano_propuesta'], analysis_done: ['foto_estado_actual','plano_acotado','plano_propuesta','listado_materiales'], costs_done: ['foto_estado_actual','plano_acotado','plano_propuesta','estimacion_costes'], trades_done: ['foto_estado_actual','plano_acotado','plano_propuesta','presupuesto_oficios'], proposal_done: ['propuesta_comercial']};\nconst typeMap = {foto_estado_actual:'foto', plano_acotado:'plano', plano_propuesta:'plano', listado_materiales:'informe', estimacion_costes:'informe', presupuesto_oficios:'presupuesto', propuesta_comercial:'presupuesto'};\nconst phase = project.current_phase;\nconst expected = expectedDocs[phase] || [];\nconst allTypes = new Set([...existingDocs.map(d => d.doc_type), ...newFiles.map(f => f.doc_type)]);\nconst missingDocs = expected.filter(e => !allTypes.has(typeMap[e] || 'otro'));\nreturn [{json: {project_id: project.id, project_name: project.project_name, current_phase: phase, new_files: newFiles, missing_docs: missingDocs, new_count: newFiles.length, missing_count: missingDocs.length, total_docs: existingDocs.length + newFiles.length}}];"
+      },
+      "id": "ad-07",
+      "name": "Compare and Classify",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1360,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.new_count }}",
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              },
+              "rightValue": 0
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "ad-08",
+      "name": "IF New Files?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1552,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nreturn data.new_files.map(f => ({json: {project_id: data.project_id, doc_type: f.doc_type, title: f.title, file_name: f.name, drive_file_id: f.id, tags: `{${f.tags.join(',')}}`}}));"
+      },
+      "id": "ad-09",
+      "name": "Prepare Insert Items",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO documents (project_id, doc_type, title, file_name, drive_file_id, source, related_agent, tags, status) VALUES ($1::uuid, $2, $3, $4, $5, 'agente', 'agent_documents', $6::text[], 'active') RETURNING id",
+        "options": {
+          "queryReplacement": "={{ [$json.project_id, $json.doc_type, $json.title, $json.file_name, $json.drive_file_id, $json.tags] }}"
+        }
+      },
+      "id": "ad-10",
+      "name": "Insert New Document",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1952,
+        160
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const d = $('Compare and Classify').first().json;\nreturn [{json: {has_missing: d.missing_count > 0, missing_docs: d.missing_docs, new_registered: d.new_count, missing_count: d.missing_count, total_docs: d.total_docs, project_id: d.project_id, current_phase: d.current_phase}}];"
+      },
+      "id": "ad-11",
+      "name": "After Files",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2160,
+        304
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.has_missing }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "ad-12",
+      "name": "IF Has Missing?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2352,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, phase_at_time, status, output_summary, details) VALUES ($1::uuid, 'agent_documents', 'missing_documents_detected', $2, 'warning', $3, $4::jsonb)",
+        "options": {
+          "queryReplacement": "={{ [$json.project_id, $json.current_phase, ($json.missing_docs || []).length + ' documentos faltantes detectados', JSON.stringify({missing_docs: $json.missing_docs, phase: $json.current_phase})] }}"
+        }
+      },
+      "id": "ad-13",
+      "name": "Log Missing Warning",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2560,
+        160
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, phase_at_time, status, output_summary, details) VALUES ($1::uuid, 'agent_documents', 'documents_processed', $2, 'success', $3, $4::jsonb)",
+        "options": {
+          "queryReplacement": "={{ [$('After Files').first().json.project_id, $('After Files').first().json.current_phase, $('After Files').first().json.new_registered + ' docs nuevos / ' + $('After Files').first().json.total_docs + ' totales / ' + $('After Files').first().json.missing_count + ' faltantes', JSON.stringify({new_registered: $('After Files').first().json.new_registered, missing_count: $('After Files').first().json.missing_count, total_docs: $('After Files').first().json.total_docs, phase: $('After Files').first().json.current_phase})] }}"
+        }
+      },
+      "id": "ad-14",
+      "name": "Log Execution",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2752,
+        304
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "r1",
+              "name": "status",
+              "value": "complete",
+              "type": "string"
+            },
+            {
+              "id": "r2",
+              "name": "new_registered",
+              "value": "={{ $('After Files').first().json.new_registered }}",
+              "type": "number"
+            },
+            {
+              "id": "r3",
+              "name": "missing_detected",
+              "value": "={{ $('After Files').first().json.missing_count }}",
+              "type": "number"
+            },
+            {
+              "id": "r4",
+              "name": "total_docs",
+              "value": "={{ $('After Files').first().json.total_docs }}",
+              "type": "number"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "ad-15",
+      "name": "Return Result",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2960,
+        304
+      ]
+    }
+  ],
+  "connections": {
+    "Receive Project": {
+      "main": [
+        [
+          {
+            "node": "Load Project",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Project": {
+      "main": [
+        [
+          {
+            "node": "Load Existing Documents",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Existing Documents": {
+      "main": [
+        [
+          {
+            "node": "Prepare Drive Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Drive Request": {
+      "main": [
+        [
+          {
+            "node": "IF Has Drive Folder?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Has Drive Folder?": {
+      "main": [
+        [
+          {
+            "node": "List Project Files",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Compare and Classify",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List Project Files": {
+      "main": [
+        [
+          {
+            "node": "Compare and Classify",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compare and Classify": {
+      "main": [
+        [
+          {
+            "node": "IF New Files?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF New Files?": {
+      "main": [
+        [
+          {
+            "node": "Prepare Insert Items",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "After Files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Insert Items": {
+      "main": [
+        [
+          {
+            "node": "Insert New Document",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert New Document": {
+      "main": [
+        [
+          {
+            "node": "After Files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "After Files": {
+      "main": [
+        [
+          {
+            "node": "IF Has Missing?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Has Missing?": {
+      "main": [
+        [
+          {
+            "node": "Log Missing Warning",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Execution",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Missing Warning": {
+      "main": [
+        [
+          {
+            "node": "Log Execution",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Execution": {
+      "main": [
+        [
+          {
+            "node": "Return Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": {},
+  "versionId": "384d633c-8451-4ea0-8616-94ad05b723b1",
+  "tags": []
+}

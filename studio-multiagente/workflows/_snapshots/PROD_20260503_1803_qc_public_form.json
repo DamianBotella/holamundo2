@@ -1,0 +1,139 @@
+{
+  "name": "qc_public_form",
+  "active": true,
+  "nodes": [
+    {
+      "id": "qpf-01",
+      "name": "Webhook GET",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -700,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "qc-form",
+        "responseMode": "responseNode",
+        "authentication": "headerAuth"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "PLACEHOLDER",
+          "name": "Webhook API Key (entrante)"
+        }
+      },
+      "webhookId": "qpf-trigger"
+    },
+    {
+      "id": "qpf-02",
+      "name": "Load QC Check",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -460,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT qc.id, qc.project_id, qc.phase_key, qc.status, qc.items, qc.template_version, p.name AS project_name, p.location_city FROM qc_checks qc JOIN projects p ON p.id = qc.project_id WHERE qc.id = NULLIF($1, '')::uuid LIMIT 1",
+        "options": {
+          "alwaysOutputData": true,
+          "queryReplacement": "={{ [ ($json.query.qc_id || '') ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "qpf-03",
+      "name": "Build Form HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -220,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const qc = $input.first().json;\n\nfunction esc(s) { return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\"/g,'&quot;'); }\n\nif (!qc || !qc.id) {\n  const html404 = `<!DOCTYPE html><html lang=\"es\"><head><meta charset=\"utf-8\"><title>QC no encontrado</title><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"></head><body style=\"font-family:system-ui;padding:40px;text-align:center\"><h1>QC no encontrado</h1><p>No existe un qc_check con ese id, o falta el parametro <code>?qc_id=&lt;uuid&gt;</code> en la URL.</p></body></html>`;\n  return [{ json: { html: html404 } }];\n}\n\nconst items = Array.isArray(qc.items) ? qc.items : (typeof qc.items === 'string' ? JSON.parse(qc.items) : []);\nconst phaseLabel = (qc.phase_key || '').replace(/_/g, ' ');\nconst statusBadgeColor = { open:'#888', in_progress:'#3b82f6', complete:'#16a34a', blocked:'#c00', cancelled:'#666' }[qc.status] || '#888';\n\nconst itemCards = items.map((it, idx) => {\n  const itemId = esc(it.id || ('item-' + idx));\n  const label = esc(it.label || ('Item ' + (idx + 1)));\n  const desc = esc(it.description || '');\n  const status = it.status || 'pending';\n  const comment = esc(it.comment || '');\n  const cls = (s) => status === s ? ' style=\"background:#3b82f6;color:#fff\"' : '';\n  const checkedAt = it.checked_at ? `<small style=\"color:#888\">Ultimo check: ${esc(it.checked_at)}</small>` : '';\n  return `<div class=\"item\" data-item-id=\"${itemId}\">\n    <h3>${label}</h3>\n    ${desc ? `<p class=\"desc\">${desc}</p>` : ''}\n    <div class=\"status-buttons\">\n      <button type=\"button\" class=\"btn-pass\" data-status=\"pass\"${cls('pass')}>OK</button>\n      <button type=\"button\" class=\"btn-fail\" data-status=\"fail\"${cls('fail')}>FALLA</button>\n      <button type=\"button\" class=\"btn-skip\" data-status=\"skip\"${cls('skip')}>NO_APLICA</button>\n    </div>\n    <textarea class=\"comment\" placeholder=\"Comentario (opcional)\">${comment}</textarea>\n    <div class=\"item-status\" data-current=\"${status}\">Estado actual: <strong>${status}</strong></div>\n    ${checkedAt}\n    <div class=\"save-feedback\"></div>\n  </div>`;\n}).join('');\n\nconst html = `<!DOCTYPE html><html lang=\"es\"><head>\n<meta charset=\"utf-8\"><title>QC ${esc(phaseLabel)} - ${esc(qc.project_name || '')}</title>\n<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n<style>\n  *{box-sizing:border-box}\n  body{font-family:system-ui,sans-serif;margin:0;padding:0;background:#f7f7f8;color:#222}\n  header{background:#fff;border-bottom:1px solid #ddd;padding:14px 18px;position:sticky;top:0;z-index:5}\n  header h1{margin:0;font-size:18px}\n  header .meta{font-size:13px;color:#666;margin-top:4px}\n  .badge{display:inline-block;padding:3px 10px;border-radius:12px;color:#fff;font-size:11px;text-transform:uppercase;background:${statusBadgeColor};margin-left:6px}\n  main{max-width:680px;margin:0 auto;padding:18px}\n  .item{background:#fff;border:1px solid #ddd;border-radius:8px;padding:16px;margin-bottom:14px}\n  .item h3{margin:0 0 6px;font-size:16px}\n  .item .desc{margin:0 0 12px;font-size:14px;color:#555}\n  .status-buttons{display:flex;gap:8px;margin-bottom:10px}\n  .status-buttons button{flex:1;padding:14px;border:1px solid #ccc;border-radius:6px;background:#fff;font-size:14px;font-weight:600;cursor:pointer;-webkit-tap-highlight-color:transparent}\n  .status-buttons button:active{opacity:0.7}\n  .status-buttons .btn-pass{color:#16a34a;border-color:#16a34a}\n  .status-buttons .btn-fail{color:#c00;border-color:#c00}\n  .status-buttons .btn-skip{color:#666}\n  textarea.comment{width:100%;min-height:60px;padding:8px;border:1px solid #ddd;border-radius:6px;font-family:inherit;font-size:14px;resize:vertical}\n  .item-status{font-size:12px;color:#666;margin-top:8px}\n  .save-feedback{font-size:12px;margin-top:6px;min-height:14px}\n  .save-feedback.ok{color:#16a34a}\n  .save-feedback.err{color:#c00}\n</style>\n</head>\n<body>\n<header>\n  <h1>QC ${esc(phaseLabel)}<span class=\"badge\">${esc(qc.status)}</span></h1>\n  <div class=\"meta\">${esc(qc.project_name || 'Proyecto sin nombre')} - ${esc(qc.location_city || '?')}</div>\n</header>\n<main>\n  ${itemCards || '<p style=\"text-align:center;color:#888;padding:40px\">Esta checklist no tiene items.</p>'}\n  <p style=\"font-size:11px;color:#888;text-align:center;margin-top:24px\">qc_id: ${esc(qc.id)}<br>Cada cambio se guarda automaticamente.</p>\n</main>\n<script>\nconst QC_ID = ${JSON.stringify(qc.id)};\nconst API_KEY = window.__API_KEY__ || prompt('x-api-key (necesaria para guardar):') || '';\nwindow.__API_KEY__ = API_KEY;\ndocument.querySelectorAll('.item').forEach(card => {\n  const itemId = card.dataset.itemId;\n  const buttons = card.querySelectorAll('.status-buttons button');\n  const textarea = card.querySelector('.comment');\n  const feedback = card.querySelector('.save-feedback');\n  const statusEl = card.querySelector('.item-status');\n  let pendingTimer = null;\n  function save(newStatus) {\n    feedback.textContent = 'Guardando...';\n    feedback.className = 'save-feedback';\n    fetch('/webhook/qc-complete', {\n      method: 'POST',\n      headers: { 'Content-Type': 'application/json', 'x-api-key': API_KEY },\n      body: JSON.stringify({ qc_id: QC_ID, item_id: itemId, status: newStatus, comment: textarea.value })\n    }).then(r => r.json()).then(d => {\n      if (d && (d.success || d.status === 'ok')) {\n        feedback.textContent = 'Guardado';\n        feedback.className = 'save-feedback ok';\n        statusEl.dataset.current = newStatus;\n        statusEl.querySelector('strong').textContent = newStatus;\n        buttons.forEach(b => { b.style.background = ''; b.style.color = ''; });\n        const active = card.querySelector('[data-status=\"' + newStatus + '\"]');\n        if (active) { active.style.background = '#3b82f6'; active.style.color = '#fff'; }\n      } else {\n        feedback.textContent = 'Error: ' + (d.error || 'desconocido');\n        feedback.className = 'save-feedback err';\n      }\n    }).catch(e => { feedback.textContent = 'Error de red'; feedback.className = 'save-feedback err'; });\n  }\n  buttons.forEach(b => { b.addEventListener('click', () => save(b.dataset.status)); });\n  textarea.addEventListener('input', () => {\n    if (pendingTimer) clearTimeout(pendingTimer);\n    pendingTimer = setTimeout(() => save(statusEl.dataset.current || 'pending'), 800);\n  });\n});\n</script>\n</body></html>`;\n\nreturn [{ json: { html } }];"
+      }
+    },
+    {
+      "id": "qpf-04",
+      "name": "Respond HTML",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        20,
+        300
+      ],
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.html }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "text/html; charset=utf-8"
+              },
+              {
+                "name": "Cache-Control",
+                "value": "no-store"
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook GET": {
+      "main": [
+        [
+          {
+            "node": "Load QC Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load QC Check": {
+      "main": [
+        [
+          {
+            "node": "Build Form HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Form HTML": {
+      "main": [
+        [
+          {
+            "node": "Respond HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": null,
+  "versionId": "0b57a5a2-42a2-4f46-8e7a-f4473c31de85",
+  "tags": []
+}

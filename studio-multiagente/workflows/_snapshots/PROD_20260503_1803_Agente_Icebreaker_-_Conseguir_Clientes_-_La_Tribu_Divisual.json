@@ -1,0 +1,477 @@
+{
+  "name": "Agente Icebreaker - Conseguir Clientes - La Tribu Divisual",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "url": "={{ $json.cleanUrl }}",
+        "options": {
+          "redirect": {
+            "redirect": {
+              "maxRedirects": 3
+            }
+          },
+          "timeout": 15000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -1168,
+        208
+      ],
+      "id": "c4abec47-63e4-4adc-9727-7ae3ff55288e",
+      "name": "Scrape Company URLs1",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 2000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "1U6adXtgcy7pgIQAF2sMn7GFcDbxvbzFjVD9duN_liwA",
+          "mode": "list",
+          "cachedResultName": "LEAD SCRAPPING CONTROL",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1U6adXtgcy7pgIQAF2sMn7GFcDbxvbzFjVD9duN_liwA/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Hoja 1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1U6adXtgcy7pgIQAF2sMn7GFcDbxvbzFjVD9duN_liwA/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Web": "={{ $('Mapeo correo - web1').item.json.web }}",
+            "Correo Icebreaker": "={{ $json.message.content.ASUNTO }}",
+            "Estado": "Enviado"
+          },
+          "matchingColumns": [
+            "Web"
+          ],
+          "schema": [
+            {
+              "id": "Web",
+              "displayName": "Web",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Correo",
+              "displayName": "Correo",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "Correo Icebreaker",
+              "displayName": "Correo Icebreaker",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Estado",
+              "displayName": "Estado",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        192,
+        384
+      ],
+      "id": "e3486920-8504-4ddd-ab41-d6ac97e05ab9",
+      "name": "Google Sheets1"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "fb6979ad-b631-408e-b42b-8f2401b39c1c",
+              "name": "correo",
+              "value": "={{ $('Loop Over Items1').item.json.Correo }}",
+              "type": "string"
+            },
+            {
+              "id": "999b858f-f84e-401a-8f8d-e8a7d2a9be23",
+              "name": "web",
+              "value": "={{ $('Loop Over Items1').item.json.Web }}",
+              "type": "string"
+            },
+            {
+              "id": "html-content-field",
+              "name": "htmlContent",
+              "value": "={{ typeof $json === 'string' ? $json : JSON.stringify($json) }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -912,
+        208
+      ],
+      "id": "80836960-feab-409d-8c69-7073bc5e5ce8",
+      "name": "Mapeo correo - web1"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        -1728,
+        192
+      ],
+      "id": "e49aadee-a3fd-4160-82b7-1933bed81f42",
+      "name": "Loop Over Items1"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $('Mapeo correo - web1').item.json.correo }}",
+        "subject": "={{ $json.message.content.ASUNTO }}",
+        "message": "={{ $json.message.content.HTML }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        192,
+        -32
+      ],
+      "id": "0df164d7-4b17-42fe-a0e5-c83803690044",
+      "name": "Gmail1",
+      "webhookId": "fe5ad01a-4fcd-47da-a355-162292216374"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Obtener HTML de múltiples posibles ubicaciones\nconst input = $input.first().json;\nlet html = '';\n\n// Prioridad: htmlContent del mapeo, o data legacy, o el JSON directo si es string\nif (input.htmlContent && typeof input.htmlContent === 'string') {\n  html = input.htmlContent;\n} else if (input.data && typeof input.data === 'string') {\n  html = input.data;\n} else if (typeof input === 'string') {\n  html = input;\n}\n\n// Si el HTML está vacío, devolver error informativo\nif (!html || html.trim() === '' || html === '{}' || html === 'undefined') {\n  return [{\n    json: {\n      cleanText: '',\n      coloresPrincipales: [],\n      colorPrimario: '#2563eb',\n      colorSecundario: '#1e40af',\n      colorAccento: '#3b82f6',\n      error: 'No se pudo obtener el HTML de la web',\n      correo: input.correo || '',\n      web: input.web || ''\n    }\n  }];\n}\n\n// === LIMPIEZA DEL TEXTO VISIBLE ===\nconst cleanText = html\n  .replace(/<script[\\s\\S]*?>[\\s\\S]*?<\\/script>/gi, '')\n  .replace(/<style[\\s\\S]*?>[\\s\\S]*?<\\/style>/gi, '')\n  .replace(/<\\/?[^>]+(>|$)/g, ' ')\n  .replace(/\\s+/g, ' ')\n  .trim()\n  .slice(0, 4000);\n\n// === EXTRACCIÓN DE COLORES ===\nconst coloresEncontrados = new Set();\n\n// 1. Colores HEX (#fff, #ffffff)\nconst hexMatches = html.match(/#([0-9a-fA-F]{3}){1,2}\\b/g) || [];\nhexMatches.forEach(color => coloresEncontrados.add(color.toLowerCase()));\n\n// 2. Colores RGB/RGBA\nconst rgbMatches = html.match(/rgba?\\s*\\(\\s*\\d{1,3}\\s*,\\s*\\d{1,3}\\s*,\\s*\\d{1,3}(?:\\s*,\\s*[\\d.]+)?\\s*\\)/gi) || [];\nrgbMatches.forEach(rgb => {\n  const match = rgb.match(/(\\d{1,3})\\s*,\\s*(\\d{1,3})\\s*,\\s*(\\d{1,3})/);\n  if (match) {\n    const hex = '#' + [match[1], match[2], match[3]]\n      .map(x => parseInt(x).toString(16).padStart(2, '0'))\n      .join('');\n    coloresEncontrados.add(hex.toLowerCase());\n  }\n});\n\n// 3. Colores de CSS inline (style=\"...color:...\")\nconst styleMatches = html.match(/(?:background-color|color|border-color)\\s*:\\s*([^;\"']+)/gi) || [];\nstyleMatches.forEach(styleMatch => {\n  const colorValue = styleMatch.split(':')[1]?.trim() || '';\n  if (colorValue.startsWith('#')) {\n    coloresEncontrados.add(colorValue.toLowerCase());\n  } else if (colorValue.startsWith('rgb')) {\n    const rgbMatch = colorValue.match(/(\\d{1,3})\\s*,\\s*(\\d{1,3})\\s*,\\s*(\\d{1,3})/);\n    if (rgbMatch) {\n      const hex = '#' + [rgbMatch[1], rgbMatch[2], rgbMatch[3]]\n        .map(x => parseInt(x).toString(16).padStart(2, '0'))\n        .join('');\n      coloresEncontrados.add(hex.toLowerCase());\n    }\n  }\n});\n\n// Filtrar colores muy claros (blancos) y muy oscuros (negros)\nconst coloresUtiles = Array.from(coloresEncontrados).filter(color => {\n  if (!color.startsWith('#') || color.length < 4) return false;\n  let hex = color.slice(1);\n  if (hex.length === 3) {\n    hex = hex[0] + hex[0] + hex[1] + hex[1] + hex[2] + hex[2];\n  }\n  const r = parseInt(hex.slice(0, 2), 16);\n  const g = parseInt(hex.slice(2, 4), 16);\n  const b = parseInt(hex.slice(4, 6), 16);\n  const brightness = (r * 299 + g * 587 + b * 114) / 1000;\n  return brightness > 30 && brightness < 240;\n});\n\n// Seleccionar colores principales (máximo 5)\nconst coloresPrincipales = coloresUtiles.slice(0, 5);\n\n// Asignar roles a los colores\nconst colorPrimario = coloresPrincipales[0] || '#2563eb';\nconst colorSecundario = coloresPrincipales[1] || '#1e40af';\nconst colorAccento = coloresPrincipales[2] || '#3b82f6';\n\nreturn [{\n  json: {\n    cleanText: cleanText,\n    coloresPrincipales: coloresPrincipales,\n    colorPrimario: colorPrimario,\n    colorSecundario: colorSecundario,\n    colorAccento: colorAccento,\n    correo: input.correo || '',\n    web: input.web || ''\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -672,
+        208
+      ],
+      "id": "5456f836-6dcd-4aab-80a8-17b21a97ed2f",
+      "name": "Limpiar codigo + colores1"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4.1",
+          "mode": "list",
+          "cachedResultName": "GPT-4.1"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "=### DATOS DEL PROSPECTO\n\n**Información de su negocio (extraída de su web):**\n{{ $json.cleanText }}\n\n**Colores de su marca (SOLO para diseño del email):**\n- Primario: {{ $json.colorPrimario }}\n- Secundario: {{ $json.colorSecundario }}"
+            },
+            {
+              "content": "=Eres un experto en copywriting B2B especializado en venta de servicios de **Inteligencia Artificial y Automatización de procesos**.\n\n## QUÉ VENDEMOS\nSomos **Divisual Project**, una empresa que ayuda a negocios a:\n- Automatizar tareas repetitivas (emails, seguimientos, reportes)\n- Implementar chatbots y asistentes con IA\n- Crear flujos de trabajo inteligentes que ahorran horas de trabajo manual\n- Integrar sistemas para que todo funcione sin intervención humana\n\n## TU TAREA\nEscribe un email de prospeción en frío que:\n1. **Demuestre que investigaste su negocio** - Menciona algo ESPECÍFICO que viste en su web (un servicio, su sector, algo que hacen)\n2. **Conecte con un problema real** - Identifica una tarea repetitiva o manual que probablemente tienen\n3. **Presente la solución de forma natural** - Cómo la IA/automatización podría ayudarles\n4. **Termine con una pregunta simple** - Que invite a responder sí o no\n\n## TONO\n- Tutea siempre\n- Directo y humano, nada corporativo\n- Como si hablaras con un conocido profesional\n- Sin frases de relleno (\"Espero que estés bien\", \"Me permito escribirte\")\n- Seguro pero no arrogante\n\n## ESTRUCTURA (MÁX 100 palabras)\n1. **Gancho** - Observación específica sobre SU negocio\n2. **Problema** - Una frustración que probablemente tienen (tareas manuales, falta de tiempo, seguimientos que se pierden)\n3. **Solución** - Cómo ayudamos a negocios similares con IA/automatización\n4. **CTA** - Pregunta directa tipo: \"¿Te interesaría ver cómo funcionaría en tu caso?\"\n\n## DISEÑO DEL EMAIL (HTML)\nUsa los colores de SU marca SOLO para:\n- Botón CTA: fondo con su color primario\n- Link de firma: su color primario\n- El resto: fondo blanco, texto gris oscuro (#374151)\n\nEl botón debe redirigir a: mailto:juanpe@divisualproject.com?subject=Re:%20[ASUNTO]\n\n## FIRMA\nUn saludo,\nJuan Pe Navarro\nCEO de Divisual Project (con link a https://divisualproject.com/)\n\n## FORMATO DE SALIDA (JSON)\n```json\n{\n  \"ASUNTO\": \"[Asunto corto y directo - max 50 caracteres]\",\n  \"HTML\": \"[Email completo en HTML con estilos inline]\"\n}\n```\n\n## EJEMPLO DE EMAIL BUENO\n\"Vi que en [nombre negocio] os dedicáis a [servicio específico]. Imagino que gestionáis muchas [tarea manual como citas/consultas/presupuestos] al día.\n\n¿Qué pasaría si un asistente con IA pudiera encargarse del 80% de esas gestiones mientras tú te centras en lo importante?\n\nHe ayudado a negocios de [sector similar] a recuperar más de 15 horas semanales automatizando exactamente eso.\n\n¿Te interesa ver cómo funcionaría en tu caso?\"\n\n## PROHIBIDO\n- Hablar de colores o diseño web\n- Emails genéricos que sirvan para cualquiera\n- Más de 120 palabras\n- Vender agresivamente\n- Mentir o exagerar",
+              "role": "system"
+            }
+          ]
+        },
+        "jsonOutput": true,
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [
+        -416,
+        208
+      ],
+      "id": "e187e940-86ba-4909-9d84-be1f130fe5f5",
+      "name": "Agente creador de Email IceBreaker1"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1U6adXtgcy7pgIQAF2sMn7GFcDbxvbzFjVD9duN_liwA",
+          "mode": "list",
+          "cachedResultName": "LEAD SCRAPPING CONTROL",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1U6adXtgcy7pgIQAF2sMn7GFcDbxvbzFjVD9duN_liwA/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Hoja 1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1U6adXtgcy7pgIQAF2sMn7GFcDbxvbzFjVD9duN_liwA/edit#gid=0"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.6,
+      "position": [
+        -2624,
+        192
+      ],
+      "id": "8032f7b4-9a69-43d7-a22b-1426c3cc2b7e",
+      "name": "Google Sheets2"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Obtener la URL desde el item actual del loop\nconst item = $input.first();\nlet url = item.json.Web || '';\n\n// Verificar que la URL existe\nif (!url || typeof url !== 'string' || url.trim() === '') {\n  return [{ json: { error: 'URL no válida', original: url } }];\n}\n\n// Limpiar espacios en blanco\nurl = url.trim();\n\n// Asegurar que tiene protocolo\nif (!url.match(/^https?:\\/\\//i)) {\n  url = 'https://' + url;\n}\n\n// Cambiar http:// a https://\nurl = url.replace(/^http:\\/\\//i, 'https://');\n\n// Eliminar www. si existe\nurl = url.replace(/^(https:\\/\\/)www\\./i, '$1');\n\n// Asegurar que termine con /\nif (!url.endsWith('/')) {\n  url += '/';\n}\n\n// Retornar en formato correcto\nreturn [{\n  json: {\n    cleanUrl: url,\n    originalUrl: item.json.Web\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1424,
+        208
+      ],
+      "id": "31c5e4d1-3a25-4fce-b084-59ec6fc30923",
+      "name": "Code"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 6
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -2848,
+        192
+      ],
+      "id": "7edf879c-7705-4dfc-816f-3dc8945d12a2",
+      "name": "Schedule Trigger1"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "filter-estado",
+              "leftValue": "={{ $json.Estado }}",
+              "rightValue": "Sin enviar",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a16f7d04-1253-4bc9-aa72-b8b75aeeb271",
+      "name": "Filter Pendientes",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.3,
+      "position": [
+        -2368,
+        192
+      ]
+    },
+    {
+      "parameters": {
+        "maxItems": 10
+      },
+      "type": "n8n-nodes-base.limit",
+      "typeVersion": 1,
+      "position": [
+        -2048,
+        192
+      ],
+      "id": "4bba1218-31fa-47aa-aaac-5d7c0a077485",
+      "name": "Limit"
+    }
+  ],
+  "connections": {
+    "Scrape Company URLs1": {
+      "main": [
+        [
+          {
+            "node": "Mapeo correo - web1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Sheets1": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mapeo correo - web1": {
+      "main": [
+        [
+          {
+            "node": "Limpiar codigo + colores1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items1": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Code",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Limpiar codigo + colores1": {
+      "main": [
+        [
+          {
+            "node": "Agente creador de Email IceBreaker1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Agente creador de Email IceBreaker1": {
+      "main": [
+        [
+          {
+            "node": "Google Sheets1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Gmail1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code": {
+      "main": [
+        [
+          {
+            "node": "Scrape Company URLs1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Trigger1": {
+      "main": [
+        [
+          {
+            "node": "Google Sheets2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Sheets2": {
+      "main": [
+        [
+          {
+            "node": "Filter Pendientes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Pendientes": {
+      "main": [
+        [
+          {
+            "node": "Limit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Limit": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "pinData": {},
+  "versionId": "f2e4f974-2d2f-4098-af3c-1cebf2737201",
+  "tags": [
+    {
+      "updatedAt": "2026-03-04T17:44:35.573Z",
+      "createdAt": "2026-03-04T17:44:35.573Z",
+      "id": "ARcHzp4p219xBEpY",
+      "name": "Curso Adrián Sáenz N8N 2"
+    },
+    {
+      "updatedAt": "2026-03-04T17:44:35.567Z",
+      "createdAt": "2026-03-04T17:44:35.567Z",
+      "id": "iqvg2g4Vg5uemJvp",
+      "name": "Curso Adrián Sáenz"
+    }
+  ]
+}

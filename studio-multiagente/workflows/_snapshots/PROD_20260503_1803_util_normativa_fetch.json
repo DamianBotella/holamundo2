@@ -1,0 +1,390 @@
+{
+  "name": "util_normativa_fetch",
+  "active": true,
+  "nodes": [
+    {
+      "id": "unf-0001",
+      "name": "Receive Input",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        250,
+        300
+      ],
+      "parameters": {
+        "inputSource": "defineBelow",
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "normativa_categories",
+              "type": "string"
+            },
+            {
+              "name": "location_province",
+              "type": "string"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "unf-0002",
+      "name": "Load Relevant Sources",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        500,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT ns.id, ns.name, ns.url, ns.source_type, ns.category, ns.subcategory FROM normativa_sources ns WHERE ns.active = true ORDER BY ns.category, ns.subcategory",
+        "options": {
+          "alwaysOutputData": true
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "unf-0003",
+      "name": "Split In Batches",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        750,
+        300
+      ],
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      }
+    },
+    {
+      "id": "unf-0004",
+      "name": "Fetch Official Content",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1000,
+        300
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "=https://r.jina.ai/{{ $json.url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 45000
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "id": "unf-0005",
+      "name": "Check Fetch OK",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1250,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "unf-0051",
+              "leftValue": "={{ ($json.data?.content || $json.body || '').length > 100 }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equal"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "unf-0006",
+      "name": "Use Live Content",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1500,
+        160
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const source = $('Split In Batches').first().json;\nconst resp = $input.first().json;\nconst rawText = resp.data?.content || resp.body || JSON.stringify(resp);\nconst content = String(rawText).substring(0, 4000);\nreturn [{ json: { source_id: source.id, source_name: source.name, source_url: source.url, category: source.category, subcategory: source.subcategory || '', content, is_live: true, fetch_date: new Date().toISOString() } }];"
+      }
+    },
+    {
+      "id": "unf-0007",
+      "name": "Fallback To Cache",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1500,
+        440
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT content, source_url, verified_date FROM normativa_knowledge WHERE source_id = $1::uuid ORDER BY verified_date DESC LIMIT 1",
+        "options": {
+          "queryReplacement": "={{ [$('Split In Batches').first().json.id] }}",
+          "alwaysOutputData": true
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "unf-0008",
+      "name": "Format Fallback",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1750,
+        440
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const source = $('Split In Batches').first().json;\nconst cached = $input.first().json;\nreturn [{ json: { source_id: source.id, source_name: source.name, source_url: cached.source_url || source.url, category: source.category, subcategory: source.subcategory || '', content: cached.content || '[Sin contenido disponible para esta fuente]', is_live: false, fetch_date: cached.verified_date || null } }];"
+      }
+    },
+    {
+      "id": "unf-0009",
+      "name": "Aggregate Back",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1750,
+        160
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const all = $input.all();\nconst first = all[0].json;\nreturn [{ json: { source_id: first.source_id, source_name: first.source_name, source_url: first.source_url, category: first.category, subcategory: first.subcategory, content: first.content, is_live: first.is_live, fetch_date: first.fetch_date } }];"
+      }
+    },
+    {
+      "id": "unf-0010",
+      "name": "Build Normativa Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        750,
+        500
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const allSources = $input.all();\nconst fetchTimestamp = new Date().toISOString();\n\nconst sections = allSources.map(s => {\n  const liveTag = s.json.is_live ? '[VERIFICADO EN TIEMPO REAL]' : '[CACHE - puede estar desactualizado]';\n  const date = s.json.fetch_date ? new Date(s.json.fetch_date).toLocaleDateString('es-ES') : 'desconocida';\n  return '=== ' + s.json.source_name + ' ' + liveTag + ' (fecha: ' + date + ') ===\\nFuente oficial: ' + s.json.source_url + '\\n\\n' + s.json.content;\n}).join('\\n\\n---\\n\\n');\n\nconst sourcesMeta = allSources.map(s => ({ name: s.json.source_name, url: s.json.source_url, is_live: s.json.is_live, fetch_date: s.json.fetch_date, category: s.json.category }));\nconst allLive = allSources.every(s => s.json.is_live === true);\n\nreturn [{ json: { normativa_context: sections, sources_fetched: sourcesMeta, all_live: allLive, fetch_timestamp: fetchTimestamp, sources_count: allSources.length } }];"
+      }
+    },
+    {
+      "id": "unf-0011",
+      "name": "Return Result",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1000,
+        500
+      ],
+      "parameters": {
+        "mode": "manual",
+        "duplicateItem": false,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "unf-0111",
+              "name": "normativa_context",
+              "value": "={{ $json.normativa_context }}",
+              "type": "string"
+            },
+            {
+              "id": "unf-0112",
+              "name": "sources_fetched",
+              "value": "={{ $json.sources_fetched }}",
+              "type": "object"
+            },
+            {
+              "id": "unf-0113",
+              "name": "all_live",
+              "value": "={{ $json.all_live }}",
+              "type": "boolean"
+            },
+            {
+              "id": "unf-0114",
+              "name": "fetch_timestamp",
+              "value": "={{ $json.fetch_timestamp }}",
+              "type": "string"
+            },
+            {
+              "id": "unf-0115",
+              "name": "sources_count",
+              "value": "={{ $json.sources_count }}",
+              "type": "number"
+            }
+          ]
+        },
+        "includeOtherFields": false
+      }
+    }
+  ],
+  "connections": {
+    "Receive Input": {
+      "main": [
+        [
+          {
+            "node": "Load Relevant Sources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Relevant Sources": {
+      "main": [
+        [
+          {
+            "node": "Split In Batches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split In Batches": {
+      "main": [
+        [
+          {
+            "node": "Fetch Official Content",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Normativa Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Official Content": {
+      "main": [
+        [
+          {
+            "node": "Check Fetch OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Fetch OK": {
+      "main": [
+        [
+          {
+            "node": "Use Live Content",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fallback To Cache",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Use Live Content": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Back",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fallback To Cache": {
+      "main": [
+        [
+          {
+            "node": "Format Fallback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Fallback": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Back",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Back": {
+      "main": [
+        [
+          {
+            "node": "Split In Batches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Normativa Context": {
+      "main": [
+        [
+          {
+            "node": "Return Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": null,
+  "versionId": "7571997e-6ec5-49b9-bff0-f5188716dbe1",
+  "tags": []
+}

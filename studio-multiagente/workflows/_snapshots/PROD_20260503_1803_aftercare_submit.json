@@ -1,0 +1,507 @@
+{
+  "name": "aftercare_submit",
+  "active": true,
+  "nodes": [
+    {
+      "id": "as-01",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -900,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "aftercare-submit",
+        "responseMode": "responseNode",
+        "authentication": "headerAuth"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "PLACEHOLDER",
+          "name": "Webhook API Key (entrante)"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "webhookId": "835889cd-22d9-4859-875d-04198f37ba2b"
+    },
+    {
+      "id": "as-02",
+      "name": "Validate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -680,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const body = $('Webhook').first().json.body || {};\nif (!body.project_id) { const e = { valid: false, error: 'project_id obligatorio' }; return [{ json: e }]; }\nif (!body.description || body.description.toString().trim().length < 5) {\n  const e = { valid: false, error: 'description (texto > 5 chars) obligatorio' };\n  return [{ json: e }];\n}\nlet photoUrls = body.photo_urls;\nif (!photoUrls && body.photo_url) photoUrls = [body.photo_url];\nif (!Array.isArray(photoUrls)) photoUrls = [];\nphotoUrls = photoUrls.filter(u => typeof u === 'string' && u.startsWith('http')).slice(0, 5);\nconst out = {\n  valid: true,\n  project_id: body.project_id,\n  description: body.description.toString().slice(0, 2000),\n  photo_urls: photoUrls,\n  reporter: body.reporter || 'cliente',\n  client_contact: body.client_contact || null,\n  started_at: Date.now()\n};\nreturn [{ json: out }];"
+      }
+    },
+    {
+      "id": "as-03",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -460,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "v1",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "as-04",
+      "name": "Respond 400",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        -220,
+        480
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'error', error: $json.error}) }}",
+        "options": {
+          "responseCode": 400
+        }
+      }
+    },
+    {
+      "id": "as-05",
+      "name": "Load Project + Handover",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -220,
+        220
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT json_build_object(\n  'project_id', p.id,\n  'project_name', p.name,\n  'project_type', p.project_type,\n  'current_phase', p.current_phase,\n  'handover_date', p.handover_date,\n  'days_since_handover', CASE WHEN p.handover_date IS NULL THEN NULL\n    ELSE EXTRACT(EPOCH FROM (now() - p.handover_date::timestamptz))/86400\n    END,\n  'client_id', p.client_id\n) AS context\nFROM projects p WHERE p.id = $1::uuid;",
+        "options": {
+          "queryReplacement": "={{ [$json.project_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "as-06",
+      "name": "Build Vision Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        0,
+        220
+      ],
+      "parameters": {
+        "jsCode": "const ctx = $input.first().json.context || {};\nconst input = $('Validate').first().json;\nconst daysSinceHandover = ctx.days_since_handover === null || ctx.days_since_handover === undefined\n  ? null\n  : Math.round(ctx.days_since_handover);\n\nconst systemPrompt = 'Eres un experto en patologia de la edificacion y postventa LOE. Clasificas incidencias post-entrega para enrutarlas al gremio responsable. Conoces los plazos LOE: 1 anio acabados, 3 anios habitabilidad/instalaciones, 10 anios estructura. Respondes SOLO con JSON valido sin markdown.';\n\nconst userText = [\n  'Analiza esta incidencia post-entrega del proyecto \"' + (ctx.project_name || '?') + '\" (tipo: ' + (ctx.project_type || '?') + ').',\n  '',\n  'DESCRIPCION CLIENTE:',\n  input.description,\n  '',\n  daysSinceHandover !== null\n    ? 'DIAS DESDE ENTREGA: ' + daysSinceHandover + ' dias'\n    : 'FECHA DE ENTREGA: no registrada (asumir reciente)',\n  '',\n  'Devuelve JSON exacto:',\n  '{',\n  '  \"category\": \"acabado|habitabilidad|estructura|instalaciones|otro\",',\n  '  \"responsible_trade\": \"albanileria|fontaneria|electricidad|carpinteria|pintura|climatizacion|sanitarios|otros\",',\n  '  \"severity\": \"low|medium|high|urgent\",',\n  '  \"loe_period\": 1|3|10,',\n  '  \"vision_summary\": \"2-3 frases describiendo lo visible y la causa probable\",',\n  '  \"action_recommended\": \"qué deberia hacer el gremio\",',\n  '  \"confidence\": \"low|medium|high\"',\n  '}',\n  '',\n  'Reglas:',\n  '- LOE 1 anio: pintura, juntas, sellados, defectos esteticos, mecanismos sueltos.',\n  '- LOE 3 anios: humedades no estructurales, fugas, fallos de instalacion, ventilacion deficiente, acustica.',\n  '- LOE 10 anios: fisuras estructurales, asentamientos, problemas de cimentacion, cubierta, fachadas portantes.',\n  '- severity \"urgent\" si hay riesgo inmediato (gas, electrico, fuga grave, riesgo estructural).',\n  '- Si no hay foto o info insuficiente: confidence: \"low\".'\n].filter(Boolean).join('\\n');\n\nconst contentArr = [{ type: 'text', text: userText }];\nfor (const url of input.photo_urls) {\n  contentArr.push({ type: 'image_url', image_url: { url: url, detail: 'high' } });\n}\n\nconst payload = {\n  model: 'gpt-4o',\n  max_tokens: 1000,\n  temperature: 0.1,\n  messages: [\n    { role: 'system', content: systemPrompt },\n    { role: 'user', content: contentArr }\n  ]\n};\nreturn [{ json: { project_id: input.project_id, client_id: ctx.client_id || null, project_name: ctx.project_name, description: input.description, photo_urls: input.photo_urls, reporter: input.reporter, client_contact: input.client_contact, days_since_handover: daysSinceHandover, payload: payload, started_at: input.started_at } }];"
+      }
+    },
+    {
+      "id": "as-07",
+      "name": "Call Vision",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        220,
+        220
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.payload) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "PLACEHOLDER",
+          "name": "orquestador ArquiAI"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "as-08",
+      "name": "Parse + Classify",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        160
+      ],
+      "parameters": {
+        "jsCode": "const llm = $input.first().json;\nconst built = $('Build Vision Prompt').first().json;\nconst content = llm.choices && llm.choices[0] && llm.choices[0].message && llm.choices[0].message.content || '';\nconst usage = llm.usage || {};\nconst tokensIn = usage.prompt_tokens || 0;\nconst tokensOut = usage.completion_tokens || 0;\nconst cost = (tokensIn / 1000) * 0.0025 + (tokensOut / 1000) * 0.01;\n\nlet parsed = {};\ntry {\n  const m = content.match(/\\{[\\s\\S]*\\}/);\n  if (m) parsed = JSON.parse(m[0]);\n} catch (e) {\n  parsed = { confidence: 'low', vision_summary: 'parse error: ' + e.message };\n}\n\nconst loeYears = parsed.loe_period || 1;\nconst daysSince = built.days_since_handover;\nconst underWarranty = daysSince === null || daysSince <= (loeYears * 365);\n\nconst out = {\n  project_id: built.project_id,\n  client_id: built.client_id,\n  description: built.description,\n  photo_urls: built.photo_urls,\n  reporter: built.reporter,\n  client_contact: built.client_contact,\n  category: parsed.category || 'otro',\n  responsible_trade: parsed.responsible_trade || 'otros',\n  severity: parsed.severity || 'medium',\n  loe_period: loeYears,\n  under_warranty: underWarranty,\n  days_since_handover: daysSince,\n  vision_summary: parsed.vision_summary || '',\n  vision_raw: parsed,\n  llm_model: llm.model || 'gpt-4o',\n  llm_tokens_in: tokensIn,\n  llm_tokens_out: tokensOut,\n  llm_cost: Math.round(cost * 100000) / 100000\n};\nreturn [{ json: out }];"
+      }
+    },
+    {
+      "id": "as-09",
+      "name": "Insert Incident",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        660,
+        160
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO aftercare_incidents (\n  project_id, client_id, reporter, description, photo_urls,\n  category, responsible_trade, severity, loe_period, under_warranty, days_since_handover,\n  vision_summary, vision_raw, llm_model, llm_tokens_in, llm_tokens_out, llm_cost,\n  client_contact\n) VALUES (\n  $1::uuid, NULLIF($2,'')::uuid, $3, $4, $5::text[],\n  $6, $7, $8, $9::int, $10::boolean, NULLIF($11,'')::int,\n  $12, $13::jsonb, $14, $15::int, $16::int, $17::numeric,\n  $18\n) RETURNING id, status, severity, category, responsible_trade, under_warranty, loe_period;",
+        "options": {
+          "queryReplacement": "={{ [\n  $json.project_id,\n  $json.client_id || '',\n  $json.reporter,\n  $json.description,\n  '{' + ($json.photo_urls || []).map(u => '\"' + u.replace(/\"/g, '\\\\\"') + '\"').join(',') + '}',\n  $json.category,\n  $json.responsible_trade,\n  $json.severity,\n  $json.loe_period,\n  $json.under_warranty,\n  $json.days_since_handover === null || $json.days_since_handover === undefined ? '' : String($json.days_since_handover),\n  $json.vision_summary,\n  JSON.stringify($json.vision_raw),\n  $json.llm_model,\n  $json.llm_tokens_in,\n  $json.llm_tokens_out,\n  $json.llm_cost,\n  $json.client_contact || ''\n] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "as-10",
+      "name": "Build Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        160
+      ],
+      "parameters": {
+        "jsCode": "const inc = $('Parse + Classify').first().json;\nconst saved = $input.first().json;\nconst project = $('Load Project + Handover').first().json.context || {};\nconst sevColor = { urgent: '#dc2626', high: '#ea580c', medium: '#f59e0b', low: '#10b981' }[inc.severity] || '#6b7280';\nconst warrColor = inc.under_warranty ? '#10b981' : '#dc2626';\nconst warrText = inc.under_warranty ? 'EN GARANTIA LOE' : 'FUERA DE GARANTIA LOE';\nconst photos = (inc.photo_urls || []).map(u => '<a href=\"' + u + '\">foto</a>').join(' &middot; ') || '(sin fotos)';\nconst html = '<h2>Incidencia post-entrega — ' + (project.project_name || '?') + '</h2>' +\n  '<p><span style=\"background:' + sevColor + ';color:white;padding:2px 8px;border-radius:3px\">' + (inc.severity || '?').toUpperCase() + '</span> ' +\n  '<span style=\"background:' + warrColor + ';color:white;padding:2px 8px;border-radius:3px;margin-left:8px\">' + warrText + ' (' + inc.loe_period + ' años)</span></p>' +\n  '<p><b>Categoría:</b> ' + (inc.category || '?') + ' &middot; <b>Gremio responsable:</b> ' + (inc.responsible_trade || '?') + '</p>' +\n  '<p><b>Días desde entrega:</b> ' + (inc.days_since_handover === null || inc.days_since_handover === undefined ? 'sin handover_date' : inc.days_since_handover + ' días') + '</p>' +\n  '<p><b>Descripción cliente:</b><br>' + inc.description.replace(/\\n/g, '<br>') + '</p>' +\n  '<p><b>Análisis IA:</b><br>' + (inc.vision_summary || '?') + '</p>' +\n  (inc.vision_raw && inc.vision_raw.action_recommended ? '<p><b>Acción recomendada:</b> ' + inc.vision_raw.action_recommended + '</p>' : '') +\n  '<p><b>Fotos:</b> ' + photos + '</p>' +\n  '<p style=\"font-size:12px;color:#6b7280\">Incident ID: ' + saved.id + '<br>Asignar gremio: POST /webhook/aftercare-assign con {incident_id, assigned_to}<br>Marcar resuelto: POST /webhook/aftercare-resolve con {incident_id, resolution_notes, evidence_urls?}</p>';\nreturn [{ json: { html: html, severity: inc.severity, project_name: project.project_name, incident_id: saved.id } }];"
+      }
+    },
+    {
+      "id": "as-11",
+      "name": "Send Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1100,
+        160
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $('Load Architect Email').first().json.value }}",
+        "subject": "=ArquitAI postventa — [{{ ($json.severity || 'medium').toUpperCase() }}] {{ $json.project_name }}",
+        "emailType": "html",
+        "message": "={{ $json.html }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "PLACEHOLDER",
+          "name": "damian2botella"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "as-12",
+      "name": "Mark Alert Sent",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1320,
+        160
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE aftercare_incidents SET alert_sent = true WHERE id = $1::uuid;",
+        "options": {
+          "queryReplacement": "={{ [$('Build Email').first().json.incident_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "as-13",
+      "name": "Respond 201",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        1540,
+        160
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'classified', incident_id: $('Insert Incident').first().json.id, category: $('Parse + Classify').first().json.category, responsible_trade: $('Parse + Classify').first().json.responsible_trade, severity: $('Parse + Classify').first().json.severity, loe_period: $('Parse + Classify').first().json.loe_period, under_warranty: $('Parse + Classify').first().json.under_warranty, vision_summary: $('Parse + Classify').first().json.vision_summary}) }}",
+        "options": {
+          "responseCode": 201
+        }
+      }
+    },
+    {
+      "id": "as-14",
+      "name": "Handle Vision Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        320
+      ],
+      "parameters": {
+        "jsCode": "const err = $input.first().json;\nconst built = $('Build Vision Prompt').first().json;\nconst msg = (err && (err.message || (err.error && err.error.message))) || 'vision error';\nreturn [{ json: { project_id: built.project_id, error: msg } }];"
+      }
+    },
+    {
+      "id": "as-15",
+      "name": "Respond 502",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        660,
+        320
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'vision_error', error: $json.error}) }}",
+        "options": {
+          "responseCode": 502
+        }
+      }
+    },
+    {
+      "id": "f14a73ec-95c6-458c-a4bf-c165c03d25b5",
+      "name": "Load Architect Email",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -800,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT value FROM system_config WHERE key = 'architect_email'",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Validate": {
+      "main": [
+        [
+          {
+            "node": "Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid?": {
+      "main": [
+        [
+          {
+            "node": "Load Project + Handover",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 400",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Project + Handover": {
+      "main": [
+        [
+          {
+            "node": "Build Vision Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Vision Prompt": {
+      "main": [
+        [
+          {
+            "node": "Call Vision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call Vision": {
+      "main": [
+        [
+          {
+            "node": "Parse + Classify",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Handle Vision Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse + Classify": {
+      "main": [
+        [
+          {
+            "node": "Insert Incident",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Incident": {
+      "main": [
+        [
+          {
+            "node": "Build Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Email": {
+      "main": [
+        [
+          {
+            "node": "Send Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Email": {
+      "main": [
+        [
+          {
+            "node": "Mark Alert Sent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Alert Sent": {
+      "main": [
+        [
+          {
+            "node": "Respond 201",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Handle Vision Error": {
+      "main": [
+        [
+          {
+            "node": "Respond 502",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Load Architect Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Architect Email": {
+      "main": [
+        [
+          {
+            "node": "Validate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": null,
+  "versionId": "a7c2d0a7-c900-41c7-bc39-4fbd751e74bd",
+  "tags": []
+}

@@ -1,0 +1,138 @@
+{
+  "name": "util_admin_aftercare_overview_html",
+  "active": true,
+  "nodes": [
+    {
+      "id": "aao-01",
+      "name": "Webhook GET",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -700,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "admin-aftercare-overview",
+        "responseMode": "responseNode",
+        "authentication": "headerAuth"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "PLACEHOLDER",
+          "name": "Webhook API Key (entrante)"
+        }
+      },
+      "webhookId": "aao-trigger"
+    },
+    {
+      "id": "aao-02",
+      "name": "Load Aftercare Stats",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -460,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT json_build_object(\n  'totals', (SELECT json_build_object(\n    'total', count(*),\n    'open', count(*) FILTER (WHERE status NOT IN ('resolved','closed','disputed')),\n    'urgent_high', count(*) FILTER (WHERE status NOT IN ('resolved','closed','disputed') AND severity IN ('high','urgent')),\n    'in_progress', count(*) FILTER (WHERE status='in_progress'),\n    'sla_breach', count(*) FILTER (WHERE status IN ('assigned','in_progress') AND assigned_at IS NOT NULL AND assigned_at < now() - CASE severity WHEN 'urgent' THEN INTERVAL '2 days' WHEN 'high' THEN INTERVAL '5 days' WHEN 'medium' THEN INTERVAL '14 days' ELSE INTERVAL '30 days' END),\n    'resolved_30d', count(*) FILTER (WHERE status IN ('resolved','closed') AND resolved_at > now() - INTERVAL '30 days')\n  ) FROM aftercare_incidents),\n  'by_severity', coalesce((SELECT json_agg(t.* ORDER BY t.ord) FROM (\n    SELECT severity, count(*)::int AS open_count,\n      CASE severity WHEN 'urgent' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 ELSE 4 END AS ord\n    FROM aftercare_incidents WHERE status NOT IN ('resolved','closed','disputed')\n    GROUP BY severity\n  ) t), '[]'::json),\n  'by_category', coalesce((SELECT json_agg(t.* ORDER BY t.open_count DESC) FROM (\n    SELECT category, count(*)::int AS open_count\n    FROM aftercare_incidents WHERE status NOT IN ('resolved','closed','disputed') AND category IS NOT NULL\n    GROUP BY category\n  ) t), '[]'::json),\n  'recent_open', coalesce((SELECT json_agg(t.* ORDER BY t.reported_at DESC) FROM (\n    SELECT i.id::text AS incident_id, i.severity, i.status, i.category, i.responsible_trade,\n      i.assigned_to, i.assigned_at, i.reported_at,\n      substring(i.description for 100) AS desc_preview,\n      p.id::text AS project_id, p.name AS project_name,\n      floor(EXTRACT(EPOCH FROM (now() - i.reported_at))/86400)::int AS days_open,\n      CASE i.severity WHEN 'urgent' THEN 2 WHEN 'high' THEN 5 WHEN 'medium' THEN 14 ELSE 30 END AS sla_days,\n      CASE WHEN i.assigned_at IS NOT NULL THEN floor(EXTRACT(EPOCH FROM (now() - i.assigned_at))/86400)::int ELSE NULL END AS days_assigned\n    FROM aftercare_incidents i\n    JOIN projects p ON p.id = i.project_id\n    WHERE i.status NOT IN ('resolved','closed','disputed')\n    ORDER BY CASE i.severity WHEN 'urgent' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 ELSE 4 END, i.reported_at ASC\n    LIMIT 25\n  ) t), '[]'::json)\n) AS report;",
+        "options": {
+          "alwaysOutputData": true
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "aao-03",
+      "name": "Build HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -220,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const r = $input.first().json.report || {};\nconst t = r.totals || {};\nconst bySev = Array.isArray(r.by_severity) ? r.by_severity : [];\nconst byCat = Array.isArray(r.by_category) ? r.by_category : [];\nconst recent = Array.isArray(r.recent_open) ? r.recent_open : [];\n\nfunction esc(s) { return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\nfunction dateShort(s) { if (!s) return '-'; return new Date(s).toISOString().substring(0,10); }\nconst sevColor = { low:'#888', medium:'#3b82f6', high:'#e67e22', urgent:'#c00' };\n\nconst rowsRecent = recent.map(i => {\n  const slaBreach = i.days_assigned != null && i.days_assigned > i.sla_days;\n  const cls = slaBreach ? ' style=\"background:#fee\"' : (i.severity === 'urgent' ? ' style=\"background:#fff8e0\"' : '');\n  return `<tr${cls}>\n    <td><span style=\"background:${sevColor[i.severity] || '#888'};color:white;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:bold\">${esc(i.severity)}</span></td>\n    <td>${esc(i.project_name)}</td>\n    <td>${esc(i.category || '-')} / ${esc(i.responsible_trade || '-')}</td>\n    <td>${esc(i.status)}</td>\n    <td>${esc(i.assigned_to || '-')}</td>\n    <td style=\"text-align:right\">${i.days_open}d</td>\n    <td style=\"text-align:right;${slaBreach ? 'color:#c00;font-weight:600' : ''}\">${i.days_assigned != null ? i.days_assigned + 'd / ' + i.sla_days + 'd SLA' : '-'}</td>\n    <td style=\"font-size:12px;color:#555\">${esc(i.desc_preview)}...</td>\n  </tr>`;\n}).join('');\n\nconst rowsSev = bySev.map(s => `<tr><td><span style=\"background:${sevColor[s.severity] || '#888'};color:white;padding:2px 8px;border-radius:10px;font-size:11px\">${esc(s.severity)}</span></td><td style=\"text-align:right;font-weight:600\">${s.open_count}</td></tr>`).join('');\nconst rowsCat = byCat.map(c => `<tr><td>${esc(c.category)}</td><td style=\"text-align:right\">${c.open_count}</td></tr>`).join('');\n\nconst html = `<!DOCTYPE html><html lang=\"es\"><head><meta charset=\"utf-8\"><title>Aftercare Overview - ArquitAI</title>\n<style>\n  body{font-family:system-ui,sans-serif;max-width:1200px;margin:32px auto;padding:0 20px;color:#222;background:#f7f7f8}\n  h1{margin:0 0 8px}\n  .sub{color:#888;font-size:13px;margin-bottom:24px}\n  h2{margin:32px 0 12px;font-size:18px;border-bottom:1px solid #ddd;padding-bottom:6px}\n  .cards{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:24px}\n  .card{background:#fff;border:1px solid #ddd;border-radius:8px;padding:12px;text-align:center}\n  .card h3{margin:0 0 4px;font-size:11px;color:#666;text-transform:uppercase}\n  .card .v{font-size:22px;font-weight:600}\n  table{width:100%;border-collapse:collapse;background:#fff;border:1px solid #ddd;border-radius:8px;overflow:hidden;font-size:13px}\n  th,td{padding:8px 10px;border-bottom:1px solid #eee;text-align:left}\n  th{background:#f0f0f3;font-weight:600;font-size:11px;text-transform:uppercase;color:#555}\n  tr:last-child td{border-bottom:none}\n  .row-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}\n  .meta{font-size:12px;color:#888;margin-top:24px}\n  @media (max-width:900px){.cards{grid-template-columns:repeat(3,1fr)} .row-grid{grid-template-columns:1fr}}\n</style></head><body>\n<h1>Aftercare Overview - ArquitAI</h1>\n<p class=\"sub\">Vista agregada de incidencias postventa LOE. Para SLA breach dedicado: cron_aftercare_sla_breach diario 08:30.</p>\n<div class=\"cards\">\n  <div class=\"card\"><h3>Total</h3><div class=\"v\">${t.total || 0}</div></div>\n  <div class=\"card\"><h3>Open</h3><div class=\"v\" style=\"color:${t.open > 0 ? '#e67e22' : '#27ae60'}\">${t.open || 0}</div></div>\n  <div class=\"card\"><h3>High/Urgent</h3><div class=\"v\" style=\"color:${t.urgent_high > 0 ? '#c00' : '#27ae60'}\">${t.urgent_high || 0}</div></div>\n  <div class=\"card\"><h3>In progress</h3><div class=\"v\">${t.in_progress || 0}</div></div>\n  <div class=\"card\"><h3>SLA breach</h3><div class=\"v\" style=\"color:${t.sla_breach > 0 ? '#c00' : '#27ae60'}\">${t.sla_breach || 0}</div></div>\n  <div class=\"card\"><h3>Resolved 30d</h3><div class=\"v\" style=\"color:#27ae60\">${t.resolved_30d || 0}</div></div>\n</div>\n<div class=\"row-grid\">\n  <div>\n    <h2>Open por severidad</h2>\n    <table><thead><tr><th>severidad</th><th style=\"text-align:right\">open</th></tr></thead><tbody>${rowsSev || '<tr><td colspan=\"2\" style=\"text-align:center;color:#888;padding:14px\">Sin incidencias open</td></tr>'}</tbody></table>\n  </div>\n  <div>\n    <h2>Open por categoria</h2>\n    <table><thead><tr><th>categoria</th><th style=\"text-align:right\">open</th></tr></thead><tbody>${rowsCat || '<tr><td colspan=\"2\" style=\"text-align:center;color:#888;padding:14px\">Sin incidencias open</td></tr>'}</tbody></table>\n  </div>\n</div>\n<h2>Incidentes open recientes (top 25 por severidad)</h2>\n<table>\n  <thead><tr><th>sev</th><th>proyecto</th><th>cat / gremio</th><th>status</th><th>asignado</th><th style=\"text-align:right\">dias</th><th style=\"text-align:right\">desde asign</th><th>desc</th></tr></thead>\n  <tbody>${rowsRecent || '<tr><td colspan=\"8\" style=\"text-align:center;color:#888;padding:18px\">Sin incidencias open (estado saludable)</td></tr>'}</tbody>\n</table>\n<div class=\"meta\">Generado ${new Date().toISOString()}</div>\n</body></html>`;\n\nreturn [{ json: { html } }];"
+      }
+    },
+    {
+      "id": "aao-04",
+      "name": "Respond HTML",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        20,
+        300
+      ],
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.html }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "text/html; charset=utf-8"
+              },
+              {
+                "name": "Cache-Control",
+                "value": "no-store"
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook GET": {
+      "main": [
+        [
+          {
+            "node": "Load Aftercare Stats",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Aftercare Stats": {
+      "main": [
+        [
+          {
+            "node": "Build HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build HTML": {
+      "main": [
+        [
+          {
+            "node": "Respond HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": null,
+  "versionId": "822261e4-2e75-46fd-a2a0-7165bd77b9b1",
+  "tags": []
+}

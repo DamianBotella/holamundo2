@@ -1,0 +1,558 @@
+{
+  "name": "agent_site_monitor",
+  "active": true,
+  "nodes": [
+    {
+      "id": "asm-01",
+      "name": "Webhook Site Report",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -900,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "site-report",
+        "responseMode": "responseNode",
+        "authentication": "headerAuth"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "PLACEHOLDER",
+          "name": "Webhook API Key (entrante)"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "webhookId": "ddc00765-2ea6-4705-abd4-f39317a0b682"
+    },
+    {
+      "id": "asm-02",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -680,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const body = $('Webhook Site Report').first().json.body || {};\nif (!body.project_id) {\n  const err1 = { valid: false, error: 'project_id obligatorio' };\n  return [{ json: err1 }];\n}\nlet photoUrls = body.photo_urls;\nif (!photoUrls && body.photo_url) photoUrls = [body.photo_url];\nif (!Array.isArray(photoUrls) || photoUrls.length === 0) {\n  const err2 = { valid: false, error: 'photo_url o photo_urls (array) obligatorio' };\n  return [{ json: err2 }];\n}\nconst urls = photoUrls.filter(u => typeof u === 'string' && u.startsWith('http'));\nif (urls.length === 0) {\n  const err3 = { valid: false, error: 'photo_urls deben ser http(s)' };\n  return [{ json: err3 }];\n}\nconst out = {\n  valid: true,\n  project_id: body.project_id,\n  photo_urls: urls.slice(0, 6),\n  observations: (body.observations || '').toString().slice(0, 2000),\n  expected_phase: body.expected_phase || null,\n  reporter: body.reporter || 'arquitecto'\n};\nreturn [{ json: out }];"
+      }
+    },
+    {
+      "id": "asm-03",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -460,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "v1",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "asm-04",
+      "name": "Respond 400",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        -220,
+        480
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status: 'error', error: $json.error}) }}",
+        "options": {
+          "responseCode": 400
+        }
+      }
+    },
+    {
+      "id": "asm-05",
+      "name": "Load Project + Plan",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -220,
+        220
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT json_build_object(\n  'project_id', p.id,\n  'project_name', p.name,\n  'project_type', p.project_type,\n  'current_phase', p.current_phase,\n  'plan', (SELECT json_build_object('id', pp.id, 'phases', pp.phases, 'total_duration_days', pp.total_duration_days, 'milestones', pp.milestones) FROM project_plans pp WHERE pp.project_id = p.id ORDER BY pp.created_at DESC LIMIT 1),\n  'last_design', (SELECT json_build_object('title', d.title, 'description', d.description, 'rooms_layout', d.rooms_layout) FROM design_options d WHERE d.project_id = p.id AND d.is_selected = true LIMIT 1),\n  'recent_reports', (SELECT count(*) FROM site_reports sr WHERE sr.project_id = p.id AND sr.reported_at > now() - INTERVAL '14 days')\n) AS context\nFROM projects p WHERE p.id = $1::uuid;",
+        "options": {
+          "queryReplacement": "={{ [$json.project_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "asm-06",
+      "name": "Build Vision Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        0,
+        220
+      ],
+      "parameters": {
+        "jsCode": "const ctx = $input.first().json.context || {};\nconst input = $('Validate Input').first().json;\nconst plan = ctx.plan || {};\nconst phases = plan.phases || [];\nconst design = ctx.last_design || {};\n\nconst phasesText = Array.isArray(phases) && phases.length > 0\n  ? phases.map((ph, i) => (i+1) + '. ' + (ph.name || ph.title || 'Fase ' + (i+1)) + ': ' + (ph.description || ph.scope || '?')).join('\\n')\n  : '(Plan no disponible)';\n\nconst systemPrompt = 'Eres un arquitecto técnico experto en seguimiento de obra. Analizas fotos de obra contra el plan y detectas estado, desviaciones e incidencias. Respondes SOLO con JSON válido sin markdown.';\n\nconst userText = [\n  'Analiza estas fotos de obra del proyecto \"' + (ctx.project_name || '?') + '\" (tipo: ' + (ctx.project_type || '?') + ').',\n  '',\n  'PLAN DE OBRA APROBADO:',\n  phasesText,\n  '',\n  'OPCION DE DISENO SELECCIONADA: ' + (design.title || 'No disponible'),\n  design.description ? '  Descripcion: ' + design.description.substring(0, 500) : '',\n  '',\n  input.expected_phase ? 'FASE QUE DEBERIA ESTAR EN CURSO: ' + input.expected_phase : '',\n  input.observations ? 'NOTAS DEL ARQUITECTO: ' + input.observations : '',\n  '',\n  'Devuelve JSON con esta estructura exacta:',\n  '{',\n  '  \"detected_phase\": \"nombre fase detectada en la foto\",',\n  '  \"progress_pct\": 0-100,',\n  '  \"vision_summary\": \"2-3 frases describiendo lo visible\",',\n  '  \"deviations\": [{\"type\":\"plan|design|quality\", \"description\":\"...\", \"severity\":\"low|medium|high\"}],',\n  '  \"issues_detected\": [{\"category\":\"safety|quality|materials|workmanship|other\", \"description\":\"...\", \"action_recommended\":\"...\", \"severity\":\"low|medium|high\"}],',\n  '  \"matches_plan\": true|false,',\n  '  \"confidence\": \"low|medium|high\"',\n  '}',\n  '',\n  'No inventes elementos. Si no ves algo claramente, dilo. Si la foto no permite analisis fiable, devuelve confidence: \"low\".'\n].filter(Boolean).join('\\n');\n\nconst contentArr = [{ type: 'text', text: userText }];\nfor (const url of input.photo_urls) {\n  contentArr.push({ type: 'image_url', image_url: { url: url, detail: 'high' } });\n}\n\nconst payload = {\n  model: 'gpt-4o',\n  max_tokens: 1500,\n  temperature: 0.2,\n  messages: [\n    { role: 'system', content: systemPrompt },\n    { role: 'user', content: contentArr }\n  ]\n};\nreturn [{ json: { project_id: input.project_id, observations: input.observations, expected_phase: input.expected_phase, reporter: input.reporter, photo_urls: input.photo_urls, payload: payload, started_at: Date.now() } }];"
+      }
+    },
+    {
+      "id": "asm-07",
+      "name": "Call Vision LLM",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        220,
+        220
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.payload) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "PLACEHOLDER",
+          "name": "orquestador ArquiAI"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "asm-08",
+      "name": "Parse Vision Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        160
+      ],
+      "parameters": {
+        "jsCode": "const llm = $input.first().json;\nconst built = $('Build Vision Prompt').first().json;\nconst content = llm.choices && llm.choices[0] && llm.choices[0].message && llm.choices[0].message.content || '';\nconst usage = llm.usage || {};\nconst tokensIn = usage.prompt_tokens || 0;\nconst tokensOut = usage.completion_tokens || 0;\nconst cost = (tokensIn / 1000) * 0.0025 + (tokensOut / 1000) * 0.01;\nconst durationMs = Date.now() - (built.started_at || Date.now());\n\nlet parsed = {};\ntry {\n  const jsonMatch = content.match(/\\{[\\s\\S]*\\}/);\n  if (jsonMatch) parsed = JSON.parse(jsonMatch[0]);\n} catch (e) {\n  parsed = { vision_summary: 'Error parsing LLM response: ' + e.message, confidence: 'low' };\n}\n\nconst issues = Array.isArray(parsed.issues_detected) ? parsed.issues_detected : [];\nconst deviations = Array.isArray(parsed.deviations) ? parsed.deviations : [];\nconst hasHigh = issues.some(i => i && i.severity === 'high') || deviations.some(d => d && d.severity === 'high');\nconst flagged = hasHigh || issues.length >= 3;\n\nconst out = {\n  project_id: built.project_id,\n  photo_urls: built.photo_urls,\n  observations: built.observations || null,\n  expected_phase: built.expected_phase || null,\n  reporter: built.reporter,\n  detected_phase: parsed.detected_phase || null,\n  progress_pct: typeof parsed.progress_pct === 'number' ? parsed.progress_pct : null,\n  deviations: deviations,\n  issues_detected: issues,\n  vision_summary: parsed.vision_summary || '',\n  vision_raw: parsed,\n  llm_model: llm.model || 'gpt-4o',\n  llm_tokens_in: tokensIn,\n  llm_tokens_out: tokensOut,\n  llm_cost: Math.round(cost * 100000) / 100000,\n  status: flagged ? 'flagged' : 'analyzed',\n  high_severity_count: issues.filter(i => i && i.severity === 'high').length + deviations.filter(d => d && d.severity === 'high').length,\n  duration_ms: durationMs\n};\nreturn [{ json: out }];"
+      }
+    },
+    {
+      "id": "asm-09",
+      "name": "Insert Site Report",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        660,
+        160
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO site_reports (\n  project_id, reporter, photo_urls, observations, expected_phase,\n  detected_phase, progress_pct, deviations, issues_detected,\n  vision_summary, vision_raw, llm_model, llm_tokens_in, llm_tokens_out, llm_cost, status\n) VALUES (\n  $1::uuid, $2, $3::text[], $4, $5,\n  $6, NULLIF($7,'')::numeric, $8::jsonb, $9::jsonb,\n  $10, $11::jsonb, $12, $13::int, $14::int, $15::numeric, $16\n) RETURNING id, status, progress_pct;",
+        "options": {
+          "queryReplacement": "={{ [ $json.project_id, $json.reporter, '{' + $json.photo_urls.map(u => '\"' + u.replace(/\"/g, '\\\\\"') + '\"').join(',') + '}', $json.observations || '', $json.expected_phase || '', $json.detected_phase || '', ($json.progress_pct === null || $json.progress_pct === undefined ? '' : String($json.progress_pct)), JSON.stringify($json.deviations), JSON.stringify($json.issues_detected), $json.vision_summary, JSON.stringify($json.vision_raw), $json.llm_model, $json.llm_tokens_in, $json.llm_tokens_out, $json.llm_cost, $json.status ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "asm-10",
+      "name": "Flagged?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        880,
+        160
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "f1",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "flagged",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "asm-11",
+      "name": "Build Alert Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        60
+      ],
+      "parameters": {
+        "jsCode": "const sr = $('Parse Vision Response').first().json;\nconst saved = $('Insert Site Report').first().json;\nconst project = $('Load Project + Plan').first().json.context || {};\nconst issues = sr.issues_detected || [];\nconst devs = sr.deviations || [];\nconst issueRows = issues.map(i => '<li><b>[' + (i.severity || '?').toUpperCase() + ']</b> ' + (i.category || '?') + ': ' + (i.description || '?') + (i.action_recommended ? '<br><i>Recomendado: ' + i.action_recommended + '</i>' : '') + '</li>').join('');\nconst devRows = devs.map(d => '<li><b>[' + (d.severity || '?').toUpperCase() + ']</b> ' + (d.type || '?') + ': ' + (d.description || '?') + '</li>').join('');\nconst photoTags = (sr.photo_urls || []).map(u => '<a href=\"' + u + '\">foto</a>').join(' &middot; ');\nconst html = '<h2>⚠ Alerta de obra — ' + (project.project_name || '?') + '</h2>' +\n  '<p><b>Detectado:</b> ' + (sr.detected_phase || '?') + ' &middot; <b>Progreso estimado:</b> ' + (sr.progress_pct !== null ? sr.progress_pct + '%' : 'n/a') + '</p>' +\n  '<p><b>Resumen visión:</b> ' + (sr.vision_summary || '?') + '</p>' +\n  (issues.length ? '<h3>Incidencias detectadas (' + issues.length + ')</h3><ul>' + issueRows + '</ul>' : '') +\n  (devs.length ? '<h3>Desviaciones plan/diseño (' + devs.length + ')</h3><ul>' + devRows + '</ul>' : '') +\n  '<p><b>Fotos:</b> ' + photoTags + '</p>' +\n  '<p style=\"font-size:12px;color:#666\">Report ID: ' + saved.id + '</p>';\nreturn [{ json: { html: html, project_name: project.project_name, report_id: saved.id, issue_count: issues.length, dev_count: devs.length } }];"
+      }
+    },
+    {
+      "id": "asm-12",
+      "name": "Send Alert",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1320,
+        60
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $('Load Architect Email').first().json.value }}",
+        "subject": "=ArquitAI ALERTA OBRA — {{ $json.project_name }} ({{ $json.issue_count }} incidencia(s))",
+        "emailType": "html",
+        "message": "={{ $json.html }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "PLACEHOLDER",
+          "name": "damian2botella"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "asm-13",
+      "name": "Mark Alert Sent",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1540,
+        60
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE site_reports SET alert_sent = true WHERE id = $1::uuid;",
+        "options": {
+          "queryReplacement": "={{ [$('Build Alert Email').first().json.report_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "asm-14",
+      "name": "Respond 200",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        1760,
+        160
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status: 'analyzed', report_id: $('Insert Site Report').first().json.id, detected_phase: $('Parse Vision Response').first().json.detected_phase, progress_pct: $('Parse Vision Response').first().json.progress_pct, issues_count: ($('Parse Vision Response').first().json.issues_detected || []).length, deviations_count: ($('Parse Vision Response').first().json.deviations || []).length, flagged: $('Insert Site Report').first().json.status === 'flagged', vision_summary: $('Parse Vision Response').first().json.vision_summary}) }}",
+        "options": {
+          "responseCode": 200
+        }
+      }
+    },
+    {
+      "id": "asm-15",
+      "name": "Handle Vision Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        320
+      ],
+      "parameters": {
+        "jsCode": "const err = $input.first().json;\nconst built = $('Build Vision Prompt').first().json;\nconst msg = (err && (err.message || (err.error && err.error.message))) || 'unknown vision error';\nreturn [{ json: { project_id: built.project_id, photo_urls: built.photo_urls, error: msg } }];"
+      }
+    },
+    {
+      "id": "asm-16",
+      "name": "Respond 502",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        660,
+        320
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status: 'vision_error', error: $json.error}) }}",
+        "options": {
+          "responseCode": 502
+        }
+      }
+    },
+    {
+      "id": "5a25909e-a815-4b4b-b409-6cc63b4de7ec",
+      "name": "Load Architect Email",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -800,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT value FROM system_config WHERE key = 'architect_email'",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Validate Input": {
+      "main": [
+        [
+          {
+            "node": "Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid?": {
+      "main": [
+        [
+          {
+            "node": "Load Project + Plan",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 400",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Project + Plan": {
+      "main": [
+        [
+          {
+            "node": "Build Vision Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Vision Prompt": {
+      "main": [
+        [
+          {
+            "node": "Call Vision LLM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call Vision LLM": {
+      "main": [
+        [
+          {
+            "node": "Parse Vision Response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Handle Vision Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Vision Response": {
+      "main": [
+        [
+          {
+            "node": "Insert Site Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Site Report": {
+      "main": [
+        [
+          {
+            "node": "Flagged?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Flagged?": {
+      "main": [
+        [
+          {
+            "node": "Build Alert Email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 200",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Alert Email": {
+      "main": [
+        [
+          {
+            "node": "Send Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Alert": {
+      "main": [
+        [
+          {
+            "node": "Mark Alert Sent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Alert Sent": {
+      "main": [
+        [
+          {
+            "node": "Respond 200",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Handle Vision Error": {
+      "main": [
+        [
+          {
+            "node": "Respond 502",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook Site Report": {
+      "main": [
+        [
+          {
+            "node": "Load Architect Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Architect Email": {
+      "main": [
+        [
+          {
+            "node": "Validate Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": null,
+  "versionId": "974c4e25-f4aa-447a-861f-bf50b99629e8",
+  "tags": []
+}

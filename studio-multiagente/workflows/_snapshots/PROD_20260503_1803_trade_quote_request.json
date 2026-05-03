@@ -1,0 +1,451 @@
+{
+  "name": "trade_quote_request",
+  "active": true,
+  "nodes": [
+    {
+      "id": "tq-01",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -700,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "trade-quote-request",
+        "responseMode": "responseNode",
+        "authentication": "headerAuth"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "PLACEHOLDER",
+          "name": "Webhook API Key (entrante)"
+        }
+      },
+      "webhookId": "119352ab-595d-430a-8e05-b7ae34e9c02e"
+    },
+    {
+      "id": "tq-02",
+      "name": "Validate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -460,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const body = $('Webhook').first().json.body || {};\nif (!body.project_id) { const e = { valid: false, error: 'project_id obligatorio' }; return [{ json: e }]; }\nif (!body.supplier_name || !body.supplier_email) { const e = { valid: false, error: 'supplier_name + supplier_email obligatorios' }; return [{ json: e }]; }\nif (!body.scope_description) { const e = { valid: false, error: 'scope_description obligatorio' }; return [{ json: e }]; }\nconst out = {\n  valid: true,\n  project_id: body.project_id,\n  trade_request_id: body.trade_request_id || null,\n  trade_type: body.trade_type || null,\n  supplier_name: body.supplier_name.toString().trim(),\n  supplier_email: body.supplier_email.toString().trim().toLowerCase(),\n  supplier_phone: body.supplier_phone || null,\n  scope_description: body.scope_description.toString().slice(0, 4000),\n  deadline_days: Number(body.deadline_days) || 7\n};\nreturn [{ json: out }];"
+      }
+    },
+    {
+      "id": "tq-03",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -220,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "v1",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "tq-04",
+      "name": "Insert Quote",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        20,
+        220
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO trade_quotes (\n  project_id, trade_request_id, trade_type,\n  supplier_name, supplier_email, supplier_phone,\n  request_sent_at, status, notes\n) VALUES (\n  $1::uuid, NULLIF($2,'')::uuid, $3,\n  $4, $5, $6,\n  now(), 'requested', $7\n) RETURNING id, webhook_token;",
+        "options": {
+          "queryReplacement": "={{ [ $json.project_id, $json.trade_request_id || '', $json.trade_type || '', $json.supplier_name, $json.supplier_email, $json.supplier_phone || '', $json.scope_description ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "tq-05",
+      "name": "Load Project",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        240,
+        220
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT json_build_object(\n  'project_name', p.name,\n  'project_type', p.project_type,\n  'location', concat_ws(', ', p.location_address, p.location_city, p.location_province),\n  'property_area', p.property_area_m2\n) AS proj\nFROM projects p WHERE p.id = $1::uuid;",
+        "options": {
+          "queryReplacement": "={{ [$('Validate').first().json.project_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "tq-06",
+      "name": "Build Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        460,
+        220
+      ],
+      "parameters": {
+        "jsCode": "const inserted = $('Insert Quote').first().json;\nconst input = $('Validate').first().json;\nconst proj = $('Load Project').first().json.proj || {};\n\n// === STUDIO PROFILE INJECTION (B25) ===\nconst _studio = $('Load Studio Profile').first().json || {};\nfunction _safeStudio(v){ if(v==null)return null; if(typeof v==='string'){try{return JSON.parse(v);}catch(e){return v;}} return v; }\nconst _id = _safeStudio(_studio.identity) || {};\nconst _toneAll = _safeStudio(_studio.tone) || {};\nconst _toneProv = _toneAll.proveedores || _toneAll.clientes || {};\nconst nombreEstudio = _id.nombre_estudio || 'Estudio';\nconst persona = _id.persona_principal || 'Damian';\nconst tutea = _toneProv.tutea !== false; // default true (informal con oficios)\nconst formalidad = (_toneProv.formalidad || 'cercano').toLowerCase();\nconst esFormal = formalidad === 'formal' || formalidad === 'profesional';\n// === END STUDIO PROFILE INJECTION ===\n\nconst saludo = esFormal ? ('Estimado/a ' + input.supplier_name + ':') : ('Hola ' + input.supplier_name + ',');\nconst verboSolic = tutea ? 'Te solicitamos' : 'Le solicitamos';\nconst contestaCTA = tutea ? 'contesta a este email con tu presupuesto' : 'conteste a este email con su presupuesto';\nconst recibirVerb = tutea ? 'recibamos tu respuesta' : 'recibamos su respuesta';\nconst preferirVerb = tutea ? 'Si prefieres' : 'Si prefiere';\n\nconst replyUrl = 'https://n8n-n8n.zzeluw.easypanel.host/webhook/trade-quote-reply?token=' + encodeURIComponent(inserted.webhook_token);\nconst html = '<h2>Solicitud de presupuesto — ' + (proj.project_name || 'proyecto') + '</h2>' +\n  '<p>' + saludo + '</p>' +\n  '<p>' + verboSolic + ' presupuesto para el siguiente trabajo del proyecto <b>' + (proj.project_name || '?') + '</b>' +\n  (proj.location ? ' en ' + proj.location : '') +\n  (proj.property_area ? ' (' + proj.property_area + ' m2)' : '') + ':</p>' +\n  '<blockquote style=\"border-left:3px solid #2563eb;padding-left:12px;color:#374151\">' + input.scope_description.replace(/\\n/g, '<br>') + '</blockquote>' +\n  '<p><b>Plazo de respuesta solicitado:</b> ' + input.deadline_days + ' días.</p>' +\n  '<p>Para responder, ' + contestaCTA + '. Cuando ' + recibirVerb + ' la registraremos automáticamente. ' + preferirVerb + ' usar un formulario web, ' + (tutea ? 'puedes' : 'puede') + ' hacerlo aquí:</p>' +\n  '<p><a href=\"' + replyUrl + '\" style=\"background:#2563eb;color:white;padding:10px 20px;border-radius:4px;text-decoration:none\">Enviar respuesta vía formulario</a></p>' +\n  '<p style=\"color:#6b7280;font-size:12px\">Reference quote ID: ' + inserted.id + '</p>' +\n  '<p>Saludos,<br>' + persona + ' — ' + nombreEstudio + '</p>';\nreturn [{ json: { html: html, supplier_email: input.supplier_email, supplier_name: input.supplier_name, project_name: proj.project_name, quote_id: inserted.id, webhook_token: inserted.webhook_token } }];"
+      }
+    },
+    {
+      "id": "tq-07",
+      "name": "Send Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        680,
+        220
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $json.supplier_email }}",
+        "subject": "=Solicitud de presupuesto — {{ $json.project_name || 'proyecto' }}",
+        "emailType": "html",
+        "message": "={{ $json.html }}",
+        "options": {
+          "appendAttribution": false,
+          "ccList": "={{ $('Load Architect Email').first().json.value }}"
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "PLACEHOLDER",
+          "name": "damian2botella"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "tq-08",
+      "name": "Update Email Sent",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        900,
+        220
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE trade_quotes SET request_email_id = $2 WHERE id = $1::uuid RETURNING id, supplier_name, status;",
+        "options": {
+          "queryReplacement": "={{ [ $('Build Email').first().json.quote_id, $json.id || '' ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "tq-09",
+      "name": "Respond 201",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        1120,
+        220
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'sent', quote_id: $('Build Email').first().json.quote_id, supplier: $json.supplier_name, supplier_status: $json.status, reply_url: 'https://n8n-n8n.zzeluw.easypanel.host/webhook/trade-quote-reply?token=' + $('Build Email').first().json.webhook_token}) }}",
+        "options": {
+          "responseCode": 201
+        }
+      }
+    },
+    {
+      "id": "tq-10",
+      "name": "Respond 400",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        20,
+        460
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'error', error: $json.error}) }}",
+        "options": {
+          "responseCode": 400
+        }
+      }
+    },
+    {
+      "id": "tq-11",
+      "name": "Email Failed",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        680,
+        380
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE trade_quotes SET notes = COALESCE(notes || E'\\n','') || 'Email send error: ' || $2 WHERE id = $1::uuid RETURNING id;",
+        "options": {
+          "queryReplacement": "={{ [ $('Build Email').first().json.quote_id, ($json.message || 'unknown email error').substring(0, 200) ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "tq-12",
+      "name": "Respond 502",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        900,
+        380
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'email_error', quote_id: $json.id}) }}",
+        "options": {
+          "responseCode": 502
+        }
+      }
+    },
+    {
+      "id": "18eff274-5e23-449f-8679-174cb91aa166",
+      "name": "Load Architect Email",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -580,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT value FROM system_config WHERE key = 'architect_email'",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "tq-studio",
+      "name": "Load Studio Profile",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        350,
+        380
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM get_active_studio_profile();",
+        "options": {
+          "alwaysOutputData": true
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Validate": {
+      "main": [
+        [
+          {
+            "node": "Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid?": {
+      "main": [
+        [
+          {
+            "node": "Insert Quote",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 400",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Quote": {
+      "main": [
+        [
+          {
+            "node": "Load Project",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Email": {
+      "main": [
+        [
+          {
+            "node": "Send Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Email": {
+      "main": [
+        [
+          {
+            "node": "Update Email Sent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Email Failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Email Sent": {
+      "main": [
+        [
+          {
+            "node": "Respond 201",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email Failed": {
+      "main": [
+        [
+          {
+            "node": "Respond 502",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Load Architect Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Architect Email": {
+      "main": [
+        [
+          {
+            "node": "Validate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Project": {
+      "main": [
+        [
+          {
+            "node": "Load Studio Profile",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Studio Profile": {
+      "main": [
+        [
+          {
+            "node": "Build Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": null,
+  "versionId": "3d917f51-5d59-4ba0-87a5-8af84f3ab90a",
+  "tags": []
+}

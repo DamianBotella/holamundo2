@@ -1,0 +1,407 @@
+{
+  "name": "cron_e2e_smoke_test",
+  "active": true,
+  "nodes": [
+    {
+      "id": "es-01",
+      "name": "Weekly Mon 03:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 3 * * 1"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "es-02",
+      "name": "Cleanup Old Smoke",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        220,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH old_projects AS (SELECT id FROM projects WHERE name LIKE 'SMOKE_E2E%' AND created_at < NOW() - INTERVAL '30 days'), del_acts AS (DELETE FROM activity_log WHERE project_id IN (SELECT id FROM old_projects) RETURNING id), del_briefs AS (DELETE FROM briefings WHERE project_id IN (SELECT id FROM old_projects) RETURNING id), del_proj AS (DELETE FROM projects WHERE id IN (SELECT id FROM old_projects) RETURNING id) SELECT (SELECT count(*) FROM del_proj) AS cleaned;",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "es-03",
+      "name": "Fire Pipeline",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://n8n-n8n.zzeluw.easypanel.host/webhook/new-project",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"client_email\": \"smoke.test@arquitai-internal.local\",\n  \"client_name\": \"SMOKE TEST CLIENT\",\n  \"client_phone\": \"+34 600 000 999\",\n  \"project_name\": \"SMOKE_E2E_{{ $now.toFormat('yyyyMMdd_HHmm') }}\",\n  \"project_type\": \"reforma_integral\",\n  \"property_type\": \"piso\",\n  \"property_area_m2\": 70,\n  \"location_address\": \"Calle Smoke 1\",\n  \"location_city\": \"Madrid\",\n  \"location_province\": \"Madrid\",\n  \"budget_target\": 45000,\n  \"architect_intake_notes\": \"Smoke test E2E weekly. Reforma 70m2 simple para validar pipeline.\",\n  \"architect_observations\": \"Sin patologias.\",\n  \"client_stated_preferences\": \"Standard.\",\n  \"urgency\": \"normal\"\n}",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": true,
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "PLACEHOLDER",
+          "name": "Webhook API Key (entrante)"
+        }
+      }
+    },
+    {
+      "id": "es-wait",
+      "name": "Wait 90s",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        660,
+        300
+      ],
+      "parameters": {
+        "amount": 90,
+        "unit": "seconds"
+      }
+    },
+    {
+      "id": "es-04",
+      "name": "Verify Briefing",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        880,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH latest AS (SELECT id FROM projects WHERE name LIKE 'SMOKE_E2E%' ORDER BY created_at DESC LIMIT 1) SELECT json_build_object('project_found', (SELECT count(*) FROM latest), 'briefing_pending_or_done', (SELECT count(*) FROM briefings WHERE project_id = (SELECT id FROM latest)), 'agent_briefing_executed', (SELECT count(*) FROM agent_executions WHERE project_id = (SELECT id FROM latest) AND agent_name = 'agent_briefing'), 'project_id', (SELECT id::text FROM latest)) AS result;",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "es-05",
+      "name": "All OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1100,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.result.briefing_pending_or_done }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            },
+            {
+              "id": "c2",
+              "leftValue": "={{ $json.result.agent_briefing_executed }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "es-06",
+      "name": "Log Smoke Pass",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1320,
+        220
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (action, agent_name, status, output_summary) VALUES ('smoke_test_passed', 'cron_e2e_smoke_test', 'success', $1) RETURNING id;",
+        "options": {
+          "queryReplacement": "={{ ['smoke_e2e_passed: project=' + $('Verify Briefing').first().json.result.project_id + ' briefing=' + $('Verify Briefing').first().json.result.briefing_pending_or_done] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "es-07",
+      "name": "Load Architect Email",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1320,
+        380
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT value FROM system_config WHERE key='architect_email';",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "es-08",
+      "name": "Send Alert",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1540,
+        380
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $json.value }}",
+        "subject": "[ArquitAI ALERT] SMOKE E2E FALLO — pipeline no procesa",
+        "emailType": "html",
+        "message": "=<div style=\"font-family:Arial;max-width:600px\"><h2 style=\"color:#dc2626\">SMOKE TEST E2E FALLIDO</h2><p>El cron weekly intento disparar un proyecto stub via init_new_project pero tras 90s NO se detecto ni briefing creado ni agent_briefing en agent_executions. Esto indica que el pipeline esta roto en intake o que main_orchestrator no se dispara.</p><pre style=\"background:#f3f4f6;padding:12px;border-radius:6px\">{{ JSON.stringify($('Verify Briefing').first().json.result, null, 2) }}</pre><p>Acciones recomendadas:</p><ul><li>Revisar last execution de init_new_project (workflow id HzPLldZVJGFjKbuc).</li><li>Revisar last execution de main_orchestrator (workflow id EF5lPbSNlmA3Upt1).</li><li>Verificar applied_migrations vs repo via scripts/check_migration_drift.py.</li></ul><p style=\"color:#666;font-size:12px\">Smoke test cron: lunes 03:00. Cleanup automatico de proyectos &gt;30d.</p></div>",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "PLACEHOLDER",
+          "name": "damian2botella"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "es-09",
+      "name": "Done",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1760,
+        300
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "d1",
+              "name": "smoke_status",
+              "value": "={{ $('All OK?').first().json.result.briefing_pending_or_done > 0 ? 'pass' : 'fail' }}",
+              "type": "string"
+            },
+            {
+              "id": "d2",
+              "name": "project_id",
+              "value": "={{ $('Verify Briefing').first().json.result.project_id }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "fa8e0de0-6da8-40d4-81d6-f656af903ed1",
+      "name": "Init Super Admin Context",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        120,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT set_config('app.role', 'super_admin', false) AS role_set"
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Cleanup Old Smoke": {
+      "main": [
+        [
+          {
+            "node": "Fire Pipeline",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fire Pipeline": {
+      "main": [
+        [
+          {
+            "node": "Wait 90s",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait 90s": {
+      "main": [
+        [
+          {
+            "node": "Verify Briefing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify Briefing": {
+      "main": [
+        [
+          {
+            "node": "All OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "All OK?": {
+      "main": [
+        [
+          {
+            "node": "Log Smoke Pass",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Load Architect Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Smoke Pass": {
+      "main": [
+        [
+          {
+            "node": "Done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Architect Email": {
+      "main": [
+        [
+          {
+            "node": "Send Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Alert": {
+      "main": [
+        [
+          {
+            "node": "Done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Weekly Mon 03:00": {
+      "main": [
+        [
+          {
+            "node": "Init Super Admin Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Init Super Admin Context": {
+      "main": [
+        [
+          {
+            "node": "Cleanup Old Smoke",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": null,
+  "versionId": "666e7b28-264f-4279-a035-49407fc5a0de",
+  "tags": []
+}

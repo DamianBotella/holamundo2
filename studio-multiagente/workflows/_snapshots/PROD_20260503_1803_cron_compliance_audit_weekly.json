@@ -1,0 +1,377 @@
+{
+  "name": "cron_compliance_audit_weekly",
+  "active": true,
+  "nodes": [
+    {
+      "id": "ccaw-01",
+      "name": "Schedule Sunday 08:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -900,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8 * * 0"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "ccaw-02",
+      "name": "Load Architect Email",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -700,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT value AS architect_email FROM system_config WHERE key = 'architect_email' LIMIT 1",
+        "options": {
+          "alwaysOutputData": true
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ccaw-03",
+      "name": "Find Active Projects",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -460,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id::text AS project_id, name AS project_name, current_phase FROM projects WHERE current_phase NOT IN ('completed', 'archived') AND status = 'active' ORDER BY updated_at DESC LIMIT 50",
+        "options": {
+          "alwaysOutputData": true
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ccaw-04",
+      "name": "Split Projects",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        -220,
+        300
+      ],
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      }
+    },
+    {
+      "id": "ccaw-05",
+      "name": "Audit One Project",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        20,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://n8n-n8n.zzeluw.easypanel.host/webhook/audit-project",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ project_id: $json.project_id, send_email: false }) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "PLACEHOLDER",
+          "name": "Webhook API Key (entrante)"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "ccaw-06",
+      "name": "Aggregate Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        500,
+        220
+      ],
+      "parameters": {
+        "jsCode": "const allResults = $input.all().map(i => i.json);\nconst threshold = 80;\nconst lowScores = [];\nconst grades = { A: 0, B: 0, C: 0, D: 0, X: 0 };\nlet totalCritical = 0;\nlet totalIssues = 0;\nlet auditedCount = 0;\nfor (const r of allResults) {\n  if (!r || !r.audit_summary) {\n    grades.X++;\n    continue;\n  }\n  auditedCount++;\n  const g = r.audit_summary.grade || 'X';\n  grades[g] = (grades[g] || 0) + 1;\n  totalCritical += r.audit_summary.critical_count || 0;\n  totalIssues += r.audit_summary.failed || 0;\n  if ((r.audit_summary.score || 0) < threshold || (r.audit_summary.critical_count || 0) > 0) {\n    lowScores.push({\n      project_id: r.project_id,\n      project_name: r.project_name,\n      score: r.audit_summary.score,\n      grade: g,\n      critical_count: r.audit_summary.critical_count,\n      warning_count: r.audit_summary.warning_count,\n      issues_top: (r.issues || []).slice(0, 5).map(i => i.severity + ': ' + i.label)\n    });\n  }\n}\nlowScores.sort((a, b) => (a.score || 0) - (b.score || 0));\nreturn [{ json: {\n  audited_count: auditedCount,\n  unauditable_count: grades.X,\n  grades_distribution: grades,\n  total_critical: totalCritical,\n  total_issues: totalIssues,\n  low_scores: lowScores,\n  has_alerts: lowScores.length > 0\n}}];"
+      }
+    },
+    {
+      "id": "ccaw-07",
+      "name": "Has Alerts?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        740,
+        220
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "ha1",
+              "leftValue": "={{ $json.has_alerts }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ccaw-08",
+      "name": "Build Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        980,
+        80
+      ],
+      "parameters": {
+        "jsCode": "const r = $input.first().json;\nconst gradeColor = { A:'#27ae60', B:'#f1c40f', C:'#e67e22', D:'#e74c3c', X:'#666' };\n\nfunction esc(s) { return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\n\nconst rowsLow = (r.low_scores || []).map(p => `<tr style=\\\"background:${p.critical_count > 0 ? '#fee' : (p.score < 60 ? '#fff8e0' : '#fff')}\\\">\n  <td>${esc(p.project_name)}</td>\n  <td><span style=\\\"background:${gradeColor[p.grade]};color:white;padding:2px 10px;border-radius:10px;font-size:11px;font-weight:bold\\\">${p.grade}</span></td>\n  <td style=\\\"text-align:right;font-weight:600\\\">${p.score}</td>\n  <td style=\\\"text-align:right;color:#c00;font-weight:600\\\">${p.critical_count}</td>\n  <td style=\\\"text-align:right\\\">${p.warning_count}</td>\n  <td style=\\\"font-size:12px;color:#555\\\">${(p.issues_top || []).slice(0,3).join('<br>')}</td>\n</tr>`).join('');\n\nconst gd = r.grades_distribution || {};\nconst html = `<div style=\\\"font-family:system-ui,sans-serif;color:#222;max-width:820px\\\">\n<h2>Compliance Audit Semanal — ${r.audited_count} proyectos auditados</h2>\n<p style=\\\"font-size:14px;color:#555\\\">Distribucion de grades: \n  <b style=\\\"color:#27ae60\\\">A=${gd.A||0}</b> · \n  <b style=\\\"color:#f1c40f\\\">B=${gd.B||0}</b> · \n  <b style=\\\"color:#e67e22\\\">C=${gd.C||0}</b> · \n  <b style=\\\"color:#e74c3c\\\">D=${gd.D||0}</b>${gd.X ? ' · sin auditar (error): ' + gd.X : ''}\n</p>\n<p style=\\\"font-size:14px;color:#555\\\">Total critical: <b style=\\\"color:#c00\\\">${r.total_critical}</b> · total issues: ${r.total_issues}</p>\n<h3 style=\\\"margin-top:24px\\\">Proyectos con score &lt;80 o critical&gt;0 (${(r.low_scores || []).length})</h3>\n<table style=\\\"width:100%;border-collapse:collapse;font-size:13px\\\"><thead><tr style=\\\"background:#f0f0f3\\\"><th align=\\\"left\\\">proyecto</th><th align=\\\"left\\\">grade</th><th align=\\\"right\\\">score</th><th align=\\\"right\\\">critical</th><th align=\\\"right\\\">warning</th><th align=\\\"left\\\">top issues</th></tr></thead><tbody>${rowsLow}</tbody></table>\n<p style=\\\"font-size:12px;color:#888;margin-top:24px\\\">cron_compliance_audit_weekly - generado ${new Date().toISOString()}<br>Para audit individual: <code>curl -X POST -H 'x-api-key: XXX' -d '{\\\"project_id\\\":\\\"...\\\",\\\"send_email\\\":true}' https://n8n-n8n.zzeluw.easypanel.host/webhook/audit-project</code></p>\n</div>`;\n\nconst subject = `[Compliance Semanal] ${r.audited_count} auditados, ${r.total_critical} critical, ${(r.low_scores || []).length} grade C/D`;\nreturn [{ json: { html, subject } }];"
+      }
+    },
+    {
+      "id": "ccaw-09",
+      "name": "Send Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1220,
+        80
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $('Load Architect Email').first().json.architect_email }}",
+        "subject": "={{ $json.subject }}",
+        "emailType": "html",
+        "message": "={{ $json.html }}",
+        "options": {}
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "PLACEHOLDER",
+          "name": "Gmail Notifications"
+        }
+      }
+    },
+    {
+      "id": "ccaw-10",
+      "name": "Log Run",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1460,
+        220
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, status, output_summary) VALUES (NULL, 'cron_compliance_audit_weekly', 'compliance_audit_weekly_clean', $1, $2)",
+        "options": {
+          "queryReplacement": "={{ [ $('Aggregate Results').first().json.has_alerts ? 'warning' : 'success', 'audited=' + $('Aggregate Results').first().json.audited_count + ' critical=' + $('Aggregate Results').first().json.total_critical + ' lowscore=' + $('Aggregate Results').first().json.low_scores.length ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "296f4443-a313-4b18-939b-5eb764db1e70",
+      "name": "Init Super Admin Context",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -780,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT set_config('app.role', 'super_admin', false) AS role_set"
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Load Architect Email": {
+      "main": [
+        [
+          {
+            "node": "Find Active Projects",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Active Projects": {
+      "main": [
+        [
+          {
+            "node": "Split Projects",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Projects": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Results",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Audit One Project",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Audit One Project": {
+      "main": [
+        [
+          {
+            "node": "Split Projects",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Results": {
+      "main": [
+        [
+          {
+            "node": "Has Alerts?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Alerts?": {
+      "main": [
+        [
+          {
+            "node": "Build Email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Email": {
+      "main": [
+        [
+          {
+            "node": "Send Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Email": {
+      "main": [
+        [
+          {
+            "node": "Log Run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Sunday 08:00": {
+      "main": [
+        [
+          {
+            "node": "Init Super Admin Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Init Super Admin Context": {
+      "main": [
+        [
+          {
+            "node": "Load Architect Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": null,
+  "versionId": "57f7fff0-905a-4972-a243-a6f714c2c8b7",
+  "tags": []
+}

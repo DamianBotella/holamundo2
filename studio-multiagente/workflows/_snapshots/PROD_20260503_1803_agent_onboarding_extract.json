@@ -1,0 +1,384 @@
+{
+  "name": "agent_onboarding_extract",
+  "active": true,
+  "nodes": [
+    {
+      "id": "aoe-01",
+      "name": "Receive Session",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        -700,
+        300
+      ],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    },
+    {
+      "id": "aoe-02",
+      "name": "Load Session + Baseline",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -460,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT s.id AS session_id, s.messages, s.sections_covered, s.contact_email, s.contact_name, b.identity AS baseline_identity, b.tone AS baseline_tone, b.priorities AS baseline_priorities, b.red_lines AS baseline_red_lines, b.visit_checklist AS baseline_visit_checklist, b.materials_pref AS baseline_materials_pref, b.trades_pref AS baseline_trades_pref, b.jurisdiction AS baseline_jurisdiction FROM onboarding_sessions s, (SELECT * FROM studio_profile WHERE setup_source='baseline' AND active=true ORDER BY created_at ASC LIMIT 1) b WHERE s.id = $1::uuid LIMIT 1;",
+        "options": {
+          "queryReplacement": "={{ [ $json.session_id ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "aoe-03",
+      "name": "Build Extract Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -220,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const d = $input.first().json;\nconst messages = typeof d.messages === 'string' ? JSON.parse(d.messages) : (d.messages || []);\nconst conversation = messages.map(m => (m.role === 'user' ? 'USUARIO' : 'ASISTENTE') + ': ' + m.content).join('\\n\\n');\n\nconst baseline = {\n  identity: d.baseline_identity, tone: d.baseline_tone, priorities: d.baseline_priorities,\n  red_lines: d.baseline_red_lines, visit_checklist: d.baseline_visit_checklist,\n  materials_pref: d.baseline_materials_pref, trades_pref: d.baseline_trades_pref,\n  jurisdiction: d.baseline_jurisdiction\n};\n\nconst systemPrompt = `Eres un extractor de datos estructurados. Recibes la transcripcion de una conversación de onboarding entre un asistente IA y un profesional de la arquitectura técnica. Tu tarea es estructurar lo que dijo el profesional en un JSON con 8 secciones siguiendo el schema exacto.\n\n**Reglas estrictas**:\n- Devuelve SOLO un objeto JSON valido, sin markdown, sin texto antes o despues.\n- Si una sección no fue cubierta o el usuario explicitamente dijo \"acepto el baseline / lo genérico\", usa los valores del BASELINE proporcionado.\n- Si el usuario dijo algo que difiere del baseline, prioriza lo que dijo el usuario.\n- Sigue EXACTAMENTE el schema. No inventes campos nuevos.\n\n**Schema exacto**:\n{\n  \"identity\": {\"nombre_estudio\":\"\",\"persona_principal\":\"\",\"ciudad\":\"\",\"ambito\":[],\"tamano\":\"\",\"anos_exp\":0,\"colegiado_no\":\"\"},\n  \"tone\": {\"clientes\":{\"formalidad\":\"\",\"tutea\":true,\"tecnicidad\":\"\",\"longitud\":\"\",\"explica_terminos\":true},\"gremios\":{\"formalidad\":\"\",\"longitud\":\"\",\"tecnicidad\":\"\"},\"promotores\":{\"formalidad\":\"\",\"longitud\":\"\",\"tecnicidad\":\"\"}},\n  \"priorities\": [{\"orden\":0,\"prioridad\":\"\",\"detalle\":\"\"}],\n  \"red_lines\": [{\"id\":\"\",\"texto\":\"\"}],\n  \"visit_checklist\": [{\"pregunta\":\"\",\"contexto\":\"\"}],\n  \"materials_pref\": {\"gama_default\":\"\",\"prefiere_local\":true,\"marcas_preferidas_por_categoria\":{}},\n  \"trades_pref\": {\"criterios_seleccion\":[],\"trade_to_contact\":{},\"blacklist\":[]},\n  \"jurisdiction\": {\"ccaa\":\"\",\"ayuntamientos_habituales\":[],\"normativa_autonomica\":[],\"normativa_estatal_siempre\":[]}\n}\n\n**BASELINE de referencia (úsalo si una sección no fue cubierta o el usuario lo aceptó)**:\n${JSON.stringify(baseline, null, 2).substring(0, 4000)}`;\n\nconst userPrompt = 'TRANSCRIPCION DE LA CONVERSACION:\\n\\n' + conversation + '\\n\\nExtrae el JSON estructurado siguiendo el schema. Recuerda: SOLO el JSON, sin markdown.';\n\nreturn [{ json: {\n  agent_name: 'agent_onboarding_extract',\n  project_id: null,\n  prompt_system: systemPrompt,\n  prompt_user: userPrompt,\n  model: 'gpt-4o',\n  temperature: 0.2,\n  _session_id: d.session_id,\n  _contact_email: d.contact_email,\n  _contact_name: d.contact_name\n}}];"
+      }
+    },
+    {
+      "id": "aoe-04",
+      "name": "Call LLM Extractor",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "JoKqGZ8pDzhJohV2",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "aoe-05",
+      "name": "Parse Extracted JSON",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const llm = $input.first().json;\nconst pre = $('Build Extract Prompt').first().json;\nconst raw = (llm.text || '').trim();\nlet extracted;\ntry {\n  const m = raw.match(/\\{[\\s\\S]*\\}/);\n  extracted = m ? JSON.parse(m[0]) : null;\n} catch(e) { extracted = null; }\n\nif (!extracted) {\n  return [{ json: { extract_failed: true, error: 'no JSON in LLM response', raw_preview: raw.substring(0,500), _session_id: pre._session_id, _contact_email: pre._contact_email, _contact_name: pre._contact_name } }];\n}\n\nconst sec = (k, fb) => extracted[k] || fb || (Array.isArray(fb) ? [] : {});\n\nreturn [{ json: {\n  extract_failed: false,\n  identity_json: JSON.stringify(sec('identity', {})),\n  tone_json: JSON.stringify(sec('tone', {})),\n  priorities_json: JSON.stringify(sec('priorities', [])),\n  red_lines_json: JSON.stringify(sec('red_lines', [])),\n  visit_checklist_json: JSON.stringify(sec('visit_checklist', [])),\n  materials_pref_json: JSON.stringify(sec('materials_pref', {})),\n  trades_pref_json: JSON.stringify(sec('trades_pref', {})),\n  jurisdiction_json: JSON.stringify(sec('jurisdiction', {})),\n  _session_id: pre._session_id,\n  _contact_email: pre._contact_email,\n  _contact_name: pre._contact_name,\n  _profile_summary: 'Estudio: ' + (sec('identity', {}).nombre_estudio || '?') + ' | Tono: ' + ((sec('tone', {}).clientes || {}).formalidad || '?') + ' | Prioridades: ' + (Array.isArray(sec('priorities', [])) ? sec('priorities', []).length : 0)\n}}];"
+      }
+    },
+    {
+      "id": "aoe-06",
+      "name": "Insert Studio Profile",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        440,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO studio_profile (identity, tone, priorities, red_lines, visit_checklist, materials_pref, trades_pref, jurisdiction, setup_source, setup_completed_at, active) VALUES ($1::jsonb, $2::jsonb, $3::jsonb, $4::jsonb, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, 'onboarding_chat', now(), true) RETURNING studio_id;",
+        "options": {
+          "queryReplacement": "={{ [$json.identity_json, $json.tone_json, $json.priorities_json, $json.red_lines_json, $json.visit_checklist_json, $json.materials_pref_json, $json.trades_pref_json, $json.jurisdiction_json] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "aoe-07",
+      "name": "Deactivate Baseline",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        660,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE studio_profile SET active = false WHERE setup_source = 'baseline' AND studio_id <> $1::uuid;",
+        "options": {
+          "queryReplacement": "={{ [ $json.studio_id ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "aoe-08",
+      "name": "Link Session To Profile",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        880,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE onboarding_sessions SET studio_id = $1::uuid, status = 'completed' WHERE id = $2::uuid;",
+        "options": {
+          "queryReplacement": "={{ [ $('Insert Studio Profile').first().json.studio_id, $('Parse Extracted JSON').first().json._session_id ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "aoe-09",
+      "name": "Load Architect Email",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1100,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT value AS architect_email FROM system_config WHERE key = 'architect_email' LIMIT 1;",
+        "options": {
+          "alwaysOutputData": true
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "aoe-10",
+      "name": "Build Notif Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const profile = $('Insert Studio Profile').first().json;\nconst summary = $('Parse Extracted JSON').first().json._profile_summary;\nconst html = `<div style=\"font-family:system-ui,sans-serif;color:#222;max-width:680px\">\n<h2>Onboarding completado</h2>\n<p>Un nuevo profesional ha completado el onboarding conversacional de ArquitAI.</p>\n<table style=\"border-collapse:collapse;font-size:14px;margin-top:12px\">\n  <tr><td style=\"padding:6px 12px;color:#666\">studio_id</td><td style=\"padding:6px 12px;font-family:monospace\">${profile.studio_id}</td></tr>\n  <tr><td style=\"padding:6px 12px;color:#666\">Resumen</td><td style=\"padding:6px 12px\">${summary}</td></tr>\n</table>\n<p style=\"margin-top:18px\">Este perfil ya esta active=true. El baseline anterior queda inactivo. Los 11 agentes nucleo leeran este perfil dinamicamente cuando se haga el refactor (bloque 22).</p>\n<p style=\"font-size:12px;color:#888;margin-top:24px\">agent_onboarding_extract - generado ${new Date().toISOString()}</p>\n</div>`;\nreturn [{ json: { html, subject: '[ArquitAI] Onboarding completado - profile creado' } }];"
+      }
+    },
+    {
+      "id": "aoe-11",
+      "name": "Send Notif",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1540,
+        300
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $('Load Architect Email').first().json.architect_email }}",
+        "subject": "={{ $json.subject }}",
+        "emailType": "html",
+        "message": "={{ $json.html }}",
+        "options": {}
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "PLACEHOLDER",
+          "name": "Gmail Notifications"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "aoe-12",
+      "name": "Return Result",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1760,
+        300
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "r1",
+              "name": "status",
+              "value": "completed",
+              "type": "string"
+            },
+            {
+              "id": "r2",
+              "name": "studio_id",
+              "value": "={{ $('Insert Studio Profile').first().json.studio_id }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Receive Session": {
+      "main": [
+        [
+          {
+            "node": "Load Session + Baseline",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Session + Baseline": {
+      "main": [
+        [
+          {
+            "node": "Build Extract Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Extract Prompt": {
+      "main": [
+        [
+          {
+            "node": "Call LLM Extractor",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call LLM Extractor": {
+      "main": [
+        [
+          {
+            "node": "Parse Extracted JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Extracted JSON": {
+      "main": [
+        [
+          {
+            "node": "Insert Studio Profile",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Studio Profile": {
+      "main": [
+        [
+          {
+            "node": "Deactivate Baseline",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Deactivate Baseline": {
+      "main": [
+        [
+          {
+            "node": "Link Session To Profile",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Link Session To Profile": {
+      "main": [
+        [
+          {
+            "node": "Load Architect Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Architect Email": {
+      "main": [
+        [
+          {
+            "node": "Build Notif Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Notif Email": {
+      "main": [
+        [
+          {
+            "node": "Send Notif",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Notif": {
+      "main": [
+        [
+          {
+            "node": "Return Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": null,
+  "versionId": "2b38db15-d3f7-407e-9393-8413abbda1fc",
+  "tags": []
+}

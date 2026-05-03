@@ -1,0 +1,328 @@
+{
+  "name": "cron_quote_expiry",
+  "active": true,
+  "nodes": [
+    {
+      "id": "qe-01",
+      "name": "Schedule Daily 7am",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -700,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "daysInterval": 1,
+              "triggerAtHour": 7,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "qe-02",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -700,
+        500
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "trigger-quote-expiry",
+        "responseMode": "lastNode",
+        "authentication": "headerAuth"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "PLACEHOLDER",
+          "name": "Webhook API Key (entrante)"
+        }
+      },
+      "webhookId": "ed5e93ba-af31-4c9c-8f43-67d34a701e2c"
+    },
+    {
+      "id": "qe-03",
+      "name": "Expire Old Quotes",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -460,
+        400
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH expired AS (\n  UPDATE trade_quotes\n     SET status = 'expired'\n   WHERE status = 'requested'\n     AND request_sent_at IS NOT NULL\n     AND request_sent_at < now() - INTERVAL '21 days'\n  RETURNING id, project_id, supplier_name, supplier_email, trade_type, request_sent_at\n), report AS (\n  SELECT json_agg(json_build_object(\n    'quote_id', e.id, 'project_id', e.project_id, 'project_name', p.name,\n    'supplier', e.supplier_name, 'supplier_email', e.supplier_email,\n    'trade_type', e.trade_type,\n    'days_waiting', round((EXTRACT(EPOCH FROM (now() - e.request_sent_at))/86400)::numeric)\n  )) AS rows, count(*) AS expired_count\n  FROM expired e LEFT JOIN projects p ON p.id = e.project_id\n)\nSELECT * FROM report;",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "id": "qe-04",
+      "name": "Has Expired?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -220,
+        400
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "h1",
+              "leftValue": "={{ Number($json.expired_count) || 0 }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "qe-05",
+      "name": "Build Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        20,
+        320
+      ],
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst rows = (data.rows || []).map(r => '<tr>' +\n  '<td><b>' + (r.project_name || '?') + '</b></td>' +\n  '<td>' + (r.trade_type || '?') + '</td>' +\n  '<td>' + (r.supplier || '?') + '<br><small>' + (r.supplier_email || '') + '</small></td>' +\n  '<td>' + r.days_waiting + ' días</td>' +\n  '</tr>').join('');\nconst html = '<h2>Trade quotes expirados (sin respuesta &gt;21 días)</h2>' +\n  '<p>Total expirados en este barrido: <b>' + data.expired_count + '</b>. Status pasado automáticamente a <code>expired</code>.</p>' +\n  '<table border=\"1\" cellpadding=\"6\" cellspacing=\"0\" style=\"border-collapse:collapse;font-family:sans-serif;font-size:13px\">' +\n  '<thead><tr style=\"background:#f3f4f6\"><th>Proyecto</th><th>Gremio</th><th>Contacto</th><th>Espera</th></tr></thead>' +\n  '<tbody>' + rows + '</tbody></table>' +\n  '<p style=\"font-size:11px;color:#6b7280\">Para reactivar: re-llamar a /webhook/trade-quote-request con la misma info.</p>';\nreturn [{ json: { html_body: html, count: data.expired_count } }];"
+      }
+    },
+    {
+      "id": "qe-06",
+      "name": "Send Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        260,
+        320
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $('Load Architect Email').first().json.value }}",
+        "subject": "=ArquitAI — {{ $json.count }} trade_quote(s) expirado(s)",
+        "emailType": "html",
+        "message": "={{ $json.html_body }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "PLACEHOLDER",
+          "name": "damian2botella"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "qe-07",
+      "name": "Log",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        500,
+        320
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, status, input_summary)\nVALUES (NULL, 'cron_quote_expiry', 'expire_quotes', 'success', $1)\nRETURNING id;",
+        "options": {
+          "queryReplacement": "={{ [ ('expired=' + $json.count) ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "qe-08",
+      "name": "Nothing Expired",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        20,
+        480
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "a544b575-3f69-4b65-bdba-b9325a52caed",
+      "name": "Load Architect Email",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -580,
+        400
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT value FROM system_config WHERE key = 'architect_email'",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "9b1134c9-34ba-44ab-be19-536ad32b56b3",
+      "name": "Init Super Admin Context",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -580,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT set_config('app.role', 'super_admin', false) AS role_set"
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Expire Old Quotes": {
+      "main": [
+        [
+          {
+            "node": "Has Expired?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Expired?": {
+      "main": [
+        [
+          {
+            "node": "Build Email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Nothing Expired",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Email": {
+      "main": [
+        [
+          {
+            "node": "Send Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Email": {
+      "main": [
+        [
+          {
+            "node": "Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Load Architect Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Architect Email": {
+      "main": [
+        [
+          {
+            "node": "Expire Old Quotes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Daily 7am": {
+      "main": [
+        [
+          {
+            "node": "Init Super Admin Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Init Super Admin Context": {
+      "main": [
+        [
+          {
+            "node": "Load Architect Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": null,
+  "versionId": "38038681-1150-4f4d-bc3c-525dfd4287b7",
+  "tags": []
+}

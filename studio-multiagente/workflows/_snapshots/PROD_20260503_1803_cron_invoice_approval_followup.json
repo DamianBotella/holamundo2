@@ -1,0 +1,302 @@
+{
+  "name": "cron_invoice_approval_followup",
+  "active": true,
+  "nodes": [
+    {
+      "id": "ciaf-01",
+      "name": "Schedule 11:30 Daily",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -700,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "30 11 * * *"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "ciaf-02",
+      "name": "Load Architect Email",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -460,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT value AS architect_email FROM system_config WHERE key = 'architect_email' LIMIT 1",
+        "options": {
+          "alwaysOutputData": true
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ciaf-03",
+      "name": "Find Issues",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -220,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT json_build_object(\n  'pending_decision', coalesce((SELECT json_agg(t.* ORDER BY t.days_waiting DESC) FROM (\n    SELECT i.id::text AS invoice_id, i.supplier_name, i.invoice_number, i.invoice_date,\n      i.total_amount, i.category, i.trade_type, i.created_at,\n      floor(EXTRACT(EPOCH FROM (now() - i.created_at))/86400)::int AS days_waiting,\n      p.id::text AS project_id, p.name AS project_name\n    FROM invoices i JOIN projects p ON p.id = i.project_id\n    WHERE i.status = 'pending_review'\n      AND i.created_at < now() - INTERVAL '5 days'\n    LIMIT 25\n  ) t), '[]'::json),\n  'approved_unpaid', coalesce((SELECT json_agg(t.* ORDER BY t.days_overdue DESC) FROM (\n    SELECT i.id::text AS invoice_id, i.supplier_name, i.invoice_number, i.invoice_date,\n      i.total_amount, i.approved_at,\n      floor(EXTRACT(EPOCH FROM (now() - i.approved_at))/86400)::int AS days_overdue,\n      p.id::text AS project_id, p.name AS project_name\n    FROM invoices i JOIN projects p ON p.id = i.project_id\n    WHERE i.status = 'approved'\n      AND i.paid_at IS NULL\n      AND i.approved_at IS NOT NULL\n      AND i.approved_at < now() - INTERVAL '30 days'\n    LIMIT 20\n  ) t), '[]'::json),\n  'disputed_stale', coalesce((SELECT json_agg(t.* ORDER BY t.days_disputed DESC) FROM (\n    SELECT i.id::text AS invoice_id, i.supplier_name, i.invoice_number, i.total_amount,\n      i.created_at,\n      floor(EXTRACT(EPOCH FROM (now() - i.created_at))/86400)::int AS days_disputed,\n      p.id::text AS project_id, p.name AS project_name\n    FROM invoices i JOIN projects p ON p.id = i.project_id\n    WHERE i.status = 'disputed'\n      AND i.created_at < now() - INTERVAL '14 days'\n    LIMIT 15\n  ) t), '[]'::json),\n  'total_issues', (\n    (SELECT count(*) FROM invoices WHERE status = 'pending_review' AND created_at < now() - INTERVAL '5 days')\n  + (SELECT count(*) FROM invoices WHERE status = 'approved' AND paid_at IS NULL AND approved_at < now() - INTERVAL '30 days')\n  + (SELECT count(*) FROM invoices WHERE status = 'disputed' AND created_at < now() - INTERVAL '14 days')\n  )::int,\n  'total_amount_pending', coalesce((SELECT round(sum(total_amount)::numeric, 2) FROM invoices WHERE status = 'pending_review' AND created_at < now() - INTERVAL '5 days'), 0)\n) AS report;",
+        "options": {
+          "alwaysOutputData": true
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ciaf-04",
+      "name": "Has Issues?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        20,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "ic1",
+              "leftValue": "={{ $json.report.total_issues }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ciaf-05",
+      "name": "Build Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        160
+      ],
+      "parameters": {
+        "jsCode": "const r = $('Find Issues').first().json.report || {};\nconst pending = Array.isArray(r.pending_decision) ? r.pending_decision : [];\nconst unpaid = Array.isArray(r.approved_unpaid) ? r.approved_unpaid : [];\nconst disputed = Array.isArray(r.disputed_stale) ? r.disputed_stale : [];\nconst total = r.total_issues || 0;\nconst totalAmount = r.total_amount_pending || 0;\n\nfunction esc(s) { return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\nfunction money(n) { return n != null && n > 0 ? Number(n).toLocaleString('es-ES', {minimumFractionDigits: 2}) + ' EUR' : '-'; }\nfunction dateShort(s) { if (!s) return '-'; return new Date(s).toISOString().substring(0,10); }\n\nconst rowsPending = pending.map(i => `<tr style=\"background:${i.days_waiting > 14 ? '#fee' : '#fff8e0'}\">\n  <td>${esc(i.supplier_name || '?')}</td>\n  <td>${esc(i.invoice_number || '-')}</td>\n  <td>${esc(i.project_name)}</td>\n  <td>${esc(i.category || '-')} / ${esc(i.trade_type || '-')}</td>\n  <td>${dateShort(i.invoice_date)}</td>\n  <td style=\"text-align:right;font-weight:600\">${money(i.total_amount)}</td>\n  <td style=\"text-align:right;font-weight:600\">${i.days_waiting}d</td>\n</tr>`).join('');\n\nconst rowsUnpaid = unpaid.map(i => `<tr>\n  <td>${esc(i.supplier_name || '?')}</td>\n  <td>${esc(i.invoice_number || '-')}</td>\n  <td>${esc(i.project_name)}</td>\n  <td>${dateShort(i.approved_at)}</td>\n  <td style=\"text-align:right;font-weight:600\">${money(i.total_amount)}</td>\n  <td style=\"text-align:right;color:#c00;font-weight:600\">${i.days_overdue}d</td>\n</tr>`).join('');\n\nconst rowsDisputed = disputed.map(i => `<tr style=\"background:#fee\">\n  <td>${esc(i.supplier_name || '?')}</td>\n  <td>${esc(i.invoice_number || '-')}</td>\n  <td>${esc(i.project_name)}</td>\n  <td>${dateShort(i.created_at)}</td>\n  <td style=\"text-align:right;font-weight:600\">${money(i.total_amount)}</td>\n  <td style=\"text-align:right;font-weight:600\">${i.days_disputed}d</td>\n</tr>`).join('');\n\nconst sections = [];\nif (pending.length > 0) {\n  sections.push(`<h3 style=\"margin-top:24px\">Pendientes de decision (${pending.length}, total ${money(totalAmount)})</h3><p style=\"font-size:13px;color:#555\">Facturas subidas hace mas de 5 dias sin aprobar/rechazar. Decidir.</p>\n<table style=\"width:100%;border-collapse:collapse;font-size:13px\"><thead><tr style=\"background:#f0f0f3\"><th align=\"left\">supplier</th><th align=\"left\">numero</th><th align=\"left\">proyecto</th><th align=\"left\">cat/gremio</th><th align=\"left\">fecha</th><th align=\"right\">importe</th><th align=\"right\">esperando</th></tr></thead><tbody>${rowsPending}</tbody></table>`);\n}\nif (unpaid.length > 0) {\n  sections.push(`<h3 style=\"margin-top:24px\">Aprobadas sin pagar >30d (${unpaid.length})</h3><p style=\"font-size:13px;color:#555\">Aprobaste estas facturas hace mas de 30 dias y siguen sin pagar. Marcar paid_at o renegociar plazo.</p>\n<table style=\"width:100%;border-collapse:collapse;font-size:13px\"><thead><tr style=\"background:#f0f0f3\"><th align=\"left\">supplier</th><th align=\"left\">numero</th><th align=\"left\">proyecto</th><th align=\"left\">aprobada</th><th align=\"right\">importe</th><th align=\"right\">retraso</th></tr></thead><tbody>${rowsUnpaid}</tbody></table>`);\n}\nif (disputed.length > 0) {\n  sections.push(`<h3 style=\"margin-top:24px\">En disputa >14d (${disputed.length})</h3><p style=\"font-size:13px;color:#555\">Facturas marcadas como disputed que llevan mas de 14 dias sin resolver. Cerrar conversacion.</p>\n<table style=\"width:100%;border-collapse:collapse;font-size:13px\"><thead><tr style=\"background:#f0f0f3\"><th align=\"left\">supplier</th><th align=\"left\">numero</th><th align=\"left\">proyecto</th><th align=\"left\">creada</th><th align=\"right\">importe</th><th align=\"right\">dias</th></tr></thead><tbody>${rowsDisputed}</tbody></table>`);\n}\n\nconst html = `<div style=\"font-family:system-ui,sans-serif;color:#222;max-width:780px\">\n<h2>Facturas - revision diaria (${total} pendientes)</h2>\n${sections.join('\\n')}\n<p style=\"font-size:12px;color:#888;margin-top:24px\">cron_invoice_approval_followup - generado ${new Date().toISOString()}</p>\n</div>`;\n\nconst subject = `[Facturas] ${total} pendientes (${pending.length} sin decidir / ${unpaid.length} sin pagar >30d / ${disputed.length} en disputa)`;\n\nreturn [{ json: { html, subject, total } }];"
+      }
+    },
+    {
+      "id": "ciaf-06",
+      "name": "Send Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        500,
+        160
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $('Load Architect Email').first().json.architect_email }}",
+        "subject": "={{ $json.subject }}",
+        "emailType": "html",
+        "message": "={{ $json.html }}",
+        "options": {}
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "PLACEHOLDER",
+          "name": "Gmail Notifications"
+        }
+      }
+    },
+    {
+      "id": "ciaf-07",
+      "name": "Log Issues Found",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        740,
+        160
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, status, output_summary) VALUES (NULL, 'cron_invoice_approval_followup', 'invoice_followup_clean', 'warning', $1)",
+        "options": {
+          "queryReplacement": "={{ [ 'ran_with_issues: ' + $('Build Email').first().json.total + ' facturas pendientes' ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ciaf-08",
+      "name": "Log Clean",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        260,
+        440
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, status, output_summary) VALUES (NULL, 'cron_invoice_approval_followup', 'invoice_followup_clean', 'success', '0 issues en facturas')",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "b92ec0a2-528c-41f7-b6fb-19117794e2b6",
+      "name": "Init Super Admin Context",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -580,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT set_config('app.role', 'super_admin', false) AS role_set"
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Load Architect Email": {
+      "main": [
+        [
+          {
+            "node": "Find Issues",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Issues": {
+      "main": [
+        [
+          {
+            "node": "Has Issues?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Issues?": {
+      "main": [
+        [
+          {
+            "node": "Build Email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Clean",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Email": {
+      "main": [
+        [
+          {
+            "node": "Send Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Email": {
+      "main": [
+        [
+          {
+            "node": "Log Issues Found",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule 11:30 Daily": {
+      "main": [
+        [
+          {
+            "node": "Init Super Admin Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Init Super Admin Context": {
+      "main": [
+        [
+          {
+            "node": "Load Architect Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": null,
+  "versionId": "6a2cb550-cf5b-45df-99a0-441b60eeee98",
+  "tags": []
+}

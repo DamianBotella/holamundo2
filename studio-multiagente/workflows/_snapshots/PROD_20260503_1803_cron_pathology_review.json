@@ -1,0 +1,302 @@
+{
+  "name": "cron_pathology_review",
+  "active": true,
+  "nodes": [
+    {
+      "id": "cpr-01",
+      "name": "Schedule 12:00 Daily",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -700,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 12 * * *"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "cpr-02",
+      "name": "Load Architect Email",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -460,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT value AS architect_email FROM system_config WHERE key = 'architect_email' LIMIT 1",
+        "options": {
+          "alwaysOutputData": true
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "cpr-03",
+      "name": "Find Issues",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -220,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT json_build_object(\n  'stale_findings', coalesce((SELECT json_agg(t.* ORDER BY t.days_stale DESC) FROM (\n    SELECT pf.id::text AS finding_id, pf.pathology_type AS type, pf.severity, pf.description,\n      pf.affects_safety, pf.estimated_intervention_cost_min AS cost_min, pf.estimated_intervention_cost_max AS cost_max, pf.recommended_action,\n      pf.status, pf.updated_at,\n      floor(EXTRACT(EPOCH FROM (now() - pf.updated_at))/86400)::int AS days_stale,\n      p.id::text AS project_id, p.name AS project_name, p.current_phase\n    FROM pathology_findings pf\n    JOIN projects p ON p.id = pf.project_id\n    WHERE pf.status NOT IN ('repaired', 'dismissed', 'monitored')\n      AND pf.updated_at < now() - INTERVAL '30 days'\n      AND p.current_phase NOT IN ('archived')\n    LIMIT 30\n  ) t), '[]'::json),\n  'critical_unresolved', coalesce((SELECT json_agg(t.* ORDER BY t.created_at ASC) FROM (\n    SELECT pf.id::text AS finding_id, pf.pathology_type AS type, pf.severity, pf.description,\n      pf.affects_safety, pf.status, pf.created_at,\n      floor(EXTRACT(EPOCH FROM (now() - pf.created_at))/86400)::int AS days_since_detected,\n      p.id::text AS project_id, p.name AS project_name\n    FROM pathology_findings pf\n    JOIN projects p ON p.id = pf.project_id\n    WHERE (pf.severity = 'critical' OR pf.affects_safety = true)\n      AND pf.status NOT IN ('repaired', 'dismissed')\n      AND p.current_phase NOT IN ('archived')\n    LIMIT 20\n  ) t), '[]'::json),\n  'total_issues', (\n    (SELECT count(*) FROM pathology_findings pf JOIN projects p ON p.id = pf.project_id WHERE pf.status NOT IN ('repaired','dismissed','monitored') AND pf.updated_at < now() - INTERVAL '30 days' AND p.current_phase NOT IN ('archived'))\n  + (SELECT count(*) FROM pathology_findings pf JOIN projects p ON p.id = pf.project_id WHERE (pf.severity = 'critical' OR pf.affects_safety = true) AND pf.status NOT IN ('repaired','dismissed') AND p.current_phase NOT IN ('archived'))\n  )::int\n) AS report;",
+        "options": {
+          "alwaysOutputData": true
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "cpr-04",
+      "name": "Has Issues?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        20,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "ic1",
+              "leftValue": "={{ $json.report.total_issues }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "cpr-05",
+      "name": "Build Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        160
+      ],
+      "parameters": {
+        "jsCode": "const r = $('Find Issues').first().json.report || {};\nconst stale = Array.isArray(r.stale_findings) ? r.stale_findings : [];\nconst critical = Array.isArray(r.critical_unresolved) ? r.critical_unresolved : [];\nconst total = r.total_issues || 0;\n\nfunction esc(s) { return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\nfunction money(n) { return n != null ? Number(n).toLocaleString('es-ES') + 'eur' : '-'; }\nfunction dateShort(s) { if (!s) return '-'; return new Date(s).toISOString().substring(0,10); }\nconst sevColor = { low: '#888', medium: '#3b82f6', high: '#e67e22', critical: '#c00' };\n\nconst rowsCritical = critical.map(f => `<tr style=\"background:#fee\">\n  <td><span style=\"background:${sevColor[f.severity] || '#888'};color:white;padding:2px 8px;border-radius:10px;font-size:11px\">${esc(f.severity)}</span>${f.affects_safety ? ' <strong style=\"color:#c00\">SAFETY</strong>' : ''}</td>\n  <td>${esc(f.type)}</td>\n  <td>${esc(f.project_name)}</td>\n  <td>${esc(f.status)}</td>\n  <td style=\"font-size:12px\">${esc((f.description || '').substring(0,80))}</td>\n  <td style=\"text-align:right;font-weight:600\">${f.days_since_detected}d</td>\n</tr>`).join('');\n\nconst rowsStale = stale.map(f => `<tr style=\"background:${f.days_stale > 60 ? '#fee' : '#fff8e0'}\">\n  <td><span style=\"background:${sevColor[f.severity] || '#888'};color:white;padding:2px 8px;border-radius:10px;font-size:11px\">${esc(f.severity)}</span></td>\n  <td>${esc(f.type)}</td>\n  <td>${esc(f.project_name)}</td>\n  <td>${esc(f.status)}</td>\n  <td>${dateShort(f.updated_at)}</td>\n  <td style=\"text-align:right\">${money(f.cost_min)} - ${money(f.cost_max)}</td>\n  <td style=\"text-align:right;font-weight:600\">${f.days_stale}d</td>\n</tr>`).join('');\n\nconst sections = [];\nif (critical.length > 0) {\n  sections.push(`<h3 style=\"margin-top:24px;color:#c00\">Critical o afectan seguridad sin resolver (${critical.length})</h3><p style=\"font-size:13px;color:#555\">Findings con severity=critical o affects_safety=true que aun no estan en repaired/dismissed. Prioritarios.</p>\n<table style=\"width:100%;border-collapse:collapse;font-size:13px\"><thead><tr style=\"background:#f0f0f3\"><th align=\"left\">severidad</th><th align=\"left\">tipo</th><th align=\"left\">proyecto</th><th align=\"left\">status</th><th align=\"left\">descripcion</th><th align=\"right\">dias</th></tr></thead><tbody>${rowsCritical}</tbody></table>`);\n}\nif (stale.length > 0) {\n  sections.push(`<h3 style=\"margin-top:24px\">Findings sin actualizar >30d (${stale.length})</h3><p style=\"font-size:13px;color:#555\">Patologias detectadas hace mas de 30 dias que siguen en detected/confirmed/scheduled/in_repair (no terminales). Revisar estado real y actualizar.</p>\n<table style=\"width:100%;border-collapse:collapse;font-size:13px\"><thead><tr style=\"background:#f0f0f3\"><th align=\"left\">severidad</th><th align=\"left\">tipo</th><th align=\"left\">proyecto</th><th align=\"left\">status</th><th align=\"left\">ultimo update</th><th align=\"right\">coste est</th><th align=\"right\">dias stale</th></tr></thead><tbody>${rowsStale}</tbody></table>`);\n}\n\nconst html = `<div style=\"font-family:system-ui,sans-serif;color:#222;max-width:820px\">\n<h2>Patologias - revision diaria (${total} pendientes)</h2>\n${sections.join('\\n')}\n<p style=\"font-size:12px;color:#888;margin-top:24px\">cron_pathology_review - generado ${new Date().toISOString()}</p>\n</div>`;\n\nconst subject = `[Patologias] ${total} pendientes (${critical.length} criticas/safety + ${stale.length} sin actualizar >30d)`;\n\nreturn [{ json: { html, subject, total } }];"
+      }
+    },
+    {
+      "id": "cpr-06",
+      "name": "Send Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        500,
+        160
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $('Load Architect Email').first().json.architect_email }}",
+        "subject": "={{ $json.subject }}",
+        "emailType": "html",
+        "message": "={{ $json.html }}",
+        "options": {}
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "PLACEHOLDER",
+          "name": "Gmail Notifications"
+        }
+      }
+    },
+    {
+      "id": "cpr-07",
+      "name": "Log Issues Found",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        740,
+        160
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, status, output_summary) VALUES (NULL, 'cron_pathology_review', 'pathology_review_clean', 'warning', $1)",
+        "options": {
+          "queryReplacement": "={{ [ 'ran_with_issues: ' + $('Build Email').first().json.total + ' patologias pendientes' ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "cpr-08",
+      "name": "Log Clean",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        260,
+        440
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, status, output_summary) VALUES (NULL, 'cron_pathology_review', 'pathology_review_clean', 'success', '0 patologias pendientes')",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "7a296556-841d-40ca-947e-eb10af4929f6",
+      "name": "Init Super Admin Context",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -580,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT set_config('app.role', 'super_admin', false) AS role_set"
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Load Architect Email": {
+      "main": [
+        [
+          {
+            "node": "Find Issues",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Issues": {
+      "main": [
+        [
+          {
+            "node": "Has Issues?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Issues?": {
+      "main": [
+        [
+          {
+            "node": "Build Email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Clean",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Email": {
+      "main": [
+        [
+          {
+            "node": "Send Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Email": {
+      "main": [
+        [
+          {
+            "node": "Log Issues Found",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule 12:00 Daily": {
+      "main": [
+        [
+          {
+            "node": "Init Super Admin Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Init Super Admin Context": {
+      "main": [
+        [
+          {
+            "node": "Load Architect Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": null,
+  "versionId": "ee5b129e-22f5-4477-b4cc-d42dd87fc2cf",
+  "tags": []
+}

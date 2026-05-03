@@ -1,0 +1,138 @@
+{
+  "name": "util_admin_pathology_overview_html",
+  "active": true,
+  "nodes": [
+    {
+      "id": "apo-01",
+      "name": "Webhook GET",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -700,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "admin-pathology-overview",
+        "responseMode": "responseNode",
+        "authentication": "headerAuth"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "PLACEHOLDER",
+          "name": "Webhook API Key (entrante)"
+        }
+      },
+      "webhookId": "apo-trigger"
+    },
+    {
+      "id": "apo-02",
+      "name": "Load Pathology Stats",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -460,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT json_build_object(\n  'totals', (SELECT json_build_object(\n    'total_findings', count(*),\n    'unresolved', count(*) FILTER (WHERE status NOT IN ('repaired','dismissed')),\n    'critical_unresolved', count(*) FILTER (WHERE (severity='critical' OR affects_safety=true) AND status NOT IN ('repaired','dismissed')),\n    'safety_unresolved', count(*) FILTER (WHERE affects_safety=true AND status NOT IN ('repaired','dismissed')),\n    'in_repair', count(*) FILTER (WHERE status='in_repair')\n  ) FROM pathology_findings),\n  'by_type', coalesce((SELECT json_agg(t.* ORDER BY t.unresolved_count DESC) FROM (\n    SELECT pathology_type AS type,\n      count(*)::int AS total,\n      count(*) FILTER (WHERE status NOT IN ('repaired','dismissed'))::int AS unresolved_count,\n      count(*) FILTER (WHERE severity='critical')::int AS critical_count,\n      count(*) FILTER (WHERE affects_safety=true)::int AS safety_count,\n      coalesce(round(avg(estimated_intervention_cost_max)::numeric, 0), 0) AS avg_cost\n    FROM pathology_findings\n    GROUP BY pathology_type\n  ) t), '[]'::json),\n  'by_project', coalesce((SELECT json_agg(t.* ORDER BY t.unresolved_count DESC) FROM (\n    SELECT p.id::text AS project_id, p.name AS project_name, p.current_phase,\n      count(pf.id)::int AS total,\n      count(pf.id) FILTER (WHERE pf.status NOT IN ('repaired','dismissed'))::int AS unresolved_count,\n      count(pf.id) FILTER (WHERE (pf.severity='critical' OR pf.affects_safety=true) AND pf.status NOT IN ('repaired','dismissed'))::int AS critical_unresolved\n    FROM projects p\n    JOIN pathology_findings pf ON pf.project_id = p.id\n    WHERE p.current_phase NOT IN ('archived')\n    GROUP BY p.id, p.name, p.current_phase\n    HAVING count(pf.id) FILTER (WHERE pf.status NOT IN ('repaired','dismissed')) > 0\n    LIMIT 30\n  ) t), '[]'::json),\n  'recent_critical', coalesce((SELECT json_agg(t.* ORDER BY t.created_at DESC) FROM (\n    SELECT pf.id::text AS finding_id, pf.pathology_type AS type, pf.severity, pf.affects_safety,\n      substring(pf.description for 100) AS desc_preview, pf.status, pf.created_at,\n      p.id::text AS project_id, p.name AS project_name\n    FROM pathology_findings pf\n    JOIN projects p ON p.id = pf.project_id\n    WHERE (pf.severity='critical' OR pf.affects_safety=true)\n      AND pf.status NOT IN ('repaired','dismissed')\n    ORDER BY pf.created_at DESC LIMIT 10\n  ) t), '[]'::json)\n) AS report;",
+        "options": {
+          "alwaysOutputData": true
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "apo-03",
+      "name": "Build HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -220,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const r = $input.first().json.report || {};\nconst t = r.totals || {};\nconst byType = Array.isArray(r.by_type) ? r.by_type : [];\nconst byProject = Array.isArray(r.by_project) ? r.by_project : [];\nconst recent = Array.isArray(r.recent_critical) ? r.recent_critical : [];\n\nfunction esc(s) { return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\nfunction money(n) { return n != null && n > 0 ? Number(n).toLocaleString('es-ES') + ' EUR' : '-'; }\nfunction dateShort(s) { if (!s) return '-'; return new Date(s).toISOString().substring(0,10); }\nconst sevColor = { low:'#888', medium:'#3b82f6', high:'#e67e22', critical:'#c00' };\n\nconst rowsType = byType.map(x => `<tr>\n  <td>${esc(x.type)}</td>\n  <td style=\"text-align:right\">${x.total}</td>\n  <td style=\"text-align:right;font-weight:600\">${x.unresolved_count}</td>\n  <td style=\"text-align:right;color:${x.critical_count > 0 ? '#c00' : '#666'};font-weight:600\">${x.critical_count}</td>\n  <td style=\"text-align:right\">${x.safety_count}</td>\n  <td style=\"text-align:right\">${money(x.avg_cost)}</td>\n</tr>`).join('');\n\nconst rowsProj = byProject.map(p => {\n  const cls = p.critical_unresolved > 0 ? ' style=\"background:#fee\"' : '';\n  return `<tr${cls}>\n    <td><a href=\"/webhook/admin-project?project_id=${esc(p.project_id)}\" style=\"color:#1f2937\">${esc(p.project_name)}</a></td>\n    <td>${esc(p.current_phase)}</td>\n    <td style=\"text-align:right\">${p.total}</td>\n    <td style=\"text-align:right;font-weight:600\">${p.unresolved_count}</td>\n    <td style=\"text-align:right;color:${p.critical_unresolved > 0 ? '#c00' : '#666'};font-weight:600\">${p.critical_unresolved}</td>\n  </tr>`;\n}).join('');\n\nconst rowsRecent = recent.map(f => `<tr style=\"background:${f.affects_safety ? '#fee' : (f.severity === 'critical' ? '#fff8e0' : '#fff')}\">\n  <td><span style=\"background:${sevColor[f.severity] || '#888'};color:white;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:bold\">${esc(f.severity)}</span>${f.affects_safety ? ' <strong style=\"color:#c00\">SAFETY</strong>' : ''}</td>\n  <td>${esc(f.type)}</td>\n  <td>${esc(f.project_name)}</td>\n  <td>${esc(f.status)}</td>\n  <td style=\"font-size:12px;color:#555\">${esc(f.desc_preview)}...</td>\n  <td>${dateShort(f.created_at)}</td>\n</tr>`).join('');\n\nconst html = `<!DOCTYPE html><html lang=\"es\"><head><meta charset=\"utf-8\"><title>Pathology Overview - ArquitAI</title>\n<style>\n  body{font-family:system-ui,sans-serif;max-width:1200px;margin:32px auto;padding:0 20px;color:#222;background:#f7f7f8}\n  h1{margin:0 0 8px}\n  .sub{color:#888;font-size:13px;margin-bottom:24px}\n  h2{margin:32px 0 12px;font-size:18px;border-bottom:1px solid #ddd;padding-bottom:6px}\n  .cards{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:24px}\n  .card{background:#fff;border:1px solid #ddd;border-radius:8px;padding:14px;text-align:center}\n  .card h3{margin:0 0 4px;font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.5px}\n  .card .v{font-size:24px;font-weight:600}\n  table{width:100%;border-collapse:collapse;background:#fff;border:1px solid #ddd;border-radius:8px;overflow:hidden;font-size:13px}\n  th,td{padding:8px 10px;border-bottom:1px solid #eee;text-align:left}\n  th{background:#f0f0f3;font-weight:600;font-size:11px;text-transform:uppercase;color:#555}\n  tr:last-child td{border-bottom:none}\n  .meta{font-size:12px;color:#888;margin-top:24px}\n  @media (max-width:900px){.cards{grid-template-columns:repeat(2,1fr)}}\n</style></head><body>\n<h1>Pathology Overview - ArquitAI</h1>\n<p class=\"sub\">Vista agregada de patologias detectadas. Para drill-down: /webhook/admin-project?project_id=&lt;uuid&gt;.</p>\n<div class=\"cards\">\n  <div class=\"card\"><h3>Total findings</h3><div class=\"v\">${t.total_findings || 0}</div></div>\n  <div class=\"card\"><h3>Unresolved</h3><div class=\"v\" style=\"color:${t.unresolved > 0 ? '#e67e22' : '#27ae60'}\">${t.unresolved || 0}</div></div>\n  <div class=\"card\"><h3>Critical unresolved</h3><div class=\"v\" style=\"color:${t.critical_unresolved > 0 ? '#c00' : '#27ae60'}\">${t.critical_unresolved || 0}</div></div>\n  <div class=\"card\"><h3>Safety unresolved</h3><div class=\"v\" style=\"color:${t.safety_unresolved > 0 ? '#c00' : '#27ae60'}\">${t.safety_unresolved || 0}</div></div>\n  <div class=\"card\"><h3>In repair</h3><div class=\"v\">${t.in_repair || 0}</div></div>\n</div>\n<h2>Por tipo de patologia</h2>\n<table>\n  <thead><tr><th>tipo</th><th style=\"text-align:right\">total</th><th style=\"text-align:right\">unresolved</th><th style=\"text-align:right\">critical</th><th style=\"text-align:right\">safety</th><th style=\"text-align:right\">avg coste max</th></tr></thead>\n  <tbody>${rowsType || '<tr><td colspan=\"6\" style=\"text-align:center;color:#888;padding:18px\">Sin findings registrados</td></tr>'}</tbody>\n</table>\n<h2>Por proyecto (con findings unresolved)</h2>\n<table>\n  <thead><tr><th>proyecto</th><th>fase</th><th style=\"text-align:right\">total</th><th style=\"text-align:right\">unresolved</th><th style=\"text-align:right\">critical</th></tr></thead>\n  <tbody>${rowsProj || '<tr><td colspan=\"5\" style=\"text-align:center;color:#888;padding:18px\">Sin proyectos con findings unresolved</td></tr>'}</tbody>\n</table>\n<h2>Recientes critical/safety unresolved</h2>\n<table>\n  <thead><tr><th>severidad</th><th>tipo</th><th>proyecto</th><th>status</th><th>descripcion</th><th>creado</th></tr></thead>\n  <tbody>${rowsRecent || '<tr><td colspan=\"6\" style=\"text-align:center;color:#888;padding:18px\">Sin findings critical/safety unresolved (estado saludable)</td></tr>'}</tbody>\n</table>\n<div class=\"meta\">Generado ${new Date().toISOString()}</div>\n</body></html>`;\n\nreturn [{ json: { html } }];"
+      }
+    },
+    {
+      "id": "apo-04",
+      "name": "Respond HTML",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        20,
+        300
+      ],
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.html }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "text/html; charset=utf-8"
+              },
+              {
+                "name": "Cache-Control",
+                "value": "no-store"
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook GET": {
+      "main": [
+        [
+          {
+            "node": "Load Pathology Stats",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Pathology Stats": {
+      "main": [
+        [
+          {
+            "node": "Build HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build HTML": {
+      "main": [
+        [
+          {
+            "node": "Respond HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": null,
+  "versionId": "d190e259-c9d1-458c-9632-0b58815bbe53",
+  "tags": []
+}

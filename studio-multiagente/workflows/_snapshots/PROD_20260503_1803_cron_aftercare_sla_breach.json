@@ -1,0 +1,302 @@
+{
+  "name": "cron_aftercare_sla_breach",
+  "active": true,
+  "nodes": [
+    {
+      "id": "casb-01",
+      "name": "Schedule 08:30 Daily",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -700,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "30 8 * * *"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "casb-02",
+      "name": "Load Architect Email",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -460,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT value AS architect_email FROM system_config WHERE key = 'architect_email' LIMIT 1",
+        "options": {
+          "alwaysOutputData": true
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "casb-03",
+      "name": "Find SLA Breaches",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -220,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH sla_breaches AS (\n  SELECT i.id, i.project_id, i.severity, i.status, i.category, i.responsible_trade,\n    i.assigned_to, i.assigned_at, i.description,\n    floor(EXTRACT(EPOCH FROM (now() - i.assigned_at))/86400)::int AS days_since_assigned,\n    CASE i.severity\n      WHEN 'urgent' THEN 2\n      WHEN 'high'   THEN 5\n      WHEN 'medium' THEN 14\n      ELSE 30\n    END AS sla_days\n  FROM aftercare_incidents i\n  WHERE i.status IN ('assigned', 'in_progress')\n    AND i.assigned_at IS NOT NULL\n)\nSELECT json_build_object(\n  'breaches', coalesce((SELECT json_agg(t.* ORDER BY t.days_overdue DESC) FROM (\n    SELECT b.id::text AS incident_id, b.severity, b.status, b.category, b.responsible_trade,\n      b.assigned_to, b.assigned_at, b.days_since_assigned, b.sla_days,\n      (b.days_since_assigned - b.sla_days) AS days_overdue,\n      substring(b.description for 100) AS desc_preview,\n      p.id::text AS project_id, p.name AS project_name\n    FROM sla_breaches b\n    JOIN projects p ON p.id = b.project_id\n    WHERE b.days_since_assigned > b.sla_days\n    LIMIT 30\n  ) t), '[]'::json),\n  'total_breaches', (SELECT count(*) FROM sla_breaches WHERE days_since_assigned > sla_days)::int,\n  'sla_table', json_build_object(\n    'urgent_days', 2, 'high_days', 5, 'medium_days', 14, 'low_days', 30\n  )\n) AS report;",
+        "options": {
+          "alwaysOutputData": true
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "casb-04",
+      "name": "Has Breaches?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        20,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "ic1",
+              "leftValue": "={{ $json.report.total_breaches }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "casb-05",
+      "name": "Build Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        160
+      ],
+      "parameters": {
+        "jsCode": "const r = $('Find SLA Breaches').first().json.report || {};\nconst breaches = Array.isArray(r.breaches) ? r.breaches : [];\nconst total = r.total_breaches || 0;\nconst sla = r.sla_table || { urgent_days: 2, high_days: 5, medium_days: 14, low_days: 30 };\n\nfunction esc(s) { return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\nfunction dateShort(s) { if (!s) return '-'; return new Date(s).toISOString().substring(0,10); }\nconst sevColor = { low: '#888', medium: '#3b82f6', high: '#e67e22', urgent: '#c00' };\n\nconst rows = breaches.map(b => {\n  const bgColor = b.severity === 'urgent' ? '#fee' : (b.days_overdue > 7 ? '#fff8e0' : '#fff');\n  return `<tr style=\"background:${bgColor}\">\n    <td><span style=\"background:${sevColor[b.severity] || '#888'};color:white;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:bold\">${esc(b.severity)}</span></td>\n    <td>${esc(b.project_name)}</td>\n    <td>${esc(b.category || '-')}</td>\n    <td>${esc(b.responsible_trade || '-')}</td>\n    <td>${esc(b.assigned_to || '-')}</td>\n    <td>${dateShort(b.assigned_at)}</td>\n    <td style=\"text-align:right\">${b.sla_days}d</td>\n    <td style=\"text-align:right;color:#c00;font-weight:600\">${b.days_since_assigned}d (+${b.days_overdue})</td>\n    <td style=\"font-size:12px;color:#555\">${esc(b.desc_preview)}...</td>\n  </tr>`;\n}).join('');\n\nconst html = `<div style=\"font-family:system-ui,sans-serif;color:#222;max-width:920px\">\n<h2>Aftercare SLA breach (${total} incidentes)</h2>\n<p style=\"font-size:13px;color:#555\">Incidentes con status <code>assigned</code> o <code>in_progress</code> que llevan asignados mas dias del SLA por severidad. El colaborador o gremio asignado no esta cumpliendo el plazo. Considerar escalar (status='escalated') o reasignar.</p>\n<p style=\"font-size:12px;color:#666;margin-top:6px\"><b>SLA aplicado</b>: urgent=${sla.urgent_days}d · high=${sla.high_days}d · medium=${sla.medium_days}d · low=${sla.low_days}d (desde assigned_at)</p>\n<table style=\"width:100%;border-collapse:collapse;font-size:13px;margin-top:12px\"><thead><tr style=\"background:#f0f0f3\"><th align=\"left\">sev</th><th align=\"left\">proyecto</th><th align=\"left\">cat</th><th align=\"left\">gremio</th><th align=\"left\">asignado a</th><th align=\"left\">desde</th><th align=\"right\">SLA</th><th align=\"right\">dias (overdue)</th><th align=\"left\">desc</th></tr></thead><tbody>${rows}</tbody></table>\n<p style=\"font-size:12px;color:#888;margin-top:24px\">cron_aftercare_sla_breach - generado ${new Date().toISOString()}</p>\n</div>`;\n\nconst subject = `[Aftercare SLA breach] ${total} incidentes con plazo vencido`;\nreturn [{ json: { html, subject, total } }];"
+      }
+    },
+    {
+      "id": "casb-06",
+      "name": "Send Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        500,
+        160
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $('Load Architect Email').first().json.architect_email }}",
+        "subject": "={{ $json.subject }}",
+        "emailType": "html",
+        "message": "={{ $json.html }}",
+        "options": {}
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "PLACEHOLDER",
+          "name": "Gmail Notifications"
+        }
+      }
+    },
+    {
+      "id": "casb-07",
+      "name": "Log Issues Found",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        740,
+        160
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, status, output_summary) VALUES (NULL, 'cron_aftercare_sla_breach', 'aftercare_sla_clean', 'warning', $1)",
+        "options": {
+          "queryReplacement": "={{ [ 'ran_with_issues: ' + $('Build Email').first().json.total + ' SLA breaches' ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "casb-08",
+      "name": "Log Clean",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        260,
+        440
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, status, output_summary) VALUES (NULL, 'cron_aftercare_sla_breach', 'aftercare_sla_clean', 'success', '0 SLA breaches en aftercare')",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "e04206e2-c27c-4d53-9425-19f564598f8b",
+      "name": "Init Super Admin Context",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -580,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT set_config('app.role', 'super_admin', false) AS role_set"
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Load Architect Email": {
+      "main": [
+        [
+          {
+            "node": "Find SLA Breaches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find SLA Breaches": {
+      "main": [
+        [
+          {
+            "node": "Has Breaches?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Breaches?": {
+      "main": [
+        [
+          {
+            "node": "Build Email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Clean",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Email": {
+      "main": [
+        [
+          {
+            "node": "Send Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Email": {
+      "main": [
+        [
+          {
+            "node": "Log Issues Found",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule 08:30 Daily": {
+      "main": [
+        [
+          {
+            "node": "Init Super Admin Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Init Super Admin Context": {
+      "main": [
+        [
+          {
+            "node": "Load Architect Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": null,
+  "versionId": "ebe6c37f-44d5-48a3-9b35-3462fbae49ec",
+  "tags": []
+}

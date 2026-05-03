@@ -1,0 +1,331 @@
+{
+  "name": "cron_weekly_summary",
+  "active": true,
+  "nodes": [
+    {
+      "id": "ws-01",
+      "name": "Schedule Mon 8:30",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -700,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks",
+              "weeksInterval": 1,
+              "triggerAtDay": [
+                1
+              ],
+              "triggerAtHour": 8,
+              "triggerAtMinute": 30
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "ws-02",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -700,
+        500
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "trigger-weekly-summary",
+        "responseMode": "lastNode",
+        "authentication": "headerAuth"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "PLACEHOLDER",
+          "name": "Webhook API Key (entrante)"
+        }
+      },
+      "webhookId": "fead6e46-7357-43c6-8c1f-5f822fb2e350"
+    },
+    {
+      "id": "ws-03",
+      "name": "Build Snapshot",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -460,
+        400
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH active AS (\n  SELECT id, name, current_phase, project_type, location_city, created_at, updated_at\n  FROM projects\n  WHERE current_phase NOT IN ('completed','archived')\n)\nSELECT json_agg(row_to_json(t) ORDER BY t.flag_score DESC, t.days_in_phase DESC) AS rows\nFROM (\n  SELECT\n    a.id, a.name, a.current_phase, a.project_type, a.location_city,\n    EXTRACT(EPOCH FROM (now() - a.updated_at))/86400 AS days_in_phase,\n    (SELECT count(*) FROM approvals WHERE project_id = a.id AND status = 'pending') AS pending_approvals,\n    (SELECT count(*) FROM site_reports WHERE project_id = a.id AND reported_at > now() - INTERVAL '7 days') AS reports_7d,\n    (SELECT count(*) FROM site_reports WHERE project_id = a.id AND status = 'flagged' AND reported_at > now() - INTERVAL '7 days') AS reports_flagged_7d,\n    (SELECT count(*) FROM invoices WHERE project_id = a.id AND created_at > now() - INTERVAL '7 days') AS invoices_7d,\n    (SELECT count(*) FROM invoices WHERE project_id = a.id AND status = 'pending_review') AS invoices_pending,\n    (SELECT count(*) FROM permit_applications WHERE project_id = a.id AND status NOT IN ('approved','rejected','withdrawn','expired')) AS permits_active,\n    (SELECT count(*) FROM permit_applications WHERE project_id = a.id AND status = 'requires_subsanation') AS permits_subsanation,\n    (SELECT count(*) FROM regulatory_tasks WHERE project_id = a.id AND status = 'requires_review') AS reg_tasks_review,\n    (SELECT total_estimated FROM cost_estimates WHERE project_id = a.id ORDER BY version DESC LIMIT 1) AS estimated,\n    COALESCE((SELECT sum(amount) FROM certifications WHERE project_id = a.id AND status != 'cancelled'), 0) AS certified,\n    COALESCE((SELECT sum(total_amount) FROM invoices WHERE project_id = a.id), 0) AS billed,\n    (SELECT title FROM design_options WHERE project_id = a.id AND is_selected = true LIMIT 1) AS selected_design,\n    (SELECT count(*) FROM pathology_findings WHERE project_id = a.id AND status NOT IN ('repaired','dismissed')) AS pathologies_open,\n    (SELECT count(*) FROM pathology_findings WHERE project_id = a.id AND severity IN ('high','critical') AND status NOT IN ('repaired','dismissed')) AS pathologies_critical,\n    (SELECT count(*) FROM aftercare_incidents WHERE project_id = a.id AND status NOT IN ('resolved','closed','disputed')) AS aftercare_open,\n    (SELECT count(*) FROM aftercare_incidents WHERE project_id = a.id AND severity = 'urgent' AND status NOT IN ('resolved','closed','disputed')) AS aftercare_urgent,\n    (SELECT count(*) FROM anomalies_detected WHERE project_id = a.id AND status = 'new') AS anomalies_new,\n    (SELECT count(*) FROM anomalies_detected WHERE project_id = a.id AND severity IN ('high','critical') AND status = 'new') AS anomalies_critical,\n    -- flag_score: prioriza visualmente proyectos que necesitan atencion\n    (CASE WHEN a.current_phase IN ('intake') AND EXTRACT(EPOCH FROM (now() - a.updated_at))/86400 > 3 THEN 5 ELSE 0 END +\n     CASE WHEN EXTRACT(EPOCH FROM (now() - a.updated_at))/86400 > 14 THEN 4 ELSE 0 END +\n     COALESCE((SELECT count(*) FROM site_reports WHERE project_id = a.id AND status = 'flagged' AND reported_at > now() - INTERVAL '7 days'), 0) * 3 +\n     COALESCE((SELECT count(*) FROM permit_applications WHERE project_id = a.id AND status = 'requires_subsanation'), 0) * 2 +\n     COALESCE((SELECT count(*) FROM approvals WHERE project_id = a.id AND status = 'pending'), 0) +\n     COALESCE((SELECT count(*) FROM pathology_findings WHERE project_id = a.id AND severity IN ('high','critical') AND status NOT IN ('repaired','dismissed')), 0) * 4 +\n     COALESCE((SELECT count(*) FROM aftercare_incidents WHERE project_id = a.id AND severity = 'urgent' AND status NOT IN ('resolved','closed','disputed')), 0) * 5 +\n     COALESCE((SELECT count(*) FROM anomalies_detected WHERE project_id = a.id AND severity IN ('high','critical') AND status = 'new'), 0) * 3) AS flag_score\n  FROM active a\n) t;",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "id": "ws-04",
+      "name": "Has Active?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -220,
+        400
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "h1",
+              "leftValue": "={{ ($json.rows && $json.rows.length) || 0 }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ws-05",
+      "name": "Build Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        20,
+        320
+      ],
+      "parameters": {
+        "jsCode": "const list = $input.first().json.rows || [];\nconst fmt = n => Number(n || 0).toLocaleString('es-ES');\nconst rows = list.map(p => {\n  const flagBadge = p.flag_score >= 5 ? '<span style=\"background:#dc2626;color:white;padding:2px 6px;border-radius:3px\">ATENCION</span>'\n    : p.flag_score >= 2 ? '<span style=\"background:#f59e0b;color:white;padding:2px 6px;border-radius:3px\">REVISAR</span>'\n    : '<span style=\"background:#10b981;color:white;padding:2px 6px;border-radius:3px\">OK</span>';\n  const flagsTxt = [];\n  if (p.pending_approvals > 0)    flagsTxt.push(p.pending_approvals + ' aprob.');\n  if (p.reports_flagged_7d > 0)   flagsTxt.push(p.reports_flagged_7d + ' obra-flag');\n  if (p.invoices_pending > 0)     flagsTxt.push(p.invoices_pending + ' factu.pdte');\n  if (p.permits_subsanation > 0)  flagsTxt.push(p.permits_subsanation + ' subsanar');\n  if (p.reg_tasks_review > 0)     flagsTxt.push(p.reg_tasks_review + ' norm.review');\n  if (p.pathologies_critical > 0) flagsTxt.push('<span style=\"color:#7f1d1d\">' + p.pathologies_critical + ' patol.crit</span>');\n  else if (p.pathologies_open > 0) flagsTxt.push(p.pathologies_open + ' patol.');\n  if (p.aftercare_urgent > 0)     flagsTxt.push('<span style=\"color:#dc2626\">' + p.aftercare_urgent + ' aftercare.urg</span>');\n  else if (p.aftercare_open > 0)  flagsTxt.push(p.aftercare_open + ' aftercare');\n  if (p.anomalies_critical > 0)   flagsTxt.push('<span style=\"color:#7f1d1d\">' + p.anomalies_critical + ' anomal.crit</span>');\n  else if (p.anomalies_new > 0)   flagsTxt.push(p.anomalies_new + ' anomal.');\n  const flags = flagsTxt.length ? '<small style=\"color:#dc2626\">' + flagsTxt.join(' &middot; ') + '</small>' : '<small style=\"color:#10b981\">sin alertas</small>';\n  const margin = Number(p.certified || 0) - Number(p.billed || 0);\n  const marginColor = margin >= 0 ? '#10b981' : '#dc2626';\n  return '<tr>' +\n    '<td>' + flagBadge + '</td>' +\n    '<td><b>' + (p.name || '?') + '</b><br><small style=\"color:#6b7280\">' + (p.location_city || '') + ' &middot; ' + (p.project_type || '') + '</small></td>' +\n    '<td>' + (p.current_phase || '?') + '<br><small>' + Math.round(p.days_in_phase || 0) + 'd</small></td>' +\n    '<td>' + (p.reports_7d || 0) + '</td>' +\n    '<td>' + (p.invoices_7d || 0) + '</td>' +\n    '<td>' + (p.permits_active || 0) + '</td>' +\n    '<td>' + (p.estimated ? fmt(p.estimated) + 'eur' : '-') + '</td>' +\n    '<td>' + fmt(p.certified) + 'eur</td>' +\n    '<td>' + fmt(p.billed) + 'eur</td>' +\n    '<td style=\"color:' + marginColor + ';font-weight:bold\">' + fmt(margin) + 'eur</td>' +\n    '<td>' + flags + '</td>' +\n    '</tr>';\n}).join('');\nconst attention = list.filter(p => p.flag_score >= 5).length;\nconst review = list.filter(p => p.flag_score >= 2 && p.flag_score < 5).length;\nconst html = '<h2>Resumen semanal de proyectos activos</h2>' +\n  '<p>Total activos: <b>' + list.length + '</b> | Requieren atencion: <b style=\"color:#dc2626\">' + attention + '</b> | Por revisar: <b style=\"color:#f59e0b\">' + review + '</b></p>' +\n  '<table border=\"1\" cellpadding=\"6\" cellspacing=\"0\" style=\"border-collapse:collapse;font-family:sans-serif;font-size:12px\">' +\n  '<thead><tr style=\"background:#f3f4f6\">' +\n  '<th>Estado</th><th>Proyecto</th><th>Fase / dias</th><th>Reports 7d</th><th>Factu 7d</th><th>Permits</th><th>Estimado</th><th>Certificado</th><th>Facturado</th><th>Margen</th><th>Alertas</th>' +\n  '</tr></thead><tbody>' + rows + '</tbody></table>' +\n  '<p style=\"font-size:11px;color:#6b7280;margin-top:16px\">Margen = certificado - facturado. Reports 7d = visitas vision. Factu 7d = OCR de facturas. Cron lunes 08:30. Trigger manual: POST /webhook/trigger-weekly-summary.</p>';\nreturn [{ json: { html_body: html, count: list.length, attention: attention, review: review } }];"
+      }
+    },
+    {
+      "id": "ws-06",
+      "name": "Send Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        260,
+        320
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $('Load Architect Email').first().json.value }}",
+        "subject": "=ArquitAI — resumen semanal: {{ $json.count }} proyectos ({{ $json.attention }} atencion, {{ $json.review }} revisar)",
+        "emailType": "html",
+        "message": "={{ $json.html_body }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "PLACEHOLDER",
+          "name": "damian2botella"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "ws-07",
+      "name": "Log Activity",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        500,
+        320
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, status, input_summary)\nVALUES (NULL, 'cron_weekly_summary', 'review_active_projects', 'success', $1)\nRETURNING id;",
+        "options": {
+          "queryReplacement": "={{ [ ('proyectos=' + $json.count + ', atencion=' + $json.attention + ', review=' + $json.review) ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ws-08",
+      "name": "No Active",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        20,
+        480
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "25eb6ddd-3e69-44e2-88c9-5760ec830d8f",
+      "name": "Load Architect Email",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -580,
+        400
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT value FROM system_config WHERE key = 'architect_email'",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "45f576bf-6730-4528-b9d9-2c2d2abcae34",
+      "name": "Init Super Admin Context",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -580,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT set_config('app.role', 'super_admin', false) AS role_set"
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Build Snapshot": {
+      "main": [
+        [
+          {
+            "node": "Has Active?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Active?": {
+      "main": [
+        [
+          {
+            "node": "Build Email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Active",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Email": {
+      "main": [
+        [
+          {
+            "node": "Send Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Email": {
+      "main": [
+        [
+          {
+            "node": "Log Activity",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Load Architect Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Architect Email": {
+      "main": [
+        [
+          {
+            "node": "Build Snapshot",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Mon 8:30": {
+      "main": [
+        [
+          {
+            "node": "Init Super Admin Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Init Super Admin Context": {
+      "main": [
+        [
+          {
+            "node": "Load Architect Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": null,
+  "versionId": "2d75cd7c-1395-4d61-ad19-d52073f54648",
+  "tags": []
+}

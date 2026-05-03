@@ -1,0 +1,439 @@
+{
+  "name": "agent_financial_tracker",
+  "active": true,
+  "nodes": [
+    {
+      "id": "ft-01",
+      "name": "Webhook Invoice Upload",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -900,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "invoice-upload",
+        "responseMode": "responseNode",
+        "authentication": "headerAuth"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "PLACEHOLDER",
+          "name": "Webhook API Key (entrante)"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "webhookId": "58d5e224-7a16-4ebd-b001-ae76093586f7"
+    },
+    {
+      "id": "ft-02",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -680,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const body = $('Webhook Invoice Upload').first().json.body || {};\nif (!body.project_id) {\n  const e = { valid: false, error: 'project_id obligatorio' };\n  return [{ json: e }];\n}\nif (!body.photo_url || typeof body.photo_url !== 'string' || !body.photo_url.startsWith('http')) {\n  const e = { valid: false, error: 'photo_url http(s) obligatorio' };\n  return [{ json: e }];\n}\nconst out = {\n  valid: true,\n  project_id: body.project_id,\n  photo_url: body.photo_url,\n  trade_type_hint: body.trade_type || null,\n  notes: (body.notes || '').toString().slice(0, 1000),\n  started_at: Date.now()\n};\nreturn [{ json: out }];"
+      }
+    },
+    {
+      "id": "ft-03",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -460,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "v1",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ft-04",
+      "name": "Respond 400",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        -220,
+        480
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'error', error: $json.error}) }}",
+        "options": {
+          "responseCode": 400
+        }
+      }
+    },
+    {
+      "id": "ft-05",
+      "name": "Build OCR Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -220,
+        220
+      ],
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\nconst systemPrompt = 'Eres un experto en OCR de facturas espanolas. Extraes datos estructurados con precision. Responde SOLO con JSON valido sin markdown.';\nconst userText = [\n  'Extrae los datos de esta factura espanola.',\n  '',\n  input.trade_type_hint ? 'Pista de gremio (puede ayudar a categorizar): ' + input.trade_type_hint : '',\n  input.notes ? 'Notas del arquitecto: ' + input.notes : '',\n  '',\n  'Devuelve JSON exacto:',\n  '{',\n  '  \"supplier_name\": \"razon social del proveedor\",',\n  '  \"supplier_nif\": \"NIF/CIF si visible\",',\n  '  \"invoice_number\": \"numero de factura\",',\n  '  \"invoice_date\": \"YYYY-MM-DD\",',\n  '  \"base_amount\": 0.00,',\n  '  \"vat_amount\": 0.00,',\n  '  \"total_amount\": 0.00,',\n  '  \"vat_rate\": 21.00,',\n  '  \"category\": \"materiales|mano_obra|servicios|otros\",',\n  '  \"trade_type\": \"albanileria|fontaneria|electricidad|carpinteria|pintura|climatizacion|sanitarios|otros\",',\n  '  \"description\": \"resumen 1-2 frases del concepto\",',\n  '  \"line_items\": [{\"concepto\":\"...\", \"cantidad\":\"...\", \"precio_unit\":0, \"importe\":0}],',\n  '  \"confidence\": \"low|medium|high\"',\n  '}',\n  '',\n  'Si un dato no es legible: usa null. Marca confidence: \"low\" si la imagen tiene mala calidad o no es factura.'\n].filter(Boolean).join('\\n');\n\nconst payload = {\n  model: 'gpt-4o',\n  max_tokens: 1500,\n  temperature: 0.1,\n  messages: [\n    { role: 'system', content: systemPrompt },\n    { role: 'user', content: [\n      { type: 'text', text: userText },\n      { type: 'image_url', image_url: { url: input.photo_url, detail: 'high' } }\n    ]}\n  ]\n};\nreturn [{ json: { ...input, payload: payload } }];"
+      }
+    },
+    {
+      "id": "ft-06",
+      "name": "Call Vision OCR",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        0,
+        220
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.payload) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "PLACEHOLDER",
+          "name": "orquestador ArquiAI"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "ft-07",
+      "name": "Parse OCR",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        160
+      ],
+      "parameters": {
+        "jsCode": "const llm = $input.first().json;\nconst built = $('Build OCR Prompt').first().json;\nconst content = llm.choices && llm.choices[0] && llm.choices[0].message && llm.choices[0].message.content || '';\nconst usage = llm.usage || {};\nconst tokensIn = usage.prompt_tokens || 0;\nconst tokensOut = usage.completion_tokens || 0;\nconst cost = (tokensIn / 1000) * 0.0025 + (tokensOut / 1000) * 0.01;\n\nlet parsed = {};\ntry {\n  const m = content.match(/\\{[\\s\\S]*\\}/);\n  if (m) parsed = JSON.parse(m[0]);\n} catch(e) {\n  parsed = { confidence: 'low', description: 'Error parsing: ' + e.message };\n}\n\nconst summary = (parsed.supplier_name || '?') + ' #' + (parsed.invoice_number || '?') + ' - ' + (parsed.total_amount || 0) + 'eur (' + (parsed.invoice_date || '?') + ')';\n\nconst out = {\n  project_id: built.project_id,\n  photo_url: built.photo_url,\n  supplier_name: parsed.supplier_name || null,\n  supplier_nif: parsed.supplier_nif || null,\n  invoice_number: parsed.invoice_number || null,\n  invoice_date: parsed.invoice_date || null,\n  base_amount: typeof parsed.base_amount === 'number' ? parsed.base_amount : null,\n  vat_amount: typeof parsed.vat_amount === 'number' ? parsed.vat_amount : null,\n  total_amount: typeof parsed.total_amount === 'number' ? parsed.total_amount : null,\n  vat_rate: typeof parsed.vat_rate === 'number' ? parsed.vat_rate : null,\n  category: parsed.category || null,\n  trade_type: parsed.trade_type || built.trade_type_hint,\n  description: parsed.description || null,\n  ocr_summary: summary,\n  ocr_raw: parsed,\n  ocr_confidence: parsed.confidence || 'low',\n  llm_model: llm.model || 'gpt-4o',\n  llm_tokens_in: tokensIn,\n  llm_tokens_out: tokensOut,\n  llm_cost: Math.round(cost * 100000) / 100000,\n  notes: built.notes || null\n};\nreturn [{ json: out }];"
+      }
+    },
+    {
+      "id": "ft-08",
+      "name": "Insert Invoice",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        440,
+        160
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO invoices (\n  project_id, supplier_name, supplier_nif, invoice_number, invoice_date,\n  base_amount, vat_amount, total_amount, vat_rate,\n  category, trade_type, description, photo_url,\n  ocr_summary, ocr_raw, ocr_confidence,\n  llm_model, llm_tokens_in, llm_tokens_out, llm_cost, notes\n) VALUES (\n  $1::uuid, $2, $3, $4, NULLIF($5,'')::date,\n  NULLIF($6,'')::numeric, NULLIF($7,'')::numeric, NULLIF($8,'')::numeric, NULLIF($9,'')::numeric,\n  $10, $11, $12, $13,\n  $14, $15::jsonb, $16,\n  $17, $18::int, $19::int, $20::numeric, $21\n) RETURNING id, supplier_name, total_amount, ocr_confidence, status, webhook_token, invoice_number, invoice_date, vat_rate, base_amount, vat_amount, category, trade_type;",
+        "options": {
+          "queryReplacement": "={{ [\n  $json.project_id,\n  $json.supplier_name || '',\n  $json.supplier_nif || '',\n  $json.invoice_number || '',\n  $json.invoice_date || '',\n  $json.base_amount === null ? '' : String($json.base_amount),\n  $json.vat_amount === null ? '' : String($json.vat_amount),\n  $json.total_amount === null ? '' : String($json.total_amount),\n  $json.vat_rate === null ? '' : String($json.vat_rate),\n  $json.category || '',\n  $json.trade_type || '',\n  $json.description || '',\n  $json.photo_url,\n  $json.ocr_summary,\n  JSON.stringify($json.ocr_raw),\n  $json.ocr_confidence,\n  $json.llm_model,\n  $json.llm_tokens_in,\n  $json.llm_tokens_out,\n  $json.llm_cost,\n  $json.notes || ''\n] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ft-09",
+      "name": "Respond 201",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        660,
+        160
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'ocr_done', invoice_id: $('Insert Invoice').first().json.id, supplier: $('Insert Invoice').first().json.supplier_name, total: $('Insert Invoice').first().json.total_amount, confidence: $('Insert Invoice').first().json.ocr_confidence, invoice_status: $('Insert Invoice').first().json.status, decision_email_sent: true}) }}",
+        "options": {
+          "responseCode": 201
+        }
+      }
+    },
+    {
+      "id": "ft-10",
+      "name": "Handle OCR Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        320
+      ],
+      "parameters": {
+        "jsCode": "const err = $input.first().json;\nconst built = $('Build OCR Prompt').first().json;\nconst msg = (err && (err.message || (err.error && err.error.message))) || 'OCR error';\nreturn [{ json: { project_id: built.project_id, photo_url: built.photo_url, error: msg } }];"
+      }
+    },
+    {
+      "id": "ft-11",
+      "name": "Respond 502",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        440,
+        320
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'ocr_error', error: $json.error}) }}",
+        "options": {
+          "responseCode": 502
+        }
+      }
+    },
+    {
+      "id": "ft-12",
+      "name": "Build Decision Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        60
+      ],
+      "parameters": {
+        "jsCode": "const inv = $input.first().json;\nconst built = $('Build OCR Prompt').first().json;\nconst N8N = 'https://n8n-n8n.zzeluw.easypanel.host';\nconst tok = encodeURIComponent(inv.webhook_token || '');\nconst id = inv.id;\nconst approveUrl = N8N + '/webhook/invoice-decision?id=' + id + '&token=' + tok + '&decision=approved';\nconst disputeUrl = N8N + '/webhook/invoice-decision?id=' + id + '&token=' + tok + '&decision=disputed';\nconst rejectUrl = N8N + '/webhook/invoice-decision?id=' + id + '&token=' + tok + '&decision=rejected';\nconst total = inv.total_amount !== null && inv.total_amount !== undefined ? Number(inv.total_amount).toLocaleString('es-ES') + ' EUR' : '?';\nconst confColor = { high: '#10b981', medium: '#f59e0b', low: '#dc2626' }[inv.ocr_confidence] || '#6b7280';\nconst html = '<div style=\"font-family:Arial,sans-serif;max-width:600px;margin:0 auto\">' +\n  '<h2 style=\"color:#2c3e50\">Factura recibida — revisión requerida</h2>' +\n  '<table style=\"width:100%;border-collapse:collapse;font-size:13px\">' +\n  '<tr><td style=\"padding:6px 8px;background:#f3f4f6;font-weight:bold;width:140px\">Proveedor</td><td style=\"padding:6px 8px\">' + (inv.supplier_name || '?') + '</td></tr>' +\n  '<tr><td style=\"padding:6px 8px;background:#f3f4f6;font-weight:bold\">Número</td><td style=\"padding:6px 8px\">' + (inv.invoice_number || '?') + '</td></tr>' +\n  '<tr><td style=\"padding:6px 8px;background:#f3f4f6;font-weight:bold\">Fecha</td><td style=\"padding:6px 8px\">' + (inv.invoice_date || '?') + '</td></tr>' +\n  '<tr><td style=\"padding:6px 8px;background:#f3f4f6;font-weight:bold\">Base imponible</td><td style=\"padding:6px 8px\">' + (inv.base_amount !== null ? Number(inv.base_amount).toLocaleString('es-ES') + ' EUR' : '?') + '</td></tr>' +\n  '<tr><td style=\"padding:6px 8px;background:#f3f4f6;font-weight:bold\">IVA</td><td style=\"padding:6px 8px\">' + (inv.vat_rate || '?') + '% (' + (inv.vat_amount !== null ? Number(inv.vat_amount).toLocaleString('es-ES') + ' EUR' : '?') + ')</td></tr>' +\n  '<tr><td style=\"padding:6px 8px;background:#f3f4f6;font-weight:bold\">Total</td><td style=\"padding:6px 8px;font-size:16px;font-weight:bold;color:#2563eb\">' + total + '</td></tr>' +\n  '<tr><td style=\"padding:6px 8px;background:#f3f4f6;font-weight:bold\">Categoría</td><td style=\"padding:6px 8px\">' + (inv.category || '?') + ' / ' + (inv.trade_type || '?') + '</td></tr>' +\n  '<tr><td style=\"padding:6px 8px;background:#f3f4f6;font-weight:bold\">Confianza OCR</td><td style=\"padding:6px 8px\"><span style=\"background:' + confColor + ';color:white;padding:2px 8px;border-radius:3px\">' + (inv.ocr_confidence || '?').toUpperCase() + '</span></td></tr>' +\n  '</table>' +\n  '<p><a href=\"' + built.photo_url + '\">Ver factura original</a></p>' +\n  '<div style=\"margin:32px 0;text-align:center\">' +\n  '<a href=\"' + approveUrl + '\" style=\"background:#10b981;color:white;padding:12px 24px;text-decoration:none;border-radius:4px;font-size:15px;margin:0 6px\">✓ Aprobar</a>' +\n  '<a href=\"' + disputeUrl + '\" style=\"background:#f59e0b;color:white;padding:12px 24px;text-decoration:none;border-radius:4px;font-size:15px;margin:0 6px\">⚠ Disputar</a>' +\n  '<a href=\"' + rejectUrl + '\" style=\"background:#dc2626;color:white;padding:12px 24px;text-decoration:none;border-radius:4px;font-size:15px;margin:0 6px\">✗ Rechazar</a>' +\n  '</div>' +\n  '<p style=\"font-size:11px;color:#6b7280\">Invoice ID: ' + id + '</p>' +\n  '</div>';\nreturn [{ json: { html: html, supplier: inv.supplier_name || '?', total: total, invoice_id: id, status: inv.status, ocr_confidence: inv.ocr_confidence } }];"
+      }
+    },
+    {
+      "id": "ft-13",
+      "name": "Send Decision Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        880,
+        60
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $('Load Architect Email').first().json.value }}",
+        "subject": "=Factura por revisar — {{ $json.supplier }} ({{ $json.total }})",
+        "emailType": "html",
+        "message": "={{ $json.html }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "PLACEHOLDER",
+          "name": "damian2botella"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "9693452b-c820-4fed-b7dc-6ce1b4e8a171",
+      "name": "Load Architect Email",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -800,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT value FROM system_config WHERE key = 'architect_email'",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Validate Input": {
+      "main": [
+        [
+          {
+            "node": "Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid?": {
+      "main": [
+        [
+          {
+            "node": "Build OCR Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 400",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build OCR Prompt": {
+      "main": [
+        [
+          {
+            "node": "Call Vision OCR",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call Vision OCR": {
+      "main": [
+        [
+          {
+            "node": "Parse OCR",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Handle OCR Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse OCR": {
+      "main": [
+        [
+          {
+            "node": "Insert Invoice",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Handle OCR Error": {
+      "main": [
+        [
+          {
+            "node": "Respond 502",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Invoice": {
+      "main": [
+        [
+          {
+            "node": "Build Decision Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Decision Email": {
+      "main": [
+        [
+          {
+            "node": "Send Decision Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Decision Email": {
+      "main": [
+        [
+          {
+            "node": "Respond 201",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook Invoice Upload": {
+      "main": [
+        [
+          {
+            "node": "Load Architect Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Architect Email": {
+      "main": [
+        [
+          {
+            "node": "Validate Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": null,
+  "versionId": "5aeeda15-dba1-4439-8252-e0df50c872be",
+  "tags": []
+}

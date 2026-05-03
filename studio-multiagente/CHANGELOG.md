@@ -2,6 +2,69 @@
 
 Histórico cronológico de hitos del sistema. Generado a partir de git log.
 
+## 2026-05-03 — Bloque 56 (foxhole-ui M1 Foundation + setup X4)
+
+Plan 6h autonomo. X3 cerrado, X4 requiere intervencion Damian, asi que avanzamos
+en lo paralelo de mayor impacto.
+
+**B55 — Snapshot prod completo + 052 refinada**:
+- Snapshot 151 workflows produccion (vs 19 criticos previos). PA-6 anti-drift
+  al maximo.
+- 052_api_views.sql.draft refinada a 052_api_views.sql:
+  - Bug corregido: trade_assignments (no existe) -> trade_requests.
+  - Eliminadas columnas inexistentes en agent_executions (cost_usd, tokens_in/out).
+  - llm_cost_mtd_usd ahora via activity_log.llm_cost_estimated.
+  - 7 views creadas: v_project_summary, v_project_detail, v_timeline,
+    v_agent_runs, v_alerts (UNION 4 fuentes), v_dashboard_metrics, v_trade_overview.
+- Lista para Damian aplicar tras X4.
+
+**B56 — foxhole-ui M1 Foundation**:
+Repo nuevo en studio-multiagente/foxhole-ui/ con:
+- Stack: Vite 5 + React 19 + TypeScript 5.6 + Tailwind 3.4 + TanStack Query
+  + lucide-react + recharts.
+- Design system Foxhole completo (paleta + tipografia + componentes base).
+- Componentes: TopBar (sticky + indicador MOCK), DashboardKPIs (5 KPIs
+  agregados), ProjectCard (ficha tactica 110x140), PhaseColumnView (Kanban
+  9 columnas), ActivityFeed (alertas con iconos por tipo).
+- Paginas: DashboardPage (mapa global con search + KPIs + columns + feed),
+  ProjectDetailPage (zoom tactico placeholder M3).
+- API client con mock fallback automatico (api.ts). Si VITE_N8N_API_BASE
+  no esta seteado, usa mockData; si el fetch falla, fallback silencioso.
+- Mock data realista: 5 proyectos en distintas fases + 5 alertas + KPIs
+  calculados.
+- Tipos TypeScript espejo de las views v_* (types.ts).
+- README con setup + roadmap M1-M5 + paleta documentada.
+
+Damian solo hace `npm install && npm run dev` para ver UI funcional con mock.
+
+**docs/x4_auth_setup_guide.md**:
+- Guia paso a paso ~30min para configurar Supabase Auth.
+- 6 pasos numerados: enable email auth, copy creds, apply 051+053,
+  register custom access token hook, create user, link user_profile,
+  configure foxhole-ui .env, smoke curl validacion JWT.
+- Checklist final con 11 items para confirmar X4 hecho.
+- Plan claro post-X4: aplicar 052 + importar 7 workflows API + activar.
+
+Estado pipeline X1-X6:
+- X1: ✅ COMPLETO
+- X2: ✅ CERRADO 100%
+- X3: ✅ CERRADO 100% (con hardening crones B53-B54)
+- X4: ⏳ Esperando Damian (~30min). Guia detallada en docs/x4_auth_setup_guide.md.
+- X5: 📐 Migration 052 lista. Workflows en repo. Espera X4 + ~3-4h sesion.
+- X6 M1: ✅ Foundation listo (foxhole-ui scaffolding).
+- X6 M2-M5: bloqueados por X4+X5.
+
+Sin Damian, los siguientes pasos serian:
+1. M2 polish dashboard mock (1d).
+2. M3 ProjectDetailPage completo con timeline + agent runs + outputs (2d).
+
+Con Damian (X4 listo), los siguientes serian:
+1. X5 importar workflows API + smoke (3-4h).
+2. M4 conectar UI a API real (1d).
+3. M5 polish + responsive + a11y (2d).
+
+---
+
 ## 2026-05-03 — Bloque 54 (X3 followup): 47 crones blindados bajo RLS
 
 Tras 050b aplicada (super_admin bypass), parche masivo a los 47 crones at risk

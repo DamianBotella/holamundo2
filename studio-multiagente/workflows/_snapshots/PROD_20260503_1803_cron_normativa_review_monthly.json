@@ -1,0 +1,329 @@
+{
+  "name": "cron_normativa_review_monthly",
+  "active": true,
+  "nodes": [
+    {
+      "id": "cnr-01",
+      "name": "Schedule Day 1 06:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -700,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 6 1 * *"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "cnr-02",
+      "name": "Load Architect Email",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -460,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT value AS architect_email FROM system_config WHERE key = 'architect_email' LIMIT 1",
+        "options": {
+          "alwaysOutputData": true
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "cnr-03",
+      "name": "Snapshot Before",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -220,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT json_build_object('count_before', count(*), 'oldest_before', min(verified_date), 'avg_age_days', round(avg(EXTRACT(EPOCH FROM (now() - verified_date))/86400)::numeric, 0)) AS snapshot FROM normativa_knowledge",
+        "options": {
+          "alwaysOutputData": true
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "cnr-04",
+      "name": "Trigger Refresh",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        20,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://n8n-n8n.zzeluw.easypanel.host/webhook/normativa-refresh",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ trigger: 'monthly_cron' }) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "PLACEHOLDER",
+          "name": "Webhook API Key (entrante)"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "cnr-05",
+      "name": "Wait 90s",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        260,
+        300
+      ],
+      "parameters": {
+        "amount": 90,
+        "unit": "seconds"
+      }
+    },
+    {
+      "id": "cnr-06",
+      "name": "Snapshot After",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        500,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT json_build_object('count_after', count(*), 'newest_after', max(verified_date), 'updated_24h', count(*) FILTER (WHERE verified_date > now() - INTERVAL '24 hours')) AS snapshot FROM normativa_knowledge",
+        "options": {
+          "alwaysOutputData": true
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "cnr-07",
+      "name": "Build Summary Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        740,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const before = $('Snapshot Before').first().json.snapshot || {};\nconst after = $('Snapshot After').first().json.snapshot || {};\nconst html = `<div style=\"font-family:system-ui,sans-serif;color:#222;max-width:680px\">\n<h2>Normativa cache refresh mensual</h2>\n<table style=\"border-collapse:collapse;font-size:14px\">\n  <tr><td style=\"padding:6px 12px;color:#666\">Antes:</td><td style=\"padding:6px 12px\"><b>${before.count_before || 0}</b> entries, oldest ${before.oldest_before || '-'}, avg age ${before.avg_age_days || '?'}d</td></tr>\n  <tr><td style=\"padding:6px 12px;color:#666\">Despues:</td><td style=\"padding:6px 12px\"><b>${after.count_after || 0}</b> entries, newest ${after.newest_after || '-'}</td></tr>\n  <tr><td style=\"padding:6px 12px;color:#666\">Actualizadas 24h:</td><td style=\"padding:6px 12px;color:${(after.updated_24h || 0) > 0 ? '#27ae60' : '#c00'};font-weight:600\">${after.updated_24h || 0}</td></tr>\n</table>\n<p style=\"font-size:13px;color:#555;margin-top:16px\">Si <code>actualizadas 24h</code> = 0, agent_normativa_refresh no ejecuto correctamente. Revisar logs en n8n executions list.</p>\n<p style=\"font-size:12px;color:#888;margin-top:24px\">cron_normativa_review_monthly - generado ${new Date().toISOString()}</p>\n</div>`;\nreturn [{ json: { html, subject: '[Normativa cache] Refresh mensual: ' + (after.updated_24h || 0) + ' actualizadas' } }];"
+      }
+    },
+    {
+      "id": "cnr-08",
+      "name": "Send Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        980,
+        300
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $('Load Architect Email').first().json.architect_email }}",
+        "subject": "={{ $json.subject }}",
+        "emailType": "html",
+        "message": "={{ $json.html }}",
+        "options": {}
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "PLACEHOLDER",
+          "name": "Gmail Notifications"
+        }
+      }
+    },
+    {
+      "id": "cnr-09",
+      "name": "Log Run",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1220,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, status, output_summary) VALUES (NULL, 'cron_normativa_review_monthly', 'normativa_review_monthly_clean', 'success', $1)",
+        "options": {
+          "queryReplacement": "={{ [ 'count_after=' + ($('Snapshot After').first().json.snapshot.count_after || 0) + ' updated_24h=' + ($('Snapshot After').first().json.snapshot.updated_24h || 0) ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "98d46b62-c1da-4453-a304-36bea8fbde74",
+      "name": "Init Super Admin Context",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -580,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT set_config('app.role', 'super_admin', false) AS role_set"
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Load Architect Email": {
+      "main": [
+        [
+          {
+            "node": "Snapshot Before",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Snapshot Before": {
+      "main": [
+        [
+          {
+            "node": "Trigger Refresh",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Trigger Refresh": {
+      "main": [
+        [
+          {
+            "node": "Wait 90s",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait 90s": {
+      "main": [
+        [
+          {
+            "node": "Snapshot After",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Snapshot After": {
+      "main": [
+        [
+          {
+            "node": "Build Summary Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Summary Email": {
+      "main": [
+        [
+          {
+            "node": "Send Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Email": {
+      "main": [
+        [
+          {
+            "node": "Log Run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Day 1 06:00": {
+      "main": [
+        [
+          {
+            "node": "Init Super Admin Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Init Super Admin Context": {
+      "main": [
+        [
+          {
+            "node": "Load Architect Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": null,
+  "versionId": "a6ad87ff-3557-4ca2-a224-82bb9a1206f3",
+  "tags": []
+}

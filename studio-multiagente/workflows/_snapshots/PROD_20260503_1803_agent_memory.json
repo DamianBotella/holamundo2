@@ -1,0 +1,429 @@
+{
+  "name": "agent_memory",
+  "active": true,
+  "nodes": [
+    {
+      "id": "am-01",
+      "name": "Receive Project",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    },
+    {
+      "id": "am-02",
+      "name": "Load All Project Data",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        250,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH _ts AS (SELECT set_config('app.current_tenant', COALESCE(resolve_tenant_from_project($1::uuid)::text, ''), false) AS s) SELECT q.* FROM (SELECT p.id, p.name as project_name, p.project_type, p.budget_target, p.location_city, p.location_province, p.property_type, p.property_area_m2, p.urgency, p.current_phase, p.started_at, p.target_completion, c.name as client_name, (SELECT row_to_json(b.*) FROM briefings b WHERE b.project_id = p.id AND b.status = 'approved' ORDER BY b.created_at DESC LIMIT 1) as briefing, (SELECT row_to_json(d.*) FROM design_options d WHERE d.project_id = p.id AND d.is_selected = true LIMIT 1) as design_option, (SELECT row_to_json(ce.*) FROM cost_estimates ce WHERE ce.project_id = p.id ORDER BY ce.version DESC LIMIT 1) as cost_estimate, (SELECT json_agg(json_build_object('trade_type', tr.trade_type, 'scope_description', tr.scope_description) ORDER BY tr.trade_type) FROM trade_requests tr WHERE tr.project_id = p.id AND tr.status = 'prepared') as trade_assignments, (SELECT row_to_json(pp.*) FROM project_plans pp WHERE pp.project_id = p.id ORDER BY pp.created_at DESC LIMIT 1) as project_plan, (SELECT json_agg(json_build_object('category', mi.category, 'name', mi.name, 'brand', mi.brand, 'quality_tier', mi.quality_tier) ORDER BY mi.category) FROM material_items mi WHERE mi.project_id = p.id AND mi.status = 'approved' LIMIT 20) as approved_materials, (SELECT json_agg(json_build_object('key', pi.key, 'value', pi.value, 'agent_name', pi.agent_name) ORDER BY pi.created_at) FROM project_intelligence pi WHERE pi.project_id = p.id) as intelligence_entries FROM projects p JOIN clients c ON c.id = p.client_id WHERE p.id = $1::uuid) q, _ts",
+        "options": {
+          "queryReplacement": "={{ [$json.project_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "am-03",
+      "name": "Build Memory Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        500,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const d = $('Load All Project Data').first().json;\nconst dbPrompt = $input.first().json;\n\nconst briefing = typeof d.briefing === 'string' ? JSON.parse(d.briefing) : (d.briefing || {});\nconst design = typeof d.design_option === 'string' ? JSON.parse(d.design_option) : (d.design_option || {});\nconst costs = typeof d.cost_estimate === 'string' ? JSON.parse(d.cost_estimate) : (d.cost_estimate || {});\nconst plan = typeof d.project_plan === 'string' ? JSON.parse(d.project_plan) : (d.project_plan || {});\nconst trades = Array.isArray(d.trade_assignments) ? d.trade_assignments : [];\nconst materials = Array.isArray(d.approved_materials) ? d.approved_materials : [];\nconst intel = Array.isArray(d.intelligence_entries) ? d.intelligence_entries : [];\nconst breakdown = Array.isArray(costs.breakdown) ? costs.breakdown : [];\n\nconst tradesSummary = trades.map(t => `${t.trade_type || t.specialty}: ${t.scope_description ? t.scope_description.substring(0, 60) : '?'}`).join(', ');\nconst materialsSummary = materials.slice(0, 10).map(m => `${m.category}: ${m.name} (${m.brand || 'sin marca'}, ${m.quality_tier || '?'})`).join('; ');\nconst partidas = breakdown.slice(0, 10).map(p => `${p.partida || p.description}: ${p.importe || p.amount || '?'}€`).join('; ');\n\nconst prompt_system_fallback = `Eres un arquitecto técnico experto en reformas de vivienda en España.\nAnalizas proyectos completados para extraer conocimiento reutilizable en futuros proyectos similares.\nDevuelve ÚNICAMENTE un JSON válido, sin texto adicional.\n\nEstructura exacta requerida:\n{\n  \"summary\": string (resumen de 2-3 líneas del proyecto y su alcance),\n  \"scope_summary\": string (descripción técnica del alcance: qué habitaciones, qué trabajos),\n  \"decisions_made\": [\n    {\"decision\": string, \"rationale\": string, \"impact\": string}\n  ],\n  \"lessons_learned\": [\n    {\"lesson\": string, \"category\": \"presupuesto|normativa|diseño|gremios|materiales|plazos\", \"importance\": \"alta|media|baja\"}\n  ],\n  \"patterns\": [\n    {\"pattern\": string, \"category\": \"presupuesto|normativa|diseño|gremios|materiales\", \"description\": string}\n  ],\n  \"tags\": string[]\n}\n\nInstrucciones:\n- Las decisiones_made deben reflejar las elecciones clave del proyecto (opción de diseño, materiales destacados, soluciones técnicas)\n- Los lessons_learned deben ser patrones útiles para proyectos futuros (riesgos, oportunidades, estimaciones)\n- Los patterns son tendencias observables en este tipo de proyecto/zona\n- Las tags son palabras clave para búsquedas futuras (tipo reforma, zona, complejidad, gremios, etc.)`;\n// === STUDIO PROFILE INJECTION (B24) ===\nconst _studio = $('Load Studio Profile').first().json || {};\nfunction _safeStudio(v){ if(v==null)return null; if(typeof v==='string'){try{return JSON.parse(v);}catch(e){return v;}} return v; }\nconst _id=_safeStudio(_studio.identity)||{},_priorities=_safeStudio(_studio.priorities)||[];\nconst _SP_MEM_LINES=[];\n_SP_MEM_LINES.push('Estudio: '+(_id.nombre_estudio||'estudio')+' en '+(_id.ciudad||'Espana')+'.');\n_SP_MEM_LINES.push('PRIORIDADES del estudio (extrae lessons_learned coherentes con estas):');\n(_priorities||[]).forEach(p=>_SP_MEM_LINES.push((p.orden||'?')+'. '+(p.prioridad||'')));\nconst _SP_MEM=_SP_MEM_LINES.join('\\n');\n// === END STUDIO PROFILE INJECTION ===\nconst prompt_system = _SP_MEM + '\\n\\n' + ((dbPrompt && dbPrompt.content) ? dbPrompt.content : prompt_system_fallback);  \n\nconst prompt_user = `PROYECTO: ${d.project_name}\nTipo: ${d.project_type} | Propiedad: ${d.property_type} | Área: ${d.property_area_m2} m²\nUbicación: ${d.location_city}, ${d.location_province}\nPresupuesto estimado: ${costs.total_estimated || '?'}€\nDuración planificada: ${plan.total_duration_days ? Math.round(plan.total_duration_days / 7) + ' semanas' : '?'}\n\nOPCIÓN DE DISEÑO ELEGIDA: ${design.title || design.option_name || 'No especificada'}\n${design.description ? 'Descripción: ' + design.description : ''}\n\nGREMIOS Y COSTES: ${tradesSummary || 'No disponible'}\n\nPRINCIPALES PARTIDAS: ${partidas || 'No disponible'}\n\nMATERIALES APROBADOS: ${materialsSummary || 'No disponible'}\n\nCONTEXTO ADICIONAL (project_intelligence):\n${intel.slice(0, 5).map(i => `[${i.agent_name}/${i.key}]: ${JSON.stringify(i.value).substring(0, 200)}`).join('\\n') || 'Sin intel adicional'}\n\nExtrae el conocimiento clave de este proyecto en JSON.`;\n\nreturn [{\n  json: {\n    ...d,\n    cost_estimated: costs.total_estimated || null,\n    duration_estimated_days: plan.total_duration_days || null,\n    trades_used_json: JSON.stringify(trades.map(t => ({trade_type: t.trade_type, scope_description: t.scope_description}))),\n    materials_notable_json: JSON.stringify(materials.slice(0, 15)),\n    prompt_system,\n    prompt_user,\n    model: 'gpt-4o',\n    temperature: 0.4,\n    project_id: d.id,\n    agent_name: 'agent_memory'\n  }\n}];"
+      }
+    },
+    {
+      "id": "am-04",
+      "name": "Call LLM",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.1,
+      "position": [
+        750,
+        300
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "JoKqGZ8pDzhJohV2",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "am-05",
+      "name": "Parse Memory Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1000,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const project = $('Build Memory Prompt').first().json;\nconst llm = $input.first().json;\nconst text = llm.text || '';\n\nlet mem = {};\nlet parse_error = null;\n\ntry {\n  const match = text.match(/\\{[\\s\\S]*\\}/);\n  if (!match) throw new Error('No JSON found in LLM response');\n  mem = JSON.parse(match[0]);\n} catch(e) {\n  parse_error = e.message;\n  mem = {\n    summary: project.project_name + ' — ' + project.project_type + ' en ' + project.location_city,\n    scope_summary: project.property_area_m2 + ' m², ' + (project.property_type || 'piso'),\n    decisions_made: [],\n    lessons_learned: [],\n    patterns: [],\n    tags: [project.project_type, project.location_province || 'esp', project.property_type || 'piso'].filter(Boolean)\n  };\n}\n\nconst tags = Array.isArray(mem.tags) ? mem.tags : [];\nif (project.project_type && !tags.includes(project.project_type)) tags.push(project.project_type);\nif (project.location_province) tags.push(project.location_province.toLowerCase().replace(/\\s+/g, '_'));\nif (project.property_type) tags.push(project.property_type);\n\nreturn [{\n  json: {\n    project_id: project.id,\n    project_type: project.project_type,\n    location_zone: project.location_province || project.location_city,\n    property_type: project.property_type,\n    area_m2: project.property_area_m2,\n    cost_estimated: project.cost_estimated,\n    duration_estimated_days: project.duration_estimated_days,\n    summary: mem.summary || '',\n    scope_summary: mem.scope_summary || '',\n    decisions_made_json: JSON.stringify(mem.decisions_made || []),\n    lessons_learned_json: JSON.stringify(mem.lessons_learned || []),\n    patterns_json: JSON.stringify(mem.patterns || []),\n    trades_used_json: project.trades_used_json,\n    materials_notable_json: project.materials_notable_json,\n    tags_array: tags.slice(0, 20),\n    parse_error: parse_error || null\n  }\n}];"
+      }
+    },
+    {
+      "id": "am-06",
+      "name": "Save Memory Case",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1250,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO memory_cases (project_id, project_type, location_zone, property_type, area_m2, summary, scope_summary, decisions_made, cost_estimated, duration_estimated_days, trades_used, materials_notable, lessons_learned, patterns, tags) VALUES ($1::uuid, $2, $3, $4, $5::numeric, $6, $7, $8::jsonb, $9::numeric, $10::integer, $11::jsonb, $12::jsonb, $13::jsonb, $14::jsonb, $15::text[]) RETURNING id",
+        "options": {
+          "queryReplacement": "={{ [$json.project_id, $json.project_type, $json.location_zone, $json.property_type, $json.area_m2, $json.summary, $json.scope_summary, $json.decisions_made_json, $json.cost_estimated, $json.duration_estimated_days, $json.trades_used_json, $json.materials_notable_json, $json.lessons_learned_json, $json.patterns_json, $json.tags_array] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "am-07",
+      "name": "Write Intelligence",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1500,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO project_intelligence (project_id, agent_name, key, value) VALUES ($1::uuid, 'agent_memory', 'memory_captured', $2::jsonb) ON CONFLICT (project_id, agent_name, key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()",
+        "options": {
+          "queryReplacement": "={{ [$('Parse Memory Response').first().json.project_id, JSON.stringify({memory_case_id: $input.first().json.id, lessons_count: JSON.parse($('Parse Memory Response').first().json.lessons_learned_json).length, patterns_count: JSON.parse($('Parse Memory Response').first().json.patterns_json).length})] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "am-08",
+      "name": "Return Success",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1750,
+        300
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "m1",
+              "name": "status",
+              "value": "complete",
+              "type": "string"
+            },
+            {
+              "id": "m2",
+              "name": "memory_case_id",
+              "value": "={{ $('Save Memory Case').first().json.id }}",
+              "type": "string"
+            },
+            {
+              "id": "m3",
+              "name": "lessons_count",
+              "value": "={{ JSON.parse($('Parse Memory Response').first().json.lessons_learned_json).length }}",
+              "type": "number"
+            },
+            {
+              "id": "m4",
+              "name": "project_id",
+              "value": "={{ $('Parse Memory Response').first().json.project_id }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "am-load-prompt",
+      "name": "Load Memory Prompt",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        400,
+        150
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT content FROM agent_prompts WHERE agent_name = 'agent_memory' AND prompt_type = 'system' AND is_active = true LIMIT 1",
+        "options": {
+          "alwaysOutputData": true
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "am-build-emb",
+      "name": "Build Embedding Text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1375,
+        450
+      ],
+      "parameters": {
+        "jsCode": "const saved = $input.first().json;\nconst parsed = $('Parse Memory Response').first().json;\nconst lessons = (parsed.lessons_learned_json) ? JSON.parse(parsed.lessons_learned_json) : [];\nconst patterns = (parsed.patterns_json) ? JSON.parse(parsed.patterns_json) : [];\nconst lessonsText = lessons.slice(0, 5).map(l => l.lesson || JSON.stringify(l)).join('. ');\nconst patternsText = patterns.slice(0, 3).map(p => p.pattern || JSON.stringify(p)).join('. ');\nconst tags = parsed.tags_array || [];\nconst parts = [];\nif (parsed.project_type) parts.push('Tipo: ' + parsed.project_type);\nif (parsed.location_zone) parts.push('Zona: ' + parsed.location_zone);\nif (parsed.property_type) parts.push('Inmueble: ' + parsed.property_type);\nif (parsed.area_m2) parts.push('Area: ' + parsed.area_m2 + ' m2');\nif (parsed.summary) parts.push('Resumen: ' + parsed.summary);\nif (parsed.scope_summary) parts.push('Alcance: ' + parsed.scope_summary);\nif (lessonsText) parts.push('Lecciones: ' + lessonsText);\nif (patternsText) parts.push('Patrones: ' + patternsText);\nif (tags.length) parts.push('Tags: ' + tags.join(', '));\nconst text = parts.join('. ');\nreturn [{ json: { memory_case_id: saved.id, text } }];"
+      }
+    },
+    {
+      "id": "am-gen-emb",
+      "name": "Generate Embedding",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.1,
+      "position": [
+        1625,
+        450
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "xZaguYuuTG0mXSf2",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "am-save-emb",
+      "name": "Save Embedding",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1875,
+        450
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE memory_cases SET embedding = $1::vector, embedding_text = $2 WHERE id = $3::uuid RETURNING id",
+        "options": {
+          "queryReplacement": "={{ [$json.embedding ? '[' + $json.embedding.join(',') + ']' : null, $('Build Embedding Text').first().json.text, $('Build Embedding Text').first().json.memory_case_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      },
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "am-load-studio",
+      "name": "Load Studio Profile",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        400,
+        460
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM get_active_studio_profile();",
+        "options": {
+          "alwaysOutputData": true
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Build Memory Prompt": {
+      "main": [
+        [
+          {
+            "node": "Call LLM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call LLM": {
+      "main": [
+        [
+          {
+            "node": "Parse Memory Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Memory Response": {
+      "main": [
+        [
+          {
+            "node": "Save Memory Case",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write Intelligence": {
+      "main": [
+        [
+          {
+            "node": "Return Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load All Project Data": {
+      "main": [
+        [
+          {
+            "node": "Load Memory Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Memory Case": {
+      "main": [
+        [
+          {
+            "node": "Build Embedding Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Embedding Text": {
+      "main": [
+        [
+          {
+            "node": "Generate Embedding",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Embedding": {
+      "main": [
+        [
+          {
+            "node": "Save Embedding",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Embedding": {
+      "main": [
+        [
+          {
+            "node": "Write Intelligence",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Memory Prompt": {
+      "main": [
+        [
+          {
+            "node": "Load Studio Profile",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Studio Profile": {
+      "main": [
+        [
+          {
+            "node": "Build Memory Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Receive Project": {
+      "main": [
+        [
+          {
+            "node": "Load All Project Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": null,
+  "versionId": "e805e049-27f7-4c41-8488-9786a9bb07b1",
+  "tags": []
+}

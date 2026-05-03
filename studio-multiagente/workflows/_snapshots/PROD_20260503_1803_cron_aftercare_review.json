@@ -1,0 +1,328 @@
+{
+  "name": "cron_aftercare_review",
+  "active": true,
+  "nodes": [
+    {
+      "id": "ac-01",
+      "name": "Schedule Daily 9am",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -700,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "daysInterval": 1,
+              "triggerAtHour": 9,
+              "triggerAtMinute": 30
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "ac-02",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -700,
+        500
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "trigger-aftercare-review",
+        "responseMode": "lastNode",
+        "authentication": "headerAuth"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "PLACEHOLDER",
+          "name": "Webhook API Key (entrante)"
+        }
+      },
+      "webhookId": "63f5377b-8c89-41af-8439-a4480f1ad9f0"
+    },
+    {
+      "id": "ac-03",
+      "name": "Find Pending",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -460,
+        400
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT json_agg(row_to_json(t) ORDER BY t.urgency_score DESC, t.reported_at) AS rows\nFROM (\n  SELECT\n    ai.id, ai.reporter, ai.description, ai.category, ai.responsible_trade,\n    ai.severity, ai.loe_period, ai.under_warranty, ai.status,\n    ai.assigned_to, ai.reported_at, ai.assigned_at,\n    p.id AS project_id, p.name AS project_name,\n    EXTRACT(EPOCH FROM (now() - ai.reported_at))/86400 AS days_open,\n    CASE WHEN ai.assigned_at IS NOT NULL THEN EXTRACT(EPOCH FROM (now() - ai.assigned_at))/86400 ELSE NULL END AS days_assigned,\n    CASE ai.severity\n      WHEN 'urgent' THEN 100\n      WHEN 'high'   THEN 50\n      WHEN 'medium' THEN 20\n      ELSE 5\n    END +\n    CASE WHEN EXTRACT(EPOCH FROM (now() - ai.reported_at))/86400 > 14 THEN 30 ELSE 0 END +\n    CASE WHEN ai.assigned_at IS NOT NULL AND EXTRACT(EPOCH FROM (now() - ai.assigned_at))/86400 > 7 THEN 20 ELSE 0 END +\n    CASE WHEN ai.under_warranty = false THEN -50 ELSE 0 END AS urgency_score\n  FROM aftercare_incidents ai\n  JOIN projects p ON p.id = ai.project_id\n  WHERE ai.status NOT IN ('resolved','closed','disputed')\n) t;",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "id": "ac-04",
+      "name": "Has Pending?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -220,
+        400
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "h1",
+              "leftValue": "={{ ($json.rows && $json.rows.length) || 0 }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ac-05",
+      "name": "Build Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        20,
+        320
+      ],
+      "parameters": {
+        "jsCode": "const list = $input.first().json.rows || [];\nconst rows = list.map(p => {\n  const sevColor = { urgent: '#dc2626', high: '#ea580c', medium: '#f59e0b', low: '#10b981' }[p.severity] || '#6b7280';\n  const sevBadge = '<span style=\"background:' + sevColor + ';color:white;padding:2px 6px;border-radius:3px\">' + (p.severity || '?').toUpperCase() + '</span>';\n  const warrTxt = p.under_warranty ? '<span style=\"color:#10b981\">en garantia (' + p.loe_period + 'a)</span>' : '<span style=\"color:#dc2626\">fuera garantia</span>';\n  const flags = [];\n  if (p.days_open > 14) flags.push('+' + Math.round(p.days_open) + 'd sin avance');\n  if (p.days_assigned !== null && p.days_assigned > 7) flags.push('+' + Math.round(p.days_assigned) + 'd asignada');\n  if (p.severity === 'urgent') flags.push('URGENTE');\n  const flagsStr = flags.length ? '<small style=\"color:#dc2626\">' + flags.join(' &middot; ') + '</small>' : '<small style=\"color:#6b7280\">-</small>';\n  return '<tr>' +\n    '<td>' + sevBadge + '</td>' +\n    '<td><b>' + (p.project_name || '?') + '</b><br><small>' + warrTxt + '</small></td>' +\n    '<td>' + (p.category || '?') + '<br><small>' + (p.responsible_trade || '?') + '</small></td>' +\n    '<td>' + (p.status || '?') + '<br><small>' + (p.assigned_to || '— sin asignar') + '</small></td>' +\n    '<td>' + Math.round(p.days_open) + 'd</td>' +\n    '<td><small>' + (p.description || '').substring(0, 120) + '…</small></td>' +\n    '<td>' + flagsStr + '</td>' +\n    '</tr>';\n}).join('');\nconst urgent = list.filter(p => p.severity === 'urgent').length;\nconst stale = list.filter(p => p.days_open > 14).length;\nconst html = '<h2>Postventa LOE — incidencias abiertas</h2>' +\n  '<p>Total abiertas: <b>' + list.length + '</b> | Urgentes: <b style=\"color:#dc2626\">' + urgent + '</b> | Sin avance &gt;14d: <b style=\"color:#f59e0b\">' + stale + '</b></p>' +\n  '<table border=\"1\" cellpadding=\"6\" cellspacing=\"0\" style=\"border-collapse:collapse;font-family:sans-serif;font-size:13px\">' +\n  '<thead><tr style=\"background:#f3f4f6\"><th>Sev.</th><th>Proyecto</th><th>Categoria/Gremio</th><th>Estado</th><th>Abierta</th><th>Descripcion</th><th>Alertas</th></tr></thead>' +\n  '<tbody>' + rows + '</tbody></table>' +\n  '<p style=\"font-size:11px;color:#6b7280\">Asignar: POST /webhook/aftercare-assign con {incident_id, assigned_to}.<br>Resolver: POST /webhook/aftercare-resolve con {incident_id, resolution_notes}.</p>';\nreturn [{ json: { html_body: html, count: list.length, urgent: urgent, stale: stale } }];"
+      }
+    },
+    {
+      "id": "ac-06",
+      "name": "Send Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        260,
+        320
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $('Load Architect Email').first().json.value }}",
+        "subject": "=ArquitAI postventa LOE — {{ $json.count }} incidencia(s) abiertas ({{ $json.urgent }} urgentes)",
+        "emailType": "html",
+        "message": "={{ $json.html_body }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "PLACEHOLDER",
+          "name": "damian2botella"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "ac-07",
+      "name": "Log",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        500,
+        320
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, status, input_summary)\nVALUES (NULL, 'cron_aftercare_review', 'review_open_incidents', 'success', $1)\nRETURNING id;",
+        "options": {
+          "queryReplacement": "={{ [ ('total=' + $json.count + ', urgent=' + $json.urgent + ', stale=' + $json.stale) ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ac-08",
+      "name": "No Pending",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        20,
+        480
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "faec5fbf-8b1f-42ad-a5c8-b5d05c17e8fb",
+      "name": "Load Architect Email",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -580,
+        400
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT value FROM system_config WHERE key = 'architect_email'",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "30a2f236-b7dc-499a-bd1e-2b63d5b9e29f",
+      "name": "Init Super Admin Context",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -580,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT set_config('app.role', 'super_admin', false) AS role_set"
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Find Pending": {
+      "main": [
+        [
+          {
+            "node": "Has Pending?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Pending?": {
+      "main": [
+        [
+          {
+            "node": "Build Email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Pending",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Email": {
+      "main": [
+        [
+          {
+            "node": "Send Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Email": {
+      "main": [
+        [
+          {
+            "node": "Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Load Architect Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Architect Email": {
+      "main": [
+        [
+          {
+            "node": "Find Pending",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Daily 9am": {
+      "main": [
+        [
+          {
+            "node": "Init Super Admin Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Init Super Admin Context": {
+      "main": [
+        [
+          {
+            "node": "Load Architect Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": null,
+  "versionId": "e985dac8-09cf-4f4a-819b-a130fd0de719",
+  "tags": []
+}

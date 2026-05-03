@@ -1,0 +1,245 @@
+{
+  "name": "SUB-WORKFLOW AEMET",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "url": "https://opendata.aemet.es/opendata/api/observacion/convencional/todas",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "api_key",
+              "value": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJib3RlbGxhZGVzZGVlbDk4QGdtYWlsLmNvbSIsImp0aSI6ImQxMTAwNDcyLWZjZGEtNDQ4ZC05MWVhLWVmZDlmMTMzYzljOSIsImlzcyI6IkFFTUVUIiwiaWF0IjoxNzcyMjAxNzUwLCJ1c2VySWQiOiJkMTEwMDQ3Mi1mY2RhLTQ0OGQtOTFlYS1lZmQ5ZjEzM2M5YzkiLCJyb2xlIjoiIn0.pAJDItTOiXCTu_8oXzEWqLhGeZk1gXkIAS-Sa0MAR_Y"
+            }
+          ]
+        },
+        "options": {
+          "batching": {
+            "batch": {}
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        816,
+        -48
+      ],
+      "id": "14296601-163d-4b1b-9811-b6b86b5c9d0d",
+      "name": "AEMET 1"
+    },
+    {
+      "parameters": {
+        "url": "={{$json[\"datos\"]}}",
+        "options": {
+          "batching": {
+            "batch": {}
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1232,
+        -48
+      ],
+      "id": "2df312cb-8dd9-4eeb-980e-59357643d726",
+      "name": "AEMET 2"
+    },
+    {
+      "parameters": {
+        "jsCode": "// =========================\n// CONFIGURACIÓN\n// =========================\nconst COORD_NODE = 'ADAPTADOR';          // nombre exacto del nodo que tiene lat/lon\nconst TIMEZONE = 'Europe/Madrid';        // hora local España\nconst MAX_AGE_MINUTES = 180;             // preferir estaciones con dato reciente (3h); si no hay, elige la más cercana igualmente\nconst DEBUG_TOP_N = 0;                   // pon 5 si quieres devolver top 5 cercanas para debug (0 = no)\n\n// =========================\n// 1) Coordenadas del lugar (Nominatim -> ADAPTADOR)\n// =========================\nconst user = $(COORD_NODE).first().json;\nconst userLat = Number(user.lat);\nconst userLon = Number(user.lon);\n\nif (!Number.isFinite(userLat) || !Number.isFinite(userLon)) {\n  throw new Error(`No hay lat/lon válidos en el nodo \"${COORD_NODE}\".`);\n}\n\n// =========================\n// 2) Leer datos de AEMET (AEMET2)\n// =========================\nconst payload = items[0].json;\n\n// AEMET2 en n8n a veces viene como { data: \"....JSON....\" }\nlet rows = [];\nif (typeof payload?.data === 'string') {\n  try {\n    rows = JSON.parse(payload.data);\n  } catch (e) {\n    throw new Error('AEMET2 trae \"data\" como string, pero no es JSON válido.');\n  }\n} else if (Array.isArray(payload)) {\n  rows = payload;\n} else if (Array.isArray(payload?.data)) {\n  rows = payload.data;\n} else if (typeof payload === 'string') {\n  rows = JSON.parse(payload);\n} else {\n  rows = payload;\n}\n\nif (!Array.isArray(rows) || rows.length === 0) {\n  throw new Error('AEMET no devolvió datos (array vacío o formato inesperado).');\n}\n\n// =========================\n// 3) Helpers: lat/lon, Haversine, timestamp robusto\n// =========================\nconst toNumber = (v) => {\n  if (v === null || v === undefined) return NaN;\n  return Number(String(v).replace(',', '.'));\n};\n\nconst toRad = (deg) => (deg * Math.PI) / 180;\n\nconst haversineKm = (lat1, lon1, lat2, lon2) => {\n  const R = 6371;\n  const dLat = toRad(lat2 - lat1);\n  const dLon = toRad(lon2 - lon1);\n  const a =\n    Math.sin(dLat / 2) ** 2 +\n    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;\n  return 2 * R * Math.asin(Math.sqrt(a));\n};\n\n// AEMET a veces devuelve fint como \"2026-02-28T07:00:00+0000\" (sin dos puntos)\n// Normalizamos a \"+00:00\" para que Date.parse sea fiable.\nconst normalizeOffset = (s) => {\n  if (typeof s !== 'string') return s;\n  return s.replace(/([+-]\\d{2})(\\d{2})$/, '$1:$2');\n};\n\nconst parseFintToMs = (fint) => {\n  if (!fint) return NaN;\n  const norm = normalizeOffset(fint);\n  const ms = Date.parse(norm);\n  return Number.isFinite(ms) ? ms : NaN;\n};\n\n// ✅ Hora España (dependiendo de soporte ICU del sistema)\nconst formatMadridTime = (ms) => {\n  try {\n    const dtf = new Intl.DateTimeFormat('es-ES', {\n      timeZone: TIMEZONE,\n      year: 'numeric',\n      month: '2-digit',\n      day: '2-digit',\n      hour: '2-digit',\n      minute: '2-digit',\n      second: '2-digit',\n      hour12: false,\n    });\n    return dtf.format(new Date(ms));\n  } catch {\n    return null;\n  }\n};\n\n// =========================\n// 4) Agrupar por estación y guardar la observación más reciente por idema\n// =========================\nconst stationMap = new Map();\n\nfor (const r of rows) {\n  const id = r.idema;\n  if (!id) continue;\n\n  const lat = toNumber(r.lat);\n  const lon = toNumber(r.lon);\n  if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;\n\n  const ms = parseFintToMs(r.fint);\n\n  if (!stationMap.has(id)) {\n    stationMap.set(id, {\n      idema: id,\n      lat,\n      lon,\n      ubi: r.ubi ?? null,\n      latestRow: null,\n      latestMs: -Infinity,\n      fallbackRow: r,\n    });\n  }\n\n  const entry = stationMap.get(id);\n\n  if (!entry.ubi && r.ubi) entry.ubi = r.ubi;\n\n  if (Number.isFinite(ms) && ms > entry.latestMs) {\n    entry.latestMs = ms;\n    entry.latestRow = r;\n  } else if (!entry.fallbackRow) {\n    entry.fallbackRow = r;\n  }\n}\n\nif (stationMap.size === 0) {\n  throw new Error('No hay estaciones válidas (faltan lat/lon/idema en los datos de AEMET).');\n}\n\n// =========================\n// 5) Elegir estación: la más cercana, pero preferimos dato reciente\n// =========================\nconst nowMs = Date.now();\nconst candidates = [];\n\nfor (const entry of stationMap.values()) {\n  const d = haversineKm(userLat, userLon, entry.lat, entry.lon);\n  const row = entry.latestRow ?? entry.fallbackRow;\n\n  const ms = parseFintToMs(row?.fint);\n  const ageMin = Number.isFinite(ms) ? (nowMs - ms) / 60000 : Infinity;\n\n  candidates.push({\n    idema: entry.idema,\n    ubi: entry.ubi,\n    distance_km: d,\n    row,\n    ms,\n    ageMin,\n  });\n}\n\ncandidates.sort((a, b) => a.distance_km - b.distance_km);\n\nlet best = candidates.find(c => c.ageMin <= MAX_AGE_MINUTES) ?? candidates[0];\n\nif (!best || !best.row) {\n  throw new Error('No pude seleccionar una estación válida.');\n}\n\n// =========================\n// 6) Salida estable + hora local Madrid\n// =========================\nconst r = best.row;\nconst bestMs = parseFintToMs(r.fint);\n\nconst out = {\n  idema: r.idema ?? best.idema ?? null,\n  ubi: r.ubi ?? best.ubi ?? null,\n  distance_km: Math.round(best.distance_km * 10) / 10,\n\n  // timestamps\n  timestamp: r.fint ?? null, // tal cual viene de AEMET (puede venir en UTC)\n  timestamp_local: Number.isFinite(bestMs) ? formatMadridTime(bestMs) : null,\n  age_minutes: Number.isFinite(best.ageMin) ? Math.round(best.ageMin) : null,\n\n  // observación actual\n  wind_speed: r.vv ?? null,\n  wind_dir_deg: r.dv ?? null,\n  temp_c: r.ta ?? null,\n  humidity_pct: r.hr ?? null,\n  gust_ms: r.vmax ?? null,\n  precip_mm: r.prec ?? null,\n  pressure_hpa: r.pres ?? null,\n};\n\nif (DEBUG_TOP_N > 0) {\n  out.nearest = candidates.slice(0, DEBUG_TOP_N).map(c => ({\n    idema: c.idema,\n    ubi: c.ubi,\n    distance_km: Math.round(c.distance_km * 10) / 10,\n    fint: c.row?.fint ?? null,\n    timestamp_local: Number.isFinite(parseFintToMs(c.row?.fint)) ? formatMadridTime(parseFintToMs(c.row?.fint)) : null,\n    age_minutes: Number.isFinite(c.ageMin) ? Math.round(c.ageMin) : null,\n  }));\n}\n\nreturn [{ json: out }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1456,
+        -48
+      ],
+      "id": "73f6eed3-3c09-4b72-9d8a-fc2085a462fc",
+      "name": "ESTACION"
+    },
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "location"
+            },
+            {
+              "name": "metric"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        -48,
+        -48
+      ],
+      "id": "6520b57e-3984-450f-8259-1ff9682a74f1",
+      "name": "MENSAJE"
+    },
+    {
+      "parameters": {
+        "url": "=https://nominatim.openstreetmap.org/search?q={{encodeURIComponent($json.location)}}&format=json&limit=1&countrycodes=es&addressdetails=0",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "meteorihuela-n8n/1.0 (meteorihuela@meteorihuela.com)"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        400,
+        -48
+      ],
+      "id": "853496ab-c0e2-43ca-b3a7-c4202720a1f9",
+      "name": "NOMINATIM"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Nominatim normalmente devuelve un array con 1 resultado (limit=1)\nconst res = items[0].json;\n\nconst first = Array.isArray(res) ? res[0] : res;\n\nif (!first || !first.lat || !first.lon) {\n  throw new Error(\"Nominatim no devolvió lat/lon.\");\n}\n\nreturn [{\n  json: {\n    lat: Number(first.lat),\n    lon: Number(first.lon),\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        608,
+        -48
+      ],
+      "id": "1c663c2e-2812-4f41-bf61-389cd8acd37b",
+      "name": "ADAPTADOR"
+    },
+    {
+      "parameters": {
+        "amount": 3
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1024,
+        -48
+      ],
+      "id": "4acd0045-1d27-477d-9256-7c85408e2e2b",
+      "name": "Wait",
+      "webhookId": "ecc096ea-99bc-43da-bad7-09e64ba7832f"
+    },
+    {
+      "parameters": {
+        "jsCode": "const j = items[0].json;\n\n// Acepta location directamente\nlet location = j.location;\n\n// (Opcional) compatibilidad por si llega con otros nombres\nif (!location) location = j.ubicacion || j.ubicación || j.message || j.text || j.input;\n\nif (!location || typeof location !== 'string') {\n  throw new Error('No llegó un lugar válido. Se esperaba el campo \"location\".');\n}\n\nreturn [{ json: { location: location.trim() } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        192,
+        -48
+      ],
+      "id": "13f4efe5-a8f9-4818-9852-e66b24d721d9",
+      "name": "BLINDADO"
+    }
+  ],
+  "connections": {
+    "AEMET 1": {
+      "main": [
+        [
+          {
+            "node": "Wait",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AEMET 2": {
+      "main": [
+        [
+          {
+            "node": "ESTACION",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MENSAJE": {
+      "main": [
+        [
+          {
+            "node": "BLINDADO",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "NOMINATIM": {
+      "main": [
+        [
+          {
+            "node": "ADAPTADOR",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ADAPTADOR": {
+      "main": [
+        [
+          {
+            "node": "AEMET 1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ESTACION": {
+      "main": [
+        []
+      ]
+    },
+    "Wait": {
+      "main": [
+        [
+          {
+            "node": "AEMET 2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "BLINDADO": {
+      "main": [
+        [
+          {
+            "node": "NOMINATIM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "pinData": {},
+  "versionId": "eec13d7d-5a4a-45f5-9d34-38bca8c9c7c1",
+  "tags": []
+}

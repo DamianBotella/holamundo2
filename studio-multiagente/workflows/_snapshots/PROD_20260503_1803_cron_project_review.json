@@ -1,0 +1,350 @@
+{
+  "name": "cron_project_review",
+  "active": true,
+  "nodes": [
+    {
+      "id": "cr-01",
+      "name": "Every 6 Hours",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 6
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "cr-02",
+      "name": "Load Active Projects",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        250,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT p.id, p.name as project_name, p.current_phase, p.updated_at, p.status, EXTRACT(EPOCH FROM (NOW() - p.updated_at))/86400 as days_stale, c.name as client_name, c.email as client_email, (SELECT COUNT(*) FROM consultation_queue cq WHERE cq.project_id = p.id AND cq.status = 'pending') as pending_consultations, (SELECT MAX(ae.started_at) FROM agent_executions ae WHERE ae.project_id = p.id) as last_agent_run FROM projects p JOIN clients c ON c.id = p.client_id WHERE p.status IN ('active', 'paused', 'blocked') AND p.current_phase NOT IN ('completed', 'archived') ORDER BY p.updated_at ASC",
+        "additionalFields": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "cr-03",
+      "name": "Flag Stale + Build Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        500,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\nconst THRESHOLDS = {\n  intake: 3,\n  briefing_done: 7,\n  design_done: 7,\n  analysis_done: 7,\n  costs_done: 5,\n  trades_done: 5,\n  proposal_done: 5,\n  approved: 10,\n  planning_done: 14\n};\n\nconst projects = items.map(item => {\n  const p = item.json;\n  const threshold = THRESHOLDS[p.current_phase] || 7;\n  const daysStale = parseFloat(p.days_stale) || 0;\n  const isStale = daysStale > threshold;\n  return {\n    ...p,\n    days_stale: Math.floor(daysStale),\n    threshold_days: threshold,\n    is_stale: isStale,\n    staleness_level: isStale ? (daysStale > threshold * 2 ? 'critical' : 'warning') : 'ok',\n    pending_consultations: parseInt(p.pending_consultations) || 0\n  };\n});\n\nconst stale = projects.filter(p => p.is_stale);\nconst ok = projects.filter(p => !p.is_stale);\n\nconst buildRow = (p, highlight) => `<tr style=\"background:${highlight};\">\n  <td style=\"padding:8px;border:1px solid #ddd\">${p.project_name}</td>\n  <td style=\"padding:8px;border:1px solid #ddd\">${p.client_name}</td>\n  <td style=\"padding:8px;border:1px solid #ddd\"><code>${p.current_phase}</code></td>\n  <td style=\"padding:8px;border:1px solid #ddd;font-weight:bold\">${p.days_stale}d</td>\n  <td style=\"padding:8px;border:1px solid #ddd\">${p.pending_consultations > 0 ? '⚠️ ' + p.pending_consultations + ' pendiente(s)' : '—'}</td>\n</tr>`;\n\nconst staleRows = stale.map(p => buildRow(p, p.staleness_level === 'critical' ? '#ffe0e0' : '#fff8e1')).join('');\nconst okRows = ok.map(p => buildRow(p, '#ffffff')).join('');\nconst header = `<tr style=\"background:#f5f5f5\"><th style=\"padding:8px;border:1px solid #ddd\">Proyecto</th><th style=\"padding:8px;border:1px solid #ddd\">Cliente</th><th style=\"padding:8px;border:1px solid #ddd\">Fase</th><th style=\"padding:8px;border:1px solid #ddd\">Días sin avanzar</th><th style=\"padding:8px;border:1px solid #ddd\">Consultas</th></tr>`;\n\nconst now = new Date().toLocaleString('es-ES', {timeZone: 'Europe/Madrid'});\n\nconst body = `<html><body style=\"font-family:Arial,sans-serif;padding:20px\">\n<h2>Revisión de Proyectos Activos</h2>\n<p>Generado: ${now} &nbsp;|&nbsp; Total activos: ${projects.length} &nbsp;|&nbsp; Requieren atención: ${stale.length}</p>\n\n${stale.length > 0 ? `<h3 style=\"color:#e53935\">⚠️ ${stale.length} proyecto(s) sin avanzar</h3>\n<table style=\"border-collapse:collapse;width:100%\">${header}${staleRows}</table><br>` : '<p style=\"color:#43a047\">✅ Todos los proyectos están al día.</p>'}\n\n${ok.length > 0 ? `<h3 style=\"color:#555\">Proyectos al día (${ok.length})</h3>\n<table style=\"border-collapse:collapse;width:100%\">${header}${okRows}</table>` : ''}\n\n<br><hr><small>Sistema multiagente &mdash; revisión automática cada 6 horas.</small>\n</body></html>`;\n\nconst subject = stale.length > 0\n  ? `[⚠️ ${stale.length} proyectos bloqueados] Revisión de proyectos ${new Date().toLocaleDateString('es-ES')}`\n  : `[OK] Revisión de proyectos ${new Date().toLocaleDateString('es-ES')} — ${projects.length} activos`;\n\nreturn [{\n  json: {\n    projects_count: projects.length,\n    stale_count: stale.length,\n    email_subject: subject,\n    email_body: body,\n    has_projects: projects.length > 0\n  }\n}];"
+      }
+    },
+    {
+      "id": "cr-04",
+      "name": "Has Active Projects?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        750,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cr-c1",
+              "leftValue": "={{ Number($json.stale_count) || 0 }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "cr-05",
+      "name": "Send Review Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1000,
+        200
+      ],
+      "parameters": {
+        "sendTo": "={{ $('Load Architect Email').first().json.value }}",
+        "subject": "={{ $json.email_subject }}",
+        "message": "={{ $json.email_body }}",
+        "options": {
+          "bodyContentType": "html"
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "PLACEHOLDER",
+          "name": "damian2botella"
+        }
+      }
+    },
+    {
+      "id": "cr-06",
+      "name": "Log Review Done",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1250,
+        200
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, phase_at_time, output_summary, status) VALUES (NULL, 'cron_project_review', 'review_sent', 'global', $1, 'success')",
+        "options": {
+          "queryReplacement": "={{ [JSON.stringify({projects_count: $json.projects_count, stale_count: $json.stale_count})] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "cr-07",
+      "name": "Review Done",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1500,
+        200
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "d1",
+              "name": "status",
+              "value": "sent",
+              "type": "string"
+            },
+            {
+              "id": "d2",
+              "name": "projects_reviewed",
+              "value": "={{ $('Flag Stale + Build Email').first().json.projects_count }}",
+              "type": "number"
+            },
+            {
+              "id": "d3",
+              "name": "stale_count",
+              "value": "={{ $('Flag Stale + Build Email').first().json.stale_count }}",
+              "type": "number"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "cr-08",
+      "name": "No Active Projects",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1000,
+        420
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "s1",
+              "name": "status",
+              "value": "skipped",
+              "type": "string"
+            },
+            {
+              "id": "s2",
+              "name": "reason",
+              "value": "No hay proyectos activos",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "01ecfaab-19c5-4efc-be47-51bdc7899f53",
+      "name": "Load Architect Email",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        120,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT value FROM system_config WHERE key = 'architect_email'",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "4651aa26-6848-4896-bf45-a898fab69952",
+      "name": "Init Super Admin Context",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        120,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT set_config('app.role', 'super_admin', false) AS role_set"
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Load Active Projects": {
+      "main": [
+        [
+          {
+            "node": "Flag Stale + Build Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Flag Stale + Build Email": {
+      "main": [
+        [
+          {
+            "node": "Has Active Projects?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Active Projects?": {
+      "main": [
+        [
+          {
+            "node": "Send Review Email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Active Projects",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Review Email": {
+      "main": [
+        [
+          {
+            "node": "Log Review Done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Review Done": {
+      "main": [
+        [
+          {
+            "node": "Review Done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Architect Email": {
+      "main": [
+        [
+          {
+            "node": "Load Active Projects",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Every 6 Hours": {
+      "main": [
+        [
+          {
+            "node": "Init Super Admin Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Init Super Admin Context": {
+      "main": [
+        [
+          {
+            "node": "Load Architect Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": null,
+  "versionId": "182d2af2-ec91-467d-aca8-4fdd01c06ae0",
+  "tags": []
+}

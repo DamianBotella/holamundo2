@@ -1,0 +1,391 @@
+{
+  "name": "cron_anomaly_detect",
+  "active": true,
+  "nodes": [
+    {
+      "id": "ad-01",
+      "name": "Schedule Daily 6am",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -700,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "daysInterval": 1,
+              "triggerAtHour": 6,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "ad-02",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -700,
+        500
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "trigger-anomaly-detect",
+        "responseMode": "lastNode",
+        "authentication": "headerAuth"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "PLACEHOLDER",
+          "name": "Webhook API Key (entrante)"
+        }
+      },
+      "webhookId": "bafef84d-2030-4a13-8fdb-0607a3800a57"
+    },
+    {
+      "id": "ad-03",
+      "name": "Detect Anomalies",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -460,
+        400
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH\n-- 1) FACTURA muy cara para su gremio (>200% mediana proyectos completados)\ninvoice_high AS (\n  INSERT INTO anomalies_detected (project_id, entity_type, entity_id, anomaly_type, severity, description, baseline_value, observed_value, deviation_pct, reference_set)\n  SELECT i.project_id, 'invoice', i.id, 'invoice_above_median_for_trade', 'high',\n         'Factura ' || i.total_amount || 'eur del gremio ' || COALESCE(i.trade_type, 'sin gremio') || ' supera 2x la mediana historica',\n         med.median_amount, i.total_amount,\n         round(((i.total_amount - med.median_amount) / NULLIF(med.median_amount, 0) * 100)::numeric, 2),\n         'Mediana ' || med.n || ' facturas mismo trade_type'\n    FROM invoices i\n    JOIN LATERAL (\n      SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY total_amount) AS median_amount, count(*) AS n\n        FROM invoices i2\n       WHERE i2.trade_type = i.trade_type\n         AND i2.id != i.id\n         AND i2.total_amount IS NOT NULL\n    ) med ON med.n >= 5\n   WHERE i.total_amount IS NOT NULL\n     AND i.total_amount > med.median_amount * 2\n     AND i.created_at > now() - INTERVAL '90 days'\n  ON CONFLICT (entity_type, entity_id, anomaly_type) DO NOTHING\n  RETURNING id\n),\n-- 2) FACTURA con OCR baja confianza\ninvoice_low_conf AS (\n  INSERT INTO anomalies_detected (project_id, entity_type, entity_id, anomaly_type, severity, description, reference_set)\n  SELECT i.project_id, 'invoice', i.id, 'invoice_low_ocr_confidence', 'low',\n         'OCR con confianza baja en factura ' || COALESCE(i.invoice_number, 'sin numero') || ' (' || COALESCE(i.supplier_name, '?') || ')',\n         'OCR confidence field'\n    FROM invoices i\n   WHERE i.ocr_confidence = 'low'\n     AND i.status = 'pending_review'\n     AND i.created_at > now() - INTERVAL '30 days'\n  ON CONFLICT (entity_type, entity_id, anomaly_type) DO NOTHING\n  RETURNING id\n),\n-- 3) FACTURA con tipo IVA inusual (no 21/10/4)\ninvoice_weird_vat AS (\n  INSERT INTO anomalies_detected (project_id, entity_type, entity_id, anomaly_type, severity, description, observed_value, reference_set)\n  SELECT i.project_id, 'invoice', i.id, 'invoice_unusual_vat_rate', 'medium',\n         'Tipo IVA inusual ' || i.vat_rate || '% en factura de ' || COALESCE(i.supplier_name, '?'),\n         i.vat_rate,\n         'IVA estandar Espana: 21/10/4'\n    FROM invoices i\n   WHERE i.vat_rate IS NOT NULL\n     AND i.vat_rate NOT IN (21, 10, 4, 0)\n     AND i.created_at > now() - INTERVAL '90 days'\n  ON CONFLICT (entity_type, entity_id, anomaly_type) DO NOTHING\n  RETURNING id\n),\n-- 4) PROYECTO con desviacion economica critica (>40% sobre estimado)\nproject_overrun AS (\n  INSERT INTO anomalies_detected (project_id, entity_type, entity_id, anomaly_type, severity, description, baseline_value, observed_value, deviation_pct)\n  SELECT p.id, 'project', p.id, 'budget_overrun_critical', 'critical',\n         'Proyecto facturado supera estimado en >40%',\n         ce.total_estimated,\n         pf.total_facturado,\n         round(((pf.total_facturado - ce.total_estimated) / NULLIF(ce.total_estimated, 0) * 100)::numeric, 2)\n    FROM projects p\n    JOIN LATERAL (SELECT total_estimated FROM cost_estimates WHERE project_id = p.id ORDER BY version DESC LIMIT 1) ce ON true\n    JOIN LATERAL (SELECT COALESCE(sum(total_amount), 0) AS total_facturado FROM invoices WHERE project_id = p.id) pf ON true\n   WHERE p.current_phase NOT IN ('completed','archived')\n     AND ce.total_estimated > 0\n     AND pf.total_facturado > ce.total_estimated * 1.40\n  ON CONFLICT (entity_type, entity_id, anomaly_type) DO NOTHING\n  RETURNING id\n),\n-- 5) AFTERCARE: tiempo abierta excesivo para severity\naftercare_stale AS (\n  INSERT INTO anomalies_detected (project_id, entity_type, entity_id, anomaly_type, severity, description, observed_value)\n  SELECT ai.project_id, 'aftercare_incident', ai.id, 'aftercare_open_too_long', 'high',\n         'Incidencia ' || ai.severity || ' lleva ' || round((EXTRACT(EPOCH FROM (now() - ai.reported_at))/86400)::numeric) || ' dias abierta',\n         round((EXTRACT(EPOCH FROM (now() - ai.reported_at))/86400)::numeric)\n    FROM aftercare_incidents ai\n   WHERE ai.status NOT IN ('resolved','closed','disputed')\n     AND (\n       (ai.severity = 'urgent' AND ai.reported_at < now() - INTERVAL '3 days') OR\n       (ai.severity = 'high'   AND ai.reported_at < now() - INTERVAL '14 days') OR\n       (ai.severity = 'medium' AND ai.reported_at < now() - INTERVAL '30 days')\n     )\n  ON CONFLICT (entity_type, entity_id, anomaly_type) DO NOTHING\n  RETURNING id\n),\n-- 6) PERMITS muy retrasados (>200% del expected_response_days)\npermit_severely_overdue AS (\n  INSERT INTO anomalies_detected (project_id, entity_type, entity_id, anomaly_type, severity, description, baseline_value, observed_value, deviation_pct)\n  SELECT pa.project_id, 'permit_application', pa.id, 'permit_severely_overdue', 'high',\n         'Expediente ' || COALESCE(pa.expediente_id, '?') || ' lleva mas del doble de lo esperado',\n         pa.expected_response_days,\n         round((EXTRACT(EPOCH FROM (now() - pa.submitted_at))/86400)::numeric),\n         round((((EXTRACT(EPOCH FROM (now() - pa.submitted_at))/86400) - pa.expected_response_days) / pa.expected_response_days * 100)::numeric, 2)\n    FROM permit_applications pa\n   WHERE pa.status NOT IN ('approved','rejected','withdrawn','expired')\n     AND pa.submitted_at IS NOT NULL\n     AND pa.expected_response_days IS NOT NULL\n     AND pa.submitted_at + (pa.expected_response_days * 2 || ' days')::interval < now()\n  ON CONFLICT (entity_type, entity_id, anomaly_type) DO NOTHING\n  RETURNING id\n),\n-- 7) SITE REPORT con regresion de progreso (progress_pct cae entre reports)\nsite_regression AS (\n  INSERT INTO anomalies_detected (project_id, entity_type, entity_id, anomaly_type, severity, description, baseline_value, observed_value, deviation_pct)\n  SELECT sr.project_id, 'site_report', sr.id, 'progress_regression', 'medium',\n         'Progress_pct cayo en site_report respecto al anterior',\n         prev.progress_pct,\n         sr.progress_pct,\n         round(((sr.progress_pct - prev.progress_pct))::numeric, 2)\n    FROM site_reports sr\n    JOIN LATERAL (\n      SELECT progress_pct, reported_at FROM site_reports sr2\n       WHERE sr2.project_id = sr.project_id\n         AND sr2.reported_at < sr.reported_at\n         AND sr2.progress_pct IS NOT NULL\n       ORDER BY sr2.reported_at DESC LIMIT 1\n    ) prev ON true\n   WHERE sr.progress_pct IS NOT NULL\n     AND sr.progress_pct < prev.progress_pct - 5\n     AND sr.created_at > now() - INTERVAL '14 days'\n  ON CONFLICT (entity_type, entity_id, anomaly_type) DO NOTHING\n  RETURNING id\n),\n-- 8) TRADE_QUOTES sin respuesta despues de 14d\nquote_no_reply AS (\n  INSERT INTO anomalies_detected (project_id, entity_type, entity_id, anomaly_type, severity, description, observed_value)\n  SELECT tq.project_id, 'trade_quote', tq.id, 'quote_no_reply_14d', 'low',\n         COALESCE(tq.supplier_name, 'gremio') || ' lleva sin responder >14 dias',\n         round((EXTRACT(EPOCH FROM (now() - tq.request_sent_at))/86400)::numeric)\n    FROM trade_quotes tq\n   WHERE tq.status = 'requested'\n     AND tq.request_sent_at IS NOT NULL\n     AND tq.request_sent_at < now() - INTERVAL '14 days'\n  ON CONFLICT (entity_type, entity_id, anomaly_type) DO NOTHING\n  RETURNING id\n)\nSELECT json_build_object(\n  'invoice_high',           (SELECT count(*) FROM invoice_high),\n  'invoice_low_conf',       (SELECT count(*) FROM invoice_low_conf),\n  'invoice_weird_vat',      (SELECT count(*) FROM invoice_weird_vat),\n  'project_overrun',        (SELECT count(*) FROM project_overrun),\n  'aftercare_stale',        (SELECT count(*) FROM aftercare_stale),\n  'permit_overdue',         (SELECT count(*) FROM permit_severely_overdue),\n  'site_regression',        (SELECT count(*) FROM site_regression),\n  'quote_no_reply',         (SELECT count(*) FROM quote_no_reply),\n  'total_new',              (SELECT count(*) FROM anomalies_detected WHERE status='new' AND alert_sent=false)\n) AS report;",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ad-04",
+      "name": "Has New?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -220,
+        400
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "h1",
+              "leftValue": "={{ $json.report.total_new }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ad-05",
+      "name": "Load New Anomalies",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        20,
+        320
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT json_agg(row_to_json(t) ORDER BY\n  CASE t.severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END,\n  t.detected_at DESC\n) AS rows\nFROM (\n  SELECT a.id, a.entity_type, a.anomaly_type, a.severity, a.description,\n         a.baseline_value, a.observed_value, a.deviation_pct, a.reference_set,\n         a.detected_at,\n         p.name AS project_name\n    FROM anomalies_detected a\n    LEFT JOIN projects p ON p.id = a.project_id\n   WHERE a.status = 'new' AND a.alert_sent = false\n) t;",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ad-06",
+      "name": "Build Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        320
+      ],
+      "parameters": {
+        "jsCode": "const list = $input.first().json.rows || [];\nconst sevColor = { critical: '#7f1d1d', high: '#dc2626', medium: '#f59e0b', low: '#10b981', info: '#6b7280' };\nconst rows = list.map(a => {\n  const color = sevColor[a.severity] || '#6b7280';\n  const dev = a.deviation_pct !== null && a.deviation_pct !== undefined ? (a.deviation_pct > 0 ? '+' : '') + a.deviation_pct + '%' : '-';\n  const baseline = a.baseline_value !== null && a.baseline_value !== undefined ? Number(a.baseline_value).toLocaleString('es-ES') : '-';\n  const observed = a.observed_value !== null && a.observed_value !== undefined ? Number(a.observed_value).toLocaleString('es-ES') : '-';\n  return '<tr>' +\n    '<td><span style=\"background:' + color + ';color:white;padding:2px 8px;border-radius:3px;font-weight:bold\">' + a.severity.toUpperCase() + '</span></td>' +\n    '<td><b>' + (a.project_name || 'Sin proyecto') + '</b></td>' +\n    '<td>' + a.entity_type + '<br><small style=\"color:#6b7280\">' + a.anomaly_type + '</small></td>' +\n    '<td><small>' + a.description + '</small></td>' +\n    '<td>' + baseline + '</td>' +\n    '<td>' + observed + '</td>' +\n    '<td>' + dev + '</td>' +\n    '</tr>';\n}).join('');\nconst countBy = list.reduce((acc, a) => { acc[a.severity] = (acc[a.severity] || 0) + 1; return acc; }, {});\nconst html = '<h2>Anomalías detectadas</h2>' +\n  '<p>Total nuevas: <b>' + list.length + '</b> &middot; ' +\n  Object.entries(countBy).map(([k, v]) => '<span style=\"color:' + (sevColor[k] || '#000') + '\"><b>' + v + ' ' + k + '</b></span>').join(' &middot; ') + '</p>' +\n  '<table border=\"1\" cellpadding=\"6\" cellspacing=\"0\" style=\"border-collapse:collapse;font-family:sans-serif;font-size:12px\">' +\n  '<thead><tr style=\"background:#f3f4f6\"><th>Sev.</th><th>Proyecto</th><th>Entidad</th><th>Descripción</th><th>Baseline</th><th>Observado</th><th>Desv.</th></tr></thead>' +\n  '<tbody>' + rows + '</tbody></table>' +\n  '<p style=\"font-size:11px;color:#6b7280\">Revisar/descartar: POST /webhook/anomaly-review con {anomaly_id, status: \"reviewed|accepted|dismissed|escalated\", notes?}</p>';\nreturn [{ json: { html_body: html, count: list.length, severity_summary: countBy } }];"
+      }
+    },
+    {
+      "id": "ad-07",
+      "name": "Send Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        460,
+        320
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $('Load Architect Email').first().json.value }}",
+        "subject": "=ArquitAI — {{ $json.count }} anomalías detectadas",
+        "emailType": "html",
+        "message": "={{ $json.html_body }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "PLACEHOLDER",
+          "name": "damian2botella"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "ad-08",
+      "name": "Mark Sent",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        680,
+        320
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE anomalies_detected SET alert_sent = true WHERE alert_sent = false AND status = 'new';\nSELECT count(*) AS marked FROM anomalies_detected WHERE alert_sent = true;",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ad-09",
+      "name": "Log",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        900,
+        320
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, status, input_summary)\nVALUES (NULL, 'cron_anomaly_detect', 'detect_anomalies', 'success', $1)\nRETURNING id;",
+        "options": {
+          "queryReplacement": "={{ [ ('total_new=' + $('Build Email').first().json.count) ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ad-10",
+      "name": "No New",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        20,
+        480
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "1f8cee22-779d-497e-9fd4-525257458265",
+      "name": "Load Architect Email",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -580,
+        400
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT value FROM system_config WHERE key = 'architect_email'",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "b73f4086-3efb-40cd-bcf2-82109389d793",
+      "name": "Init Super Admin Context",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -580,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT set_config('app.role', 'super_admin', false) AS role_set"
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Detect Anomalies": {
+      "main": [
+        [
+          {
+            "node": "Has New?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has New?": {
+      "main": [
+        [
+          {
+            "node": "Load New Anomalies",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No New",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load New Anomalies": {
+      "main": [
+        [
+          {
+            "node": "Build Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Email": {
+      "main": [
+        [
+          {
+            "node": "Send Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Email": {
+      "main": [
+        [
+          {
+            "node": "Mark Sent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Sent": {
+      "main": [
+        [
+          {
+            "node": "Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Load Architect Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Architect Email": {
+      "main": [
+        [
+          {
+            "node": "Detect Anomalies",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Daily 6am": {
+      "main": [
+        [
+          {
+            "node": "Init Super Admin Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Init Super Admin Context": {
+      "main": [
+        [
+          {
+            "node": "Load Architect Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": null,
+  "versionId": "0fdf5b24-be79-45ea-a961-b56776924129",
+  "tags": []
+}

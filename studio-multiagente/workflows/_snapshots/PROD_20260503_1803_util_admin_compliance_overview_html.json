@@ -1,0 +1,138 @@
+{
+  "name": "util_admin_compliance_overview_html",
+  "active": true,
+  "nodes": [
+    {
+      "id": "aco-01",
+      "name": "Webhook GET",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -700,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "admin-compliance-overview",
+        "responseMode": "responseNode",
+        "authentication": "headerAuth"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "PLACEHOLDER",
+          "name": "Webhook API Key (entrante)"
+        }
+      },
+      "webhookId": "aco-trigger"
+    },
+    {
+      "id": "aco-02",
+      "name": "Load Compliance Snapshot",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -460,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT json_build_object(\n  'projects', coalesce((SELECT json_agg(t.*) FROM (\n    SELECT p.id::text AS project_id, p.name AS project_name, p.current_phase,\n      p.handover_date IS NOT NULL AS has_handover,\n      EXISTS(SELECT 1 FROM briefings WHERE project_id=p.id AND status='approved') AS briefing_approved,\n      EXISTS(SELECT 1 FROM design_options WHERE project_id=p.id AND is_selected=true) AS design_selected,\n      EXISTS(SELECT 1 FROM cost_estimates WHERE project_id=p.id AND breakdown IS NOT NULL AND jsonb_array_length(breakdown) > 0) AS cost_breakdown_ok,\n      EXISTS(SELECT 1 FROM contracts WHERE project_id=p.id AND contract_type='encargo_profesional' AND status='signed') AS encargo_signed,\n      EXISTS(SELECT 1 FROM contracts WHERE project_id=p.id AND contract_type='acta_recepcion_provisional' AND status='signed') AS acta_recepcion,\n      EXISTS(SELECT 1 FROM safety_plans WHERE project_id=p.id AND exec_status='confirmed') AS safety_confirmed,\n      (SELECT count(*) FROM permit_applications WHERE project_id=p.id AND status='approved')::int AS permits_approved,\n      EXISTS(SELECT 1 FROM consent_records cr WHERE cr.client_id=p.client_id AND cr.revoked_at IS NULL) AS gdpr_consent,\n      (SELECT count(*) FROM aftercare_incidents WHERE project_id=p.id AND status NOT IN ('resolved','closed','cancelled') AND severity IN ('high','critical'))::int AS aftercare_urgent,\n      (SELECT count(*) FROM pathology_findings WHERE project_id=p.id AND (severity='critical' OR affects_safety=true) AND status NOT IN ('repaired','dismissed'))::int AS pathology_critical,\n      (SELECT count(*) FROM qc_checks WHERE project_id=p.id AND status='blocked')::int AS qc_blocked\n    FROM projects p\n    WHERE p.current_phase NOT IN ('completed','archived') AND p.status='active'\n    ORDER BY p.updated_at DESC\n    LIMIT 60\n  ) t), '[]'::json)\n) AS report;",
+        "options": {
+          "alwaysOutputData": true
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "aco-03",
+      "name": "Build HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -220,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const r = $input.first().json.report || {};\nconst projects = Array.isArray(r.projects) ? r.projects : [];\n\nconst PHASE_RANK = { intake:0, briefing_done:1, design_done:2, analysis_done:3, costs_done:4, trades_done:5, proposal_done:6, approved:7, planning_done:8 };\n\nfunction esc(s) { return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\n\nfunction calcGrade(p) {\n  const rank = PHASE_RANK[p.current_phase] || 0;\n  const checks = [\n    { critical: true,  applicable: true,                 met: p.briefing_approved },\n    { critical: true,  applicable: rank >= 1,            met: p.design_selected },\n    { critical: true,  applicable: rank >= 3,            met: p.cost_breakdown_ok },\n    { critical: true,  applicable: rank >= 6,            met: p.encargo_signed },\n    { critical: true,  applicable: rank >= 6,            met: p.permits_approved > 0 },\n    { critical: true,  applicable: rank >= 5,            met: p.safety_confirmed },\n    { critical: true,  applicable: p.has_handover,       met: p.acta_recepcion },\n    { critical: true,  applicable: p.has_handover,       met: p.aftercare_urgent === 0 },\n    { critical: true,  applicable: true,                 met: p.gdpr_consent },\n    { critical: false, applicable: rank >= 7,            met: p.qc_blocked === 0 },\n    { critical: false, applicable: true,                 met: p.pathology_critical === 0 }\n  ];\n  const applicable = checks.filter(c => c.applicable);\n  const failed = applicable.filter(c => !c.met);\n  const critical = failed.filter(c => c.critical);\n  const score = applicable.length === 0 ? 100 : Math.round(100 * (applicable.length - failed.length) / applicable.length);\n  const grade = critical.length > 0 ? 'D' : failed.length > 2 ? 'C' : failed.length > 0 ? 'B' : 'A';\n  return { score, grade, critical_count: critical.length, failed_count: failed.length };\n}\n\nconst enriched = projects.map(p => ({ ...p, ...calcGrade(p) }));\nenriched.sort((a, b) => (a.score || 0) - (b.score || 0));\n\nconst grades = { A: 0, B: 0, C: 0, D: 0 };\nlet totalCritical = 0;\nlet totalAftercareUrgent = 0;\nlet totalPathologyCritical = 0;\nfor (const p of enriched) {\n  grades[p.grade] = (grades[p.grade] || 0) + 1;\n  totalCritical += p.critical_count;\n  totalAftercareUrgent += p.aftercare_urgent || 0;\n  totalPathologyCritical += p.pathology_critical || 0;\n}\n\nconst gradeColor = { A:'#27ae60', B:'#f1c40f', C:'#e67e22', D:'#e74c3c' };\n\nfunction icon(b) { return b ? '<span style=\"color:#27ae60\">+</span>' : '<span style=\"color:#c00\">-</span>'; }\nfunction num(n, danger) { return n > 0 ? `<span style=\"color:${danger ? '#c00' : '#666'};font-weight:600\">${n}</span>` : '<span style=\"color:#27ae60\">0</span>'; }\n\nconst rows = enriched.map(p => `<tr style=\"background:${p.grade === 'D' ? '#fee' : (p.grade === 'C' ? '#fff8e0' : '#fff')}\">\n  <td><a href=\"/webhook/admin-project?project_id=${esc(p.project_id)}\" style=\"color:#1f2937;text-decoration:none;font-weight:600\">${esc(p.project_name)}</a></td>\n  <td><span style=\"background:${gradeColor[p.grade]};color:white;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:bold\">${p.grade}</span> ${p.score}</td>\n  <td>${esc(p.current_phase)}</td>\n  <td style=\"text-align:center\">${icon(p.briefing_approved)}</td>\n  <td style=\"text-align:center\">${icon(p.design_selected)}</td>\n  <td style=\"text-align:center\">${icon(p.cost_breakdown_ok)}</td>\n  <td style=\"text-align:center\">${icon(p.encargo_signed)}</td>\n  <td style=\"text-align:center\">${p.permits_approved > 0 ? '<span style=\"color:#27ae60\">' + p.permits_approved + '</span>' : icon(false)}</td>\n  <td style=\"text-align:center\">${icon(p.safety_confirmed)}</td>\n  <td style=\"text-align:center\">${icon(p.gdpr_consent)}</td>\n  <td style=\"text-align:center\">${num(p.aftercare_urgent, true)}</td>\n  <td style=\"text-align:center\">${num(p.pathology_critical, true)}</td>\n  <td style=\"text-align:center\">${num(p.qc_blocked, true)}</td>\n</tr>`).join('');\n\nconst html = `<!DOCTYPE html><html lang=\"es\"><head><meta charset=\"utf-8\"><title>Compliance Overview - ArquitAI</title>\n<style>\n  body{font-family:system-ui,sans-serif;max-width:1300px;margin:32px auto;padding:0 20px;color:#222;background:#f7f7f8}\n  h1{margin:0 0 8px}\n  .sub{color:#888;font-size:13px;margin-bottom:24px}\n  .cards{display:grid;grid-template-columns:repeat(7,1fr);gap:10px;margin-bottom:24px}\n  .card{background:#fff;border:1px solid #ddd;border-radius:8px;padding:12px;text-align:center}\n  .card h3{margin:0 0 4px;font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.5px}\n  .card .v{font-size:22px;font-weight:600}\n  table{width:100%;border-collapse:collapse;background:#fff;border:1px solid #ddd;border-radius:8px;overflow:hidden;font-size:12px}\n  th,td{padding:6px 8px;border-bottom:1px solid #eee;text-align:left;vertical-align:middle}\n  th{background:#f0f0f3;font-weight:600;font-size:10px;text-transform:uppercase;color:#555}\n  tr:last-child td{border-bottom:none}\n  .meta{font-size:12px;color:#888;margin-top:24px}\n  @media (max-width:1100px){.cards{grid-template-columns:repeat(4,1fr)}}\n</style></head><body>\n<h1>Compliance Overview - ArquitAI</h1>\n<p class=\"sub\">Snapshot inmediato (sin LLM): ${enriched.length} proyectos activos. Para audit detallado por proyecto: <code>POST /webhook/audit-project</code>. Audit semanal automatico: domingos 08:00.</p>\n<div class=\"cards\">\n  <div class=\"card\"><h3>Total</h3><div class=\"v\">${enriched.length}</div></div>\n  <div class=\"card\"><h3>Grade A</h3><div class=\"v\" style=\"color:${gradeColor.A}\">${grades.A}</div></div>\n  <div class=\"card\"><h3>Grade B</h3><div class=\"v\" style=\"color:${gradeColor.B}\">${grades.B}</div></div>\n  <div class=\"card\"><h3>Grade C</h3><div class=\"v\" style=\"color:${gradeColor.C}\">${grades.C}</div></div>\n  <div class=\"card\"><h3>Grade D</h3><div class=\"v\" style=\"color:${gradeColor.D}\">${grades.D}</div></div>\n  <div class=\"card\"><h3>Aftercare urg</h3><div class=\"v\" style=\"color:${totalAftercareUrgent > 0 ? '#c00' : '#27ae60'}\">${totalAftercareUrgent}</div></div>\n  <div class=\"card\"><h3>Pathology crit</h3><div class=\"v\" style=\"color:${totalPathologyCritical > 0 ? '#c00' : '#27ae60'}\">${totalPathologyCritical}</div></div>\n</div>\n<table>\n  <thead><tr><th>proyecto</th><th>grade</th><th>fase</th><th>brief</th><th>diseno</th><th>costes</th><th>encargo</th><th>permit</th><th>safety</th><th>gdpr</th><th>aftc</th><th>patol</th><th>qc</th></tr></thead>\n  <tbody>${rows || '<tr><td colspan=\"13\" style=\"text-align:center;color:#888;padding:24px\">Sin proyectos activos</td></tr>'}</tbody>\n</table>\n<div class=\"meta\">Generado ${new Date().toISOString()}</div>\n</body></html>`;\n\nreturn [{ json: { html } }];"
+      }
+    },
+    {
+      "id": "aco-04",
+      "name": "Respond HTML",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        20,
+        300
+      ],
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.html }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "text/html; charset=utf-8"
+              },
+              {
+                "name": "Cache-Control",
+                "value": "no-store"
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook GET": {
+      "main": [
+        [
+          {
+            "node": "Load Compliance Snapshot",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Compliance Snapshot": {
+      "main": [
+        [
+          {
+            "node": "Build HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build HTML": {
+      "main": [
+        [
+          {
+            "node": "Respond HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": null,
+  "versionId": "1543fcb2-c79e-4236-9aed-a2b14c36abce",
+  "tags": []
+}

@@ -1,0 +1,198 @@
+{
+  "name": "util_generate_embedding",
+  "active": true,
+  "nodes": [
+    {
+      "id": "ue-01",
+      "name": "Receive Text",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    },
+    {
+      "id": "ue-02",
+      "name": "Validate Text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        250,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\nconst text = (input.text || '').toString().trim();\nif (!text) {\n  return [{ json: { error: 'text empty', embedding: null, dimensions: 0 } }];\n}\nconst truncated = text.length > 8000 ? text.substring(0, 8000) : text;\nreturn [{ json: { text: truncated, model: input.model || 'text-embedding-3-small' } }];"
+      }
+    },
+    {
+      "id": "ue-03",
+      "name": "Call OpenAI Embeddings",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        500,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/embeddings",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "keypair",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "model",
+              "value": "={{ $json.model }}"
+            },
+            {
+              "name": "input",
+              "value": "={{ $json.text }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "PLACEHOLDER",
+          "name": "orquestador ArquiAI"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "ue-04",
+      "name": "Format Success",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        750,
+        200
+      ],
+      "parameters": {
+        "jsCode": "const r = $input.first().json;\nconst emb = (r.data && r.data[0] && r.data[0].embedding) || null;\nreturn [{ json: { status: 'success', embedding: emb, dimensions: emb ? emb.length : 0, embedding_text_len: $('Validate Text').first().json.text.length, model: r.model || 'text-embedding-3-small', tokens_used: (r.usage && r.usage.total_tokens) || 0 } }];"
+      }
+    },
+    {
+      "id": "ue-05",
+      "name": "Format Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        750,
+        400
+      ],
+      "parameters": {
+        "jsCode": "const r = $input.first().json;\nreturn [{ json: { status: 'error', embedding: null, dimensions: 0, error_message: r.message || JSON.stringify(r).substring(0, 300) } }];"
+      }
+    },
+    {
+      "id": "ue-06",
+      "name": "Merge",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        1000,
+        300
+      ],
+      "parameters": {}
+    }
+  ],
+  "connections": {
+    "Receive Text": {
+      "main": [
+        [
+          {
+            "node": "Validate Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Text": {
+      "main": [
+        [
+          {
+            "node": "Call OpenAI Embeddings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call OpenAI Embeddings": {
+      "main": [
+        [
+          {
+            "node": "Format Success",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Format Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Success": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Error": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true,
+    "saveExecutionProgress": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": null,
+  "versionId": "9b28fa57-2079-40bd-aa0d-ec6efea9ad82",
+  "tags": []
+}

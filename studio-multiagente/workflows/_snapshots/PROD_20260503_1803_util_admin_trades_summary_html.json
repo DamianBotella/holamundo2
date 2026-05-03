@@ -1,0 +1,138 @@
+{
+  "name": "util_admin_trades_summary_html",
+  "active": true,
+  "nodes": [
+    {
+      "id": "ats-01",
+      "name": "Webhook GET",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -700,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "admin-trades-summary",
+        "responseMode": "responseNode",
+        "authentication": "headerAuth"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "PLACEHOLDER",
+          "name": "Webhook API Key (entrante)"
+        }
+      },
+      "webhookId": "ats-trigger"
+    },
+    {
+      "id": "ats-02",
+      "name": "Load Trades Stats",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -460,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT json_build_object(\n  'totals', (SELECT json_build_object(\n    'quotes_total',   count(*),\n    'quotes_30d',     count(*) FILTER (WHERE created_at > now() - INTERVAL '30 days'),\n    'pending',        count(*) FILTER (WHERE status = 'requested'),\n    'quoted',         count(*) FILTER (WHERE status = 'quoted'),\n    'accepted',       count(*) FILTER (WHERE status = 'accepted'),\n    'rejected',       count(*) FILTER (WHERE status IN ('rejected_by_us','rejected_by_supplier','expired','withdrawn'))\n  ) FROM trade_quotes),\n  'by_trade', (SELECT coalesce(json_agg(t.* ORDER BY t.quotes_total DESC), '[]'::json) FROM (\n    SELECT\n      coalesce(trade_type, 'sin_categoria') AS trade_type,\n      count(*)::int AS quotes_total,\n      count(*) FILTER (WHERE status = 'quoted')::int AS quoted,\n      count(*) FILTER (WHERE status = 'accepted')::int AS accepted,\n      count(*) FILTER (WHERE status = 'requested' AND request_sent_at < now() - INTERVAL '14 days')::int AS stale,\n      round(coalesce(avg(amount) FILTER (WHERE amount IS NOT NULL), 0)::numeric, 0) AS avg_amount,\n      max(created_at) AS last_quote_at,\n      count(DISTINCT supplier_email)::int AS unique_suppliers\n    FROM trade_quotes\n    GROUP BY coalesce(trade_type, 'sin_categoria')\n  ) t),\n  'top_suppliers', (SELECT coalesce(json_agg(t.* ORDER BY t.quotes_total DESC), '[]'::json) FROM (\n    SELECT supplier_name, supplier_email, count(*)::int AS quotes_total,\n      count(*) FILTER (WHERE status = 'accepted')::int AS accepted,\n      count(*) FILTER (WHERE status = 'quoted')::int AS quoted,\n      max(created_at) AS last_contact_at,\n      round(coalesce(avg(amount) FILTER (WHERE amount IS NOT NULL), 0)::numeric, 0) AS avg_amount\n    FROM trade_quotes\n    GROUP BY supplier_name, supplier_email\n    ORDER BY count(*) DESC\n    LIMIT 15\n  ) t),\n  'stale_pending', (SELECT coalesce(json_agg(t.* ORDER BY t.days_waiting DESC), '[]'::json) FROM (\n    SELECT supplier_name, supplier_email, trade_type,\n      coalesce(request_sent_at, created_at) AS sent_at,\n      floor(EXTRACT(EPOCH FROM (now() - coalesce(request_sent_at, created_at)))/86400)::int AS days_waiting,\n      project_id::text AS project_id\n    FROM trade_quotes\n    WHERE status = 'requested'\n      AND coalesce(request_sent_at, created_at) < now() - INTERVAL '14 days'\n    LIMIT 10\n  ) t)\n) AS report;",
+        "options": {
+          "alwaysOutputData": true
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ats-03",
+      "name": "Build HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -220,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const r = $input.first().json.report || {};\nconst totals = r.totals || {};\nconst byTrade = Array.isArray(r.by_trade) ? r.by_trade : [];\nconst topSup = Array.isArray(r.top_suppliers) ? r.top_suppliers : [];\nconst stale = Array.isArray(r.stale_pending) ? r.stale_pending : [];\n\nfunction esc(s) { return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\"/g,'&quot;'); }\nfunction money(n) { return n != null && n > 0 ? Number(n).toLocaleString('es-ES') + ' EUR' : '-'; }\nfunction dateShort(s) { if (!s) return '-'; return new Date(s).toISOString().substring(0,10); }\nfunction pct(num, den) { return den > 0 ? Math.round((num/den)*100) + '%' : '-'; }\n\nconst rowsTrade = byTrade.map(t => {\n  const responseRate = t.quotes_total > 0 ? Math.round((t.quoted + t.accepted) / t.quotes_total * 100) : 0;\n  const acceptRate = t.quotes_total > 0 ? Math.round(t.accepted / t.quotes_total * 100) : 0;\n  return `<tr>\n    <td>${esc(t.trade_type)}</td>\n    <td style=\"text-align:right\">${t.quotes_total}</td>\n    <td style=\"text-align:right\">${responseRate}%</td>\n    <td style=\"text-align:right\">${acceptRate}%</td>\n    <td style=\"text-align:right${t.stale > 0 ? ';color:#c00;font-weight:600' : ''}\">${t.stale}</td>\n    <td style=\"text-align:right\">${money(t.avg_amount)}</td>\n    <td style=\"text-align:right\">${t.unique_suppliers}</td>\n    <td>${dateShort(t.last_quote_at)}</td>\n  </tr>`;\n}).join('');\n\nconst rowsSup = topSup.map(s => `<tr>\n  <td>${esc(s.supplier_name)} <small style=\"color:#888\">${esc(s.supplier_email)}</small></td>\n  <td style=\"text-align:right\">${s.quotes_total}</td>\n  <td style=\"text-align:right\">${s.quoted}</td>\n  <td style=\"text-align:right;font-weight:600\">${s.accepted}</td>\n  <td style=\"text-align:right\">${money(s.avg_amount)}</td>\n  <td>${dateShort(s.last_contact_at)}</td>\n</tr>`).join('');\n\nconst rowsStale = stale.length ? stale.map(s => `<tr style=\"background:${s.days_waiting > 30 ? '#fee' : '#fff8e0'}\">\n  <td>${esc(s.supplier_name)} <small style=\"color:#888\">${esc(s.supplier_email)}</small></td>\n  <td>${esc(s.trade_type || '-')}</td>\n  <td>${dateShort(s.sent_at)}</td>\n  <td style=\"text-align:right;font-weight:600\">${s.days_waiting}d</td>\n</tr>`).join('') : '<tr><td colspan=\"4\" style=\"text-align:center;color:#888;padding:18px\">Sin solicitudes pendientes >14d (estado saludable)</td></tr>';\n\nconst html = `<!DOCTYPE html><html lang=\"es\"><head><meta charset=\"utf-8\"><title>Trades Summary - ArquitAI</title>\n<style>\n  body{font-family:system-ui,sans-serif;max-width:1200px;margin:32px auto;padding:0 20px;color:#222;background:#f7f7f8}\n  h1{margin:0 0 8px}\n  .sub{color:#888;font-size:13px;margin-bottom:24px}\n  h2{margin:32px 0 12px;font-size:18px;border-bottom:1px solid #ddd;padding-bottom:6px}\n  .cards{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin-bottom:24px}\n  .card{background:#fff;border:1px solid #ddd;border-radius:8px;padding:14px}\n  .card h3{margin:0 0 4px;font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.5px}\n  .card .v{font-size:22px;font-weight:600}\n  table{width:100%;border-collapse:collapse;background:#fff;border:1px solid #ddd;border-radius:8px;overflow:hidden}\n  th,td{padding:8px 12px;border-bottom:1px solid #eee;font-size:13px;text-align:left;vertical-align:middle}\n  th{background:#f0f0f3;font-weight:600;font-size:11px;text-transform:uppercase;color:#555}\n  tr:last-child td{border-bottom:none}\n  .meta{font-size:12px;color:#888;margin-top:24px}\n  @media (max-width:900px){.cards{grid-template-columns:repeat(3,1fr)}}\n</style></head><body>\n<h1>Trades Summary - ArquitAI</h1>\n<p class=\"sub\">Cotizaciones a gremios + ratios + suppliers historicos. Fuente: tabla trade_quotes.</p>\n<div class=\"cards\">\n  <div class=\"card\"><h3>Total quotes</h3><div class=\"v\">${totals.quotes_total || 0}</div></div>\n  <div class=\"card\"><h3>30 dias</h3><div class=\"v\">${totals.quotes_30d || 0}</div></div>\n  <div class=\"card\"><h3>Pending</h3><div class=\"v\">${totals.pending || 0}</div></div>\n  <div class=\"card\"><h3>Quoted</h3><div class=\"v\">${totals.quoted || 0}</div></div>\n  <div class=\"card\"><h3>Aceptados</h3><div class=\"v\">${totals.accepted || 0}</div></div>\n  <div class=\"card\"><h3>Rechazados</h3><div class=\"v\">${totals.rejected || 0}</div></div>\n</div>\n<h2>Por gremio</h2>\n<table>\n  <thead><tr><th>trade_type</th><th style=\"text-align:right\">quotes</th><th style=\"text-align:right\">response</th><th style=\"text-align:right\">accept</th><th style=\"text-align:right\">stale</th><th style=\"text-align:right\">avg amount</th><th style=\"text-align:right\">suppliers</th><th>last quote</th></tr></thead>\n  <tbody>${rowsTrade || '<tr><td colspan=\"8\" style=\"text-align:center;color:#888;padding:18px\">Sin trade_quotes registrados</td></tr>'}</tbody>\n</table>\n<h2>Top suppliers (15 con mas quotes)</h2>\n<table>\n  <thead><tr><th>supplier</th><th style=\"text-align:right\">quotes</th><th style=\"text-align:right\">quoted</th><th style=\"text-align:right\">accepted</th><th style=\"text-align:right\">avg amount</th><th>last contact</th></tr></thead>\n  <tbody>${rowsSup || '<tr><td colspan=\"6\" style=\"text-align:center;color:#888;padding:18px\">Sin suppliers</td></tr>'}</tbody>\n</table>\n<h2>Solicitudes sin respuesta (>14d)</h2>\n<table>\n  <thead><tr><th>supplier</th><th>trade_type</th><th>enviada</th><th style=\"text-align:right\">dias</th></tr></thead>\n  <tbody>${rowsStale}</tbody>\n</table>\n<div class=\"meta\">Generado ${new Date().toISOString()}</div>\n</body></html>`;\n\nreturn [{ json: { html } }];"
+      }
+    },
+    {
+      "id": "ats-04",
+      "name": "Respond HTML",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        20,
+        300
+      ],
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.html }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "text/html; charset=utf-8"
+              },
+              {
+                "name": "Cache-Control",
+                "value": "no-store"
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook GET": {
+      "main": [
+        [
+          {
+            "node": "Load Trades Stats",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Trades Stats": {
+      "main": [
+        [
+          {
+            "node": "Build HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build HTML": {
+      "main": [
+        [
+          {
+            "node": "Respond HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": null,
+  "versionId": "8ff109e2-1f3f-40ff-8b1e-42ea62ce3416",
+  "tags": []
+}

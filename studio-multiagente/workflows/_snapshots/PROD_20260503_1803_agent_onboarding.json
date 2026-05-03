@@ -1,0 +1,448 @@
+{
+  "name": "agent_onboarding",
+  "active": true,
+  "nodes": [
+    {
+      "id": "ao-01",
+      "name": "Webhook POST Message",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -900,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "setup-onboarding-message",
+        "responseMode": "responseNode",
+        "authentication": "headerAuth"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "PLACEHOLDER",
+          "name": "Webhook API Key (entrante)"
+        }
+      },
+      "webhookId": "ao-trigger"
+    },
+    {
+      "id": "ao-02",
+      "name": "Parse Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -680,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || {};\nconst message = (body.message || '').trim();\nconst resumeToken = body.resume_token || null;\nconst contactEmail = body.contact_email || null;\nconst contactName = body.contact_name || null;\nif (!message) {\n  return [{ json: { valid: false, error: 'message obligatorio' } }];\n}\nreturn [{ json: { valid: true, message, resume_token: resumeToken, contact_email: contactEmail, contact_name: contactName } }];"
+      }
+    },
+    {
+      "id": "ao-03",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -460,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "v1",
+              "leftValue": "={{ $json.valid }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ao-04",
+      "name": "Respond 400",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        -220,
+        480
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({error: $json.error, status: 400}) }}",
+        "options": {
+          "responseCode": 400
+        }
+      }
+    },
+    {
+      "id": "ao-05",
+      "name": "Get Or Create Session",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -220,
+        220
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH found AS (\n  SELECT id, resume_token, status, messages, sections_covered, contact_email, contact_name,\n         llm_total_cost_usd, llm_total_tokens, llm_message_count\n  FROM onboarding_sessions\n  WHERE resume_token = NULLIF($1,'')\n    AND status = 'in_progress'\n  LIMIT 1\n),\nnew_session AS (\n  INSERT INTO onboarding_sessions (contact_email, contact_name)\n  SELECT NULLIF($2,''), NULLIF($3,'')\n  WHERE NOT EXISTS (SELECT 1 FROM found)\n  RETURNING id, resume_token, status, messages, sections_covered, contact_email, contact_name,\n            llm_total_cost_usd, llm_total_tokens, llm_message_count\n)\nSELECT * FROM found UNION ALL SELECT * FROM new_session;",
+        "options": {
+          "queryReplacement": "={{ [ ($json.resume_token || ''), ($json.contact_email || ''), ($json.contact_name || '') ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ao-06",
+      "name": "Load Baseline Profile",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        0,
+        220
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT identity, tone, priorities, red_lines, visit_checklist, materials_pref, trades_pref, jurisdiction FROM studio_profile WHERE setup_source = 'baseline' AND active = true ORDER BY created_at ASC LIMIT 1;",
+        "options": {
+          "alwaysOutputData": true
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ao-07",
+      "name": "Build LLM Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        220
+      ],
+      "parameters": {
+        "jsCode": "const session = $('Get Or Create Session').first().json;\nconst input = $('Parse Input').first().json;\nconst baseline = $input.first().json || {};\n\nconst messages = Array.isArray(session.messages) ? session.messages : (typeof session.messages === 'string' ? JSON.parse(session.messages) : []);\nconst sectionsCovered = typeof session.sections_covered === 'string' ? JSON.parse(session.sections_covered) : (session.sections_covered || {});\n\nmessages.push({ role: 'user', content: input.message, ts: new Date().toISOString() });\n\nconst sectionLabels = {\n  identity: '1. Identidad del estudio (nombre, persona principal, ciudad, ámbito, tamaño, años exp)',\n  tone: '2. Tono de comunicación (formal/cercano, técnico/llano, ejemplos)',\n  priorities: '3. Prioridades absolutas (5-10 reglas en orden)',\n  red_lines: '4. Líneas rojas (cosas que NUNCA hace)',\n  visit_checklist: '5. Checklist visita inicial (datos que SIEMPRE pregunta)',\n  materials_pref: '6. Preferencias materiales/proveedores',\n  trades_pref: '7. Criterios de selección de gremios y mapa trade→contacto',\n  jurisdiction: '8. Jurisdicción (CCAA, ayuntamientos habituales, normativa adicional)'\n};\n\nconst sectionsNeeded = Object.entries(sectionsCovered)\n  .filter(([k, v]) => !v)\n  .map(([k]) => sectionLabels[k])\n  .join('\\n');\n\nconst sectionsAlreadyCovered = Object.entries(sectionsCovered)\n  .filter(([k, v]) => v)\n  .map(([k]) => sectionLabels[k])\n  .join('\\n') || '(ninguna todavía)';\n\nconst baselineHint = baseline && baseline.identity\n  ? '\\n\\nBASELINE de referencia (perfil predeterminado de un arquitecto técnico español tipo, lo puedes ofrecer si el usuario va perdido o quiere ahorrarse responder y solo afinar lo distinto):\\n```json\\n' + JSON.stringify({\n      identity: baseline.identity,\n      tone: baseline.tone,\n      priorities: baseline.priorities,\n      red_lines: baseline.red_lines,\n      visit_checklist: baseline.visit_checklist\n    }, null, 2).substring(0, 1800) + '\\n```'\n  : '';\n\nconst systemPrompt = `Eres el asistente de onboarding de ArquitAI, un software de gestión para estudios de arquitectura técnica. Estás entrevistando al profesional que acaba de comprar el sistema para personalizarlo a su forma de trabajar.\n\n**Tu objetivo**: cubrir 8 áreas de información sobre el estudio del profesional. Tienes que sacarlas conversando, NO con una lista de preguntas tipo formulario. Sé natural, profesional, breve. Reformula con tus palabras lo que el usuario te diga para confirmar que entendiste, y pasa al siguiente tema.\n\n**Áreas que aún FALTAN cubrir**:\n${sectionsNeeded || '(todas las 8 áreas ya están cubiertas — propón cerrar la sesión)'}\n\n**Áreas ya cubiertas (no preguntes de nuevo)**:\n${sectionsAlreadyCovered}\n${baselineHint}\n\n**Reglas estrictas de salida**:\n- Tu respuesta DEBE ser un único objeto JSON válido, sin markdown, sin texto adicional.\n- Estructura EXACTA: {\"message\": \"...\", \"sections_now_covered\": [\"...\",\"...\"], \"ready_to_close\": false}\n  - \"message\": el texto que ve el usuario, conversacional, en español, sin sonar robótico.\n  - \"sections_now_covered\": lista de áreas (identity, tone, priorities, red_lines, visit_checklist, materials_pref, trades_pref, jurisdiction) que con la respuesta actual del usuario quedan cubiertas. Solo añadir si tienes información concreta y suficiente. NUNCA marcar una sección que ya estaba en \"ya cubiertas\".\n  - \"ready_to_close\": true SOLO si las 8 áreas están cubiertas O si el usuario dice explícitamente que quiere terminar / aceptar el baseline tal cual / cerrar la sesión.\n\n**Reglas de conducta conversacional**:\n- Saludar solo en el primer mensaje (cuando el histórico esté vacío o tenga 1 entrada del user).\n- No hacer 3 preguntas a la vez. Una pregunta principal, máximo una sub-pregunta.\n- Si el usuario va lento o pide ayuda, ofrécele el baseline para esa sección y pídele que solo confirme o ajuste.\n- Si el usuario dice algo vago (\"normal\", \"lo típico\"), pídele un ejemplo concreto.\n- Cuando empieces el cierre (8/8 cubiertas), resume lo que has entendido en 4-5 líneas y pregunta si quiere editar algo antes de guardar.\n\nRecuerda: SOLO devuelve el JSON. No añadas explicaciones fuera del JSON.`;\n\nconst conversationText = messages.map(m => (m.role === 'user' ? 'USUARIO: ' : 'ASISTENTE: ') + m.content).join('\\n\\n');\n\nreturn [{\n  json: {\n    agent_name: 'agent_onboarding',\n    project_id: null,\n    prompt_system: systemPrompt,\n    prompt_user: conversationText,\n    model: 'gpt-4o',\n    temperature: 0.5,\n    _session_id: session.id,\n    _resume_token: session.resume_token,\n    _messages_pre: messages,\n    _sections_covered: sectionsCovered,\n    _llm_total_cost_usd: Number(session.llm_total_cost_usd || 0),\n    _llm_total_tokens: Number(session.llm_total_tokens || 0),\n    _llm_message_count: Number(session.llm_message_count || 0)\n  }\n}];"
+      }
+    },
+    {
+      "id": "ao-08",
+      "name": "Call LLM",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.1,
+      "position": [
+        440,
+        220
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "JoKqGZ8pDzhJohV2",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ao-09",
+      "name": "Parse LLM JSON",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        220
+      ],
+      "parameters": {
+        "jsCode": "const llm = $input.first().json;\nconst preState = $('Build LLM Prompt').first().json;\nconst raw = (llm.text || '').trim();\n\nlet parsed;\ntry {\n  const match = raw.match(/\\{[\\s\\S]*\\}/);\n  parsed = match ? JSON.parse(match[0]) : null;\n} catch(e) { parsed = null; }\n\nif (!parsed || typeof parsed.message !== 'string') {\n  parsed = {\n    message: raw || 'Disculpa, ha habido un problema procesando tu respuesta. ¿Puedes reformularla?',\n    sections_now_covered: [],\n    ready_to_close: false\n  };\n}\n\nconst validSections = ['identity','tone','priorities','red_lines','visit_checklist','materials_pref','trades_pref','jurisdiction'];\nconst sectionsCovered = { ...preState._sections_covered };\nfor (const s of (parsed.sections_now_covered || [])) {\n  if (validSections.includes(s)) sectionsCovered[s] = true;\n}\n\nconst messagesPost = [...preState._messages_pre, {\n  role: 'assistant',\n  content: parsed.message,\n  ts: new Date().toISOString(),\n  llm_meta: {\n    model: llm.model,\n    tokens_in: llm.tokens_in,\n    tokens_out: llm.tokens_out,\n    cost: llm.cost_estimated\n  }\n}];\n\nreturn [{\n  json: {\n    session_id: preState._session_id,\n    resume_token: preState._resume_token,\n    response_message: parsed.message,\n    sections_covered: sectionsCovered,\n    ready_to_close: !!parsed.ready_to_close,\n    messages_json: JSON.stringify(messagesPost),\n    sections_covered_json: JSON.stringify(sectionsCovered),\n    cost_total: preState._llm_total_cost_usd + Number(llm.cost_estimated || 0),\n    tokens_total: preState._llm_total_tokens + Number(llm.tokens_in || 0) + Number(llm.tokens_out || 0),\n    message_count: preState._llm_message_count + 1\n  }\n}];"
+      }
+    },
+    {
+      "id": "ao-10",
+      "name": "Update Session",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        880,
+        220
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE onboarding_sessions SET messages = $1::jsonb, sections_covered = $2::jsonb, llm_total_cost_usd = $3::numeric, llm_total_tokens = $4::int, llm_message_count = $5::int, status = CASE WHEN $6::boolean THEN 'completed' ELSE status END WHERE id = $7::uuid RETURNING id;",
+        "options": {
+          "queryReplacement": "={{ [$json.messages_json, $json.sections_covered_json, $json.cost_total, $json.tokens_total, $json.message_count, $json.ready_to_close, $json.session_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ao-11",
+      "name": "Should Extract?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1100,
+        220
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "se1",
+              "leftValue": "={{ $('Parse LLM JSON').first().json.ready_to_close }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ao-12",
+      "name": "Trigger Extract",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.1,
+      "position": [
+        1320,
+        80
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "mzGAxzoKPwVUFWcS",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "session_id": "={{ $('Parse LLM JSON').first().json.session_id }}"
+          },
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "ao-13",
+      "name": "Respond JSON",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        1540,
+        220
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ message: $('Parse LLM JSON').first().json.response_message, resume_token: $('Parse LLM JSON').first().json.resume_token, sections_covered: $('Parse LLM JSON').first().json.sections_covered, ready_to_close: $('Parse LLM JSON').first().json.ready_to_close }) }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "name": "Cache-Control",
+                "value": "no-store"
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook POST Message": {
+      "main": [
+        [
+          {
+            "node": "Parse Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Input": {
+      "main": [
+        [
+          {
+            "node": "Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid?": {
+      "main": [
+        [
+          {
+            "node": "Get Or Create Session",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 400",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Or Create Session": {
+      "main": [
+        [
+          {
+            "node": "Load Baseline Profile",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Baseline Profile": {
+      "main": [
+        [
+          {
+            "node": "Build LLM Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build LLM Prompt": {
+      "main": [
+        [
+          {
+            "node": "Call LLM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call LLM": {
+      "main": [
+        [
+          {
+            "node": "Parse LLM JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse LLM JSON": {
+      "main": [
+        [
+          {
+            "node": "Update Session",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Session": {
+      "main": [
+        [
+          {
+            "node": "Should Extract?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Should Extract?": {
+      "main": [
+        [
+          {
+            "node": "Trigger Extract",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Trigger Extract": {
+      "main": [
+        [
+          {
+            "node": "Respond JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": null,
+  "versionId": "5b6ad33a-f8ae-4d8a-b605-488a47db3a65",
+  "tags": []
+}

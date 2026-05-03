@@ -1,0 +1,253 @@
+{
+  "name": "aftercare_public_form",
+  "active": true,
+  "nodes": [
+    {
+      "id": "fm-01",
+      "name": "Webhook GET",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -700,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "aftercare-public-form",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "webhookId": "01d019bd-0a1b-46f4-a238-25c68b108c7f"
+    },
+    {
+      "id": "fm-02",
+      "name": "Validate Token",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -460,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT v.project_id, v.token_id, v.valid, v.reason, p.name AS project_name FROM validate_client_token($1, 'aftercare_submit') v LEFT JOIN projects p ON p.id = v.project_id LIMIT 1;",
+        "options": {
+          "queryReplacement": "={{ [ ($json.query.token || '') ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "id": "fm-03",
+      "name": "Token Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -220,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "v1",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "fm-04",
+      "name": "Build Form HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        20,
+        220
+      ],
+      "parameters": {
+        "jsCode": "const r = $input.first().json;\nconst token = ($('Webhook GET').first().json.query || {}).token || '';\nconst N8N = 'https://n8n-n8n.zzeluw.easypanel.host';\nconst submitUrl = N8N + '/webhook/aftercare-public-submit';\nconst html = '<!DOCTYPE html><html lang=\"es\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>Reportar incidencia</title>' +\n'<style>body{font-family:-apple-system,Arial,sans-serif;max-width:600px;margin:24px auto;padding:16px;color:#1f2937}h1{color:#2c3e50;font-size:22px}label{display:block;margin-top:16px;font-weight:600;font-size:14px}input,textarea{width:100%;padding:10px;border:1px solid #d1d5db;border-radius:6px;font-size:15px;box-sizing:border-box}textarea{min-height:120px;resize:vertical}.help{color:#6b7280;font-size:12px;margin-top:4px}button{background:#2563eb;color:white;padding:14px 24px;border:0;border-radius:6px;font-size:16px;cursor:pointer;margin-top:24px;width:100%}button:hover{background:#1d4ed8}.proj{background:#f3f4f6;padding:12px;border-radius:6px;margin-bottom:16px;font-size:14px}.ok{background:#d1fae5;color:#065f46;padding:12px;border-radius:6px;display:none;margin-top:16px}.err{background:#fee2e2;color:#991b1b;padding:12px;border-radius:6px;display:none;margin-top:16px}</style></head><body>' +\n'<h1>Reportar una incidencia</h1>' +\n'<div class=\"proj\">Proyecto: <b>' + (r.project_name || '?') + '</b></div>' +\n'<div id=\"ok\" class=\"ok\"></div><div id=\"err\" class=\"err\"></div>' +\n'<form id=\"f\">' +\n'<label>Que ha pasado?</label>' +\n'<textarea id=\"d\" placeholder=\"Describe la incidencia con detalle. Donde, desde cuando, si esta empeorando.\"></textarea>' +\n'<label>URL de la foto (opcional)</label>' +\n'<input type=\"url\" id=\"p\" placeholder=\"https://...\">' +\n'<div class=\"help\">Sube primero a Drive/iCloud/imgur y pega aqui el enlace publico.</div>' +\n'<label>Tu email de contacto (opcional)</label>' +\n'<input type=\"email\" id=\"c\" placeholder=\"tucorreo@ejemplo.com\">' +\n'<button type=\"submit\">Enviar incidencia</button>' +\n'</form>' +\n'<script>document.getElementById(\"f\").addEventListener(\"submit\",async e=>{e.preventDefault();const t=\"' + token + '\";const d=document.getElementById(\"d\").value.trim();const p=document.getElementById(\"p\").value.trim();const c=document.getElementById(\"c\").value.trim();if(d.length<10){document.getElementById(\"err\").style.display=\"block\";document.getElementById(\"err\").textContent=\"Describe la incidencia con al menos 10 caracteres.\";return}try{const r=await fetch(\"' + submitUrl + '\",{method:\"POST\",headers:{\"Content-Type\":\"application/json\"},body:JSON.stringify({token:t,description:d,photo_url:p,client_contact:c})});const j=await r.json();if(j.status===\"ok\"){document.getElementById(\"f\").style.display=\"none\";document.getElementById(\"ok\").style.display=\"block\";document.getElementById(\"ok\").innerHTML=\"<b>Incidencia registrada.</b><br>Referencia: \"+j.incident_id}else{document.getElementById(\"err\").style.display=\"block\";document.getElementById(\"err\").textContent=j.error||\"No se pudo registrar.\"}}catch(x){document.getElementById(\"err\").style.display=\"block\";document.getElementById(\"err\").textContent=\"Error de conexion. Intentalo de nuevo.\"}});</script>' +\n'</body></html>';\nreturn [{ json: { html: html } }];"
+      }
+    },
+    {
+      "id": "fm-05",
+      "name": "Respond OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        240,
+        220
+      ],
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.html }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "text/html; charset=utf-8"
+              },
+              {
+                "name": "Strict-Transport-Security",
+                "value": "max-age=31536000; includeSubDomains"
+              },
+              {
+                "name": "X-Content-Type-Options",
+                "value": "nosniff"
+              },
+              {
+                "name": "X-Frame-Options",
+                "value": "DENY"
+              },
+              {
+                "name": "Referrer-Policy",
+                "value": "strict-origin-when-cross-origin"
+              },
+              {
+                "name": "Content-Security-Policy",
+                "value": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; form-action 'self'; connect-src 'self'"
+              },
+              {
+                "name": "Permissions-Policy",
+                "value": "geolocation=(), microphone=(), camera=()"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "fm-06",
+      "name": "Respond Invalid",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        20,
+        420
+      ],
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "<!DOCTYPE html><html><body style=\"font-family:Arial;max-width:500px;margin:60px auto;padding:24px;text-align:center;color:#374151\"><h1 style=\"color:#dc2626\">Enlace no valido</h1><p>El enlace que has usado no es valido, ha expirado o ha sido revocado. Por favor contacta con tu arquitecto.</p></body></html>",
+        "options": {
+          "responseCode": 404,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "text/html; charset=utf-8"
+              },
+              {
+                "name": "Strict-Transport-Security",
+                "value": "max-age=31536000; includeSubDomains"
+              },
+              {
+                "name": "X-Content-Type-Options",
+                "value": "nosniff"
+              },
+              {
+                "name": "X-Frame-Options",
+                "value": "DENY"
+              },
+              {
+                "name": "Referrer-Policy",
+                "value": "strict-origin-when-cross-origin"
+              },
+              {
+                "name": "Content-Security-Policy",
+                "value": "default-src 'self'; style-src 'unsafe-inline'"
+              },
+              {
+                "name": "Permissions-Policy",
+                "value": "geolocation=(), microphone=(), camera=()"
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook GET": {
+      "main": [
+        [
+          {
+            "node": "Validate Token",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Token": {
+      "main": [
+        [
+          {
+            "node": "Token Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Token Valid?": {
+      "main": [
+        [
+          {
+            "node": "Build Form HTML",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond Invalid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Form HTML": {
+      "main": [
+        [
+          {
+            "node": "Respond OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": null,
+  "versionId": "5f6b31cb-f99d-4d6c-89a6-1cf73ec8bf8b",
+  "tags": []
+}

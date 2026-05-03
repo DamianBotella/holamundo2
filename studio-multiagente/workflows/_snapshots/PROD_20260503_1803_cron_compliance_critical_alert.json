@@ -1,0 +1,302 @@
+{
+  "name": "cron_compliance_critical_alert",
+  "active": true,
+  "nodes": [
+    {
+      "id": "ccca-01",
+      "name": "Schedule Every 6h",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -700,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 */6 * * *"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "ccca-02",
+      "name": "Load Architect Email",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -460,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT value AS architect_email FROM system_config WHERE key = 'architect_email' LIMIT 1",
+        "options": {
+          "alwaysOutputData": true
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ccca-03",
+      "name": "Find Critical",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -220,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT json_build_object(\n  'safety_pathology_unresolved', coalesce((SELECT json_agg(t.*) FROM (\n    SELECT pf.id::text AS finding_id, pf.pathology_type AS type, pf.severity, pf.description,\n      p.id::text AS project_id, p.name AS project_name, p.current_phase\n    FROM pathology_findings pf\n    JOIN projects p ON p.id = pf.project_id\n    WHERE pf.affects_safety = true\n      AND pf.status NOT IN ('repaired', 'dismissed', 'monitored')\n      AND p.current_phase NOT IN ('archived')\n    LIMIT 20\n  ) t), '[]'::json),\n  'aftercare_urgent_open_24h', coalesce((SELECT json_agg(t.*) FROM (\n    SELECT i.id::text AS incident_id, i.severity, i.category, i.responsible_trade,\n      substring(i.description for 100) AS desc_preview, i.reported_at,\n      floor(EXTRACT(EPOCH FROM (now() - i.reported_at))/3600)::int AS hours_open,\n      p.id::text AS project_id, p.name AS project_name\n    FROM aftercare_incidents i\n    JOIN projects p ON p.id = i.project_id\n    WHERE i.severity IN ('urgent', 'high')\n      AND i.status NOT IN ('resolved', 'closed', 'disputed')\n      AND i.reported_at < now() - INTERVAL '24 hours'\n    LIMIT 20\n  ) t), '[]'::json),\n  'safety_unconfirmed_in_obra', coalesce((SELECT json_agg(t.*) FROM (\n    SELECT p.id::text AS project_id, p.name AS project_name, p.current_phase\n    FROM projects p\n    WHERE p.current_phase IN ('approved', 'planning_done')\n      AND p.status = 'active'\n      AND NOT EXISTS (SELECT 1 FROM safety_plans sp WHERE sp.project_id = p.id AND sp.exec_status = 'confirmed')\n    LIMIT 10\n  ) t), '[]'::json),\n  'no_encargo_in_obra', coalesce((SELECT json_agg(t.*) FROM (\n    SELECT p.id::text AS project_id, p.name AS project_name, p.current_phase\n    FROM projects p\n    WHERE p.current_phase IN ('approved', 'planning_done')\n      AND p.status = 'active'\n      AND NOT EXISTS (SELECT 1 FROM contracts c WHERE c.project_id = p.id AND c.contract_type = 'encargo_profesional' AND c.status = 'signed')\n    LIMIT 10\n  ) t), '[]'::json),\n  'total_critical', (\n    (SELECT count(*) FROM pathology_findings pf JOIN projects p ON p.id = pf.project_id WHERE pf.affects_safety = true AND pf.status NOT IN ('repaired', 'dismissed', 'monitored') AND p.current_phase NOT IN ('archived'))\n  + (SELECT count(*) FROM aftercare_incidents WHERE severity IN ('urgent','high') AND status NOT IN ('resolved','closed','disputed') AND reported_at < now() - INTERVAL '24 hours')\n  + (SELECT count(*) FROM projects WHERE current_phase IN ('approved','planning_done') AND status='active' AND NOT EXISTS (SELECT 1 FROM safety_plans sp WHERE sp.project_id = projects.id AND sp.exec_status = 'confirmed'))\n  + (SELECT count(*) FROM projects WHERE current_phase IN ('approved','planning_done') AND status='active' AND NOT EXISTS (SELECT 1 FROM contracts c WHERE c.project_id = projects.id AND c.contract_type = 'encargo_profesional' AND c.status = 'signed'))\n  )::int\n) AS report;",
+        "options": {
+          "alwaysOutputData": true
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ccca-04",
+      "name": "Has Critical?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        20,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "ic1",
+              "leftValue": "={{ $json.report.total_critical }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ccca-05",
+      "name": "Build Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        160
+      ],
+      "parameters": {
+        "jsCode": "const r = $('Find Critical').first().json.report || {};\nconst safety = Array.isArray(r.safety_pathology_unresolved) ? r.safety_pathology_unresolved : [];\nconst aftercare = Array.isArray(r.aftercare_urgent_open_24h) ? r.aftercare_urgent_open_24h : [];\nconst noSafety = Array.isArray(r.safety_unconfirmed_in_obra) ? r.safety_unconfirmed_in_obra : [];\nconst noEncargo = Array.isArray(r.no_encargo_in_obra) ? r.no_encargo_in_obra : [];\nconst total = r.total_critical || 0;\n\nfunction esc(s) { return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\n\nconst sections = [];\nif (safety.length > 0) {\n  sections.push(`<h3 style=\"color:#c00;margin-top:24px\">Patologias afectando seguridad SIN resolver (${safety.length})</h3>\n<ul style=\"font-size:14px;line-height:1.6\">${safety.map(s => `<li><b>${esc(s.project_name)}</b> [${esc(s.current_phase)}] - <span style=\"color:#c00\">${esc(s.severity)}</span> ${esc(s.type)}: ${esc((s.description || '').substring(0,140))}...</li>`).join('')}</ul>`);\n}\nif (aftercare.length > 0) {\n  sections.push(`<h3 style=\"color:#c00;margin-top:24px\">Aftercare urgent/high abierto >24h (${aftercare.length})</h3>\n<ul style=\"font-size:14px;line-height:1.6\">${aftercare.map(a => `<li><b>${esc(a.project_name)}</b> - <span style=\"color:#c00\">${esc(a.severity)}</span> ${esc(a.category || '?')} (${a.hours_open}h): ${esc(a.desc_preview)}...</li>`).join('')}</ul>`);\n}\nif (noSafety.length > 0) {\n  sections.push(`<h3 style=\"color:#e67e22;margin-top:24px\">Proyectos en obra SIN safety_plan confirmado (${noSafety.length})</h3>\n<p style=\"font-size:13px;color:#555\">Obligatorio por RD 1627/1997. Disparar agent_safety_plan y confirmar.</p>\n<ul style=\"font-size:14px\">${noSafety.map(p => `<li><b>${esc(p.project_name)}</b> - fase ${esc(p.current_phase)}</li>`).join('')}</ul>`);\n}\nif (noEncargo.length > 0) {\n  sections.push(`<h3 style=\"color:#e67e22;margin-top:24px\">Proyectos en obra SIN encargo profesional firmado (${noEncargo.length})</h3>\n<p style=\"font-size:13px;color:#555\">Riesgo legal/profesional. POST /webhook/contract-generate contract_type=encargo_profesional.</p>\n<ul style=\"font-size:14px\">${noEncargo.map(p => `<li><b>${esc(p.project_name)}</b> - fase ${esc(p.current_phase)}</li>`).join('')}</ul>`);\n}\n\nconst html = `<div style=\"font-family:system-ui,sans-serif;color:#222;max-width:780px\">\n<div style=\"background:#fee;border-left:4px solid #c00;padding:14px 18px;border-radius:4px;margin-bottom:18px\">\n  <h2 style=\"margin:0;color:#c00\">[CRITICO] ${total} situaciones criticas detectadas</h2>\n  <p style=\"margin:6px 0 0;font-size:13px;color:#555\">Cron cada 6h vigila condiciones donde un compliance audit retornaria grade=D inmediato.</p>\n</div>\n${sections.join('\\n')}\n<p style=\"font-size:12px;color:#888;margin-top:24px\">cron_compliance_critical_alert - generado ${new Date().toISOString()}<br>Para audit detallado: <code>POST /webhook/audit-project</code>. Vista panoramica: <code>GET /webhook/admin-compliance-overview</code>.</p>\n</div>`;\n\nconst subject = `[CRITICO compliance] ${total} situaciones (${safety.length} safety + ${aftercare.length} aftercare + ${noSafety.length + noEncargo.length} legal)`;\nreturn [{ json: { html, subject, total } }];"
+      }
+    },
+    {
+      "id": "ccca-06",
+      "name": "Send Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        500,
+        160
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $('Load Architect Email').first().json.architect_email }}",
+        "subject": "={{ $json.subject }}",
+        "emailType": "html",
+        "message": "={{ $json.html }}",
+        "options": {}
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "PLACEHOLDER",
+          "name": "Gmail Notifications"
+        }
+      }
+    },
+    {
+      "id": "ccca-07",
+      "name": "Log Issues Found",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        740,
+        160
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, status, output_summary) VALUES (NULL, 'cron_compliance_critical_alert', 'compliance_critical_clean', 'warning', $1)",
+        "options": {
+          "queryReplacement": "={{ [ 'ran_with_issues: ' + $('Build Email').first().json.total + ' situaciones criticas' ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ccca-08",
+      "name": "Log Clean",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        260,
+        440
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, status, output_summary) VALUES (NULL, 'cron_compliance_critical_alert', 'compliance_critical_clean', 'success', '0 situaciones criticas')",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "4b9269d2-beff-4f35-aab2-fc0dcf4ca225",
+      "name": "Init Super Admin Context",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -580,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT set_config('app.role', 'super_admin', false) AS role_set"
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Load Architect Email": {
+      "main": [
+        [
+          {
+            "node": "Find Critical",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Critical": {
+      "main": [
+        [
+          {
+            "node": "Has Critical?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Critical?": {
+      "main": [
+        [
+          {
+            "node": "Build Email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Clean",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Email": {
+      "main": [
+        [
+          {
+            "node": "Send Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Email": {
+      "main": [
+        [
+          {
+            "node": "Log Issues Found",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Every 6h": {
+      "main": [
+        [
+          {
+            "node": "Init Super Admin Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Init Super Admin Context": {
+      "main": [
+        [
+          {
+            "node": "Load Architect Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": null,
+  "versionId": "d6ed1ad5-711b-4d7c-9fdd-e28b1dd74e4b",
+  "tags": []
+}

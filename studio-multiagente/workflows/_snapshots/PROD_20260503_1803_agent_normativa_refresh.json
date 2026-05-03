@@ -1,0 +1,626 @@
+{
+  "name": "agent_normativa_refresh",
+  "active": true,
+  "nodes": [
+    {
+      "id": "nr-0001",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        250,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "normativa-refresh",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "webhookId": "20f53889-aa46-43a7-beaf-9a2e4e737e9f"
+    },
+    {
+      "id": "nr-0002",
+      "name": "Respond Started",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        500,
+        300
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"status\": \"processing\", \"message\": \"Normativa refresh iniciada. Recibiras un email cuando complete.\"}",
+        "options": {}
+      }
+    },
+    {
+      "id": "nr-0003",
+      "name": "Load Sources",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        750,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, name, url, source_type, category, subcategory FROM normativa_sources WHERE active = true ORDER BY category, subcategory",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "nr-0004",
+      "name": "Split In Batches",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1000,
+        300
+      ],
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      }
+    },
+    {
+      "id": "nr-0005",
+      "name": "Fetch Content",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1250,
+        300
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "=https://r.jina.ai/{{ $json.url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "id": "nr-0006",
+      "name": "Prepare LLM Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1500,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const source = $('Split In Batches').first().json;\nconst response = $input.first().json;\nconst rawContent = response.data?.content || response.body || JSON.stringify(response);\nconst content = String(rawContent).substring(0, 12000);\nconst prompt = 'Eres un especialista en normativa espanola de edificacion.\\nFUENTE: ' + source.name + '\\nCATEGORIA: ' + source.category + (source.subcategory ? ' - ' + source.subcategory : '') + '\\n\\nCONTENIDO:\\n' + content + '\\n\\nExtrae los requisitos normativos mas importantes con valores especificos.\\n\\nResponde EXCLUSIVAMENTE con JSON valido:\\n{\\n  \"rules\": [\\n    {\\n      \"title\": \"nombre corto\",\\n      \"content\": \"descripcion con valores numericos\",\\n      \"applicable_to\": \"tipo de obra\"\\n    }\\n  ],\\n  \"summary\": \"resumen en 2-3 frases\"\\n}';\nreturn [{ json: { prompt_system: 'Especialista en normativa edificacion espanola. Responde solo con JSON valido.', prompt_user: prompt, model: 'claude-sonnet-4-20250514', temperature: 0.1, source_id: source.id, source_name: source.name, source_url: source.url, source_type: source.source_type, category: source.category, subcategory: source.subcategory || '' }}];"
+      }
+    },
+    {
+      "id": "nr-0007",
+      "name": "Call LLM",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.1,
+      "position": [
+        1750,
+        300
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "JoKqGZ8pDzhJohV2",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "nr-0008",
+      "name": "Parse Rules",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2000,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const llmResponse = $input.first().json;\nconst prepData = $('Prepare LLM Prompt').first().json;\nlet content = llmResponse.content || llmResponse.response || llmResponse.text || '';\nif (typeof content === 'object') content = JSON.stringify(content);\ncontent = content.replace(/```json\\n?/g, '').replace(/```\\n?/g, '').trim();\nlet parsed = {};\ntry { parsed = JSON.parse(content); } catch(e) {\n  const match = content.match(/\\{[\\s\\S]*\\}/);\n  if (match) { try { parsed = JSON.parse(match[0]); } catch(e2) {} }\n}\nconst rules = parsed.rules || [];\nconst summary = parsed.summary || '';\nif (rules.length === 0) {\n  return [{ json: { source_id: prepData.source_id, source_name: prepData.source_name, source_url: prepData.source_url, source_type: prepData.source_type, category: prepData.category, subcategory: prepData.subcategory, content: 'Sin reglas extraidas. ' + summary, rules_count: 0, summary } }];\n}\nreturn rules.map(rule => ({ json: { source_id: prepData.source_id, source_name: prepData.source_name, source_url: prepData.source_url, source_type: prepData.source_type, category: prepData.category, subcategory: prepData.subcategory, content: rule.title + ': ' + rule.content + (rule.applicable_to ? ' [Aplica a: ' + rule.applicable_to + ']' : ''), rules_count: rules.length, summary } }));"
+      }
+    },
+    {
+      "id": "nr-0014",
+      "name": "Compute New Hash",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2250,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const all = $input.all();\nconst content = all.map(i => i.json.content || '').join('\\n');\nlet hash = 5381;\nfor (let i = 0; i < content.length; i++) {\n  hash = ((hash << 5) + hash) + content.charCodeAt(i);\n  hash = hash & hash;\n}\nconst newHash = Math.abs(hash).toString(16);\nreturn all.map(item => ({ json: { ...item.json, new_hash: newHash } }));"
+      }
+    },
+    {
+      "id": "nr-0015",
+      "name": "Read Previous Hash",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2500,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT content_hash FROM normativa_knowledge WHERE source_id = $1::uuid ORDER BY verified_date DESC LIMIT 1",
+        "options": {
+          "queryReplacement": "={{ [$json.source_id] }}",
+          "alwaysOutputData": true
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "nr-0016",
+      "name": "Attach Old Hash",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2750,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const items = $('Compute New Hash').all();\nconst oldHash = $input.first().json.content_hash || '';\nreturn items.map(item => ({ json: { ...item.json, old_hash: oldHash } }));"
+      }
+    },
+    {
+      "id": "nr-0009",
+      "name": "Delete Old Records",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        3000,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "DELETE FROM normativa_knowledge WHERE source_id = $1::uuid",
+        "options": {
+          "queryReplacement": "={{ [$json.source_id] }}",
+          "alwaysOutputData": true
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "nr-0010",
+      "name": "Insert Knowledge Row",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        3250,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO normativa_knowledge (source_id, category, subcategory, content, source_url, source_type, verified_date, content_hash) VALUES ($1::uuid, $2, $3, $4, $5, $6, NOW(), $7) RETURNING id",
+        "options": {
+          "queryReplacement": "={{ [$json.source_id, $json.category, $json.subcategory, $json.content, $json.source_url, $json.source_type, $json.new_hash] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "nr-0011",
+      "name": "Aggregate Back",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3500,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const all = $input.all();\nconst first = all[0].json;\nconst hasChanged = first.old_hash !== '' && first.old_hash !== first.new_hash;\nconst isNew = first.old_hash === '';\nreturn [{ json: { source_id: first.source_id, source_name: first.source_name, rules_count: first.rules_count || all.length, summary: first.summary || '', new_hash: first.new_hash || '', old_hash: first.old_hash || '', has_changed: hasChanged, is_new: isNew, category: first.category || '' } }];"
+      }
+    },
+    {
+      "id": "nr-0012",
+      "name": "Collect Changes",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1000,
+        500
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const all = $input.all();\nconst changed = all.filter(i => i.json.has_changed === true);\nconst newSources = all.filter(i => i.json.is_new === true);\nconst changedNames = changed.map(i => i.json.source_name || i.json.source_id);\nconst newNames = newSources.map(i => i.json.source_name || i.json.source_id);\nreturn [{ json: { total_sources: all.length, changed_count: changed.length, new_count: newSources.length, changed_names: changedNames, new_names: newNames } }];"
+      }
+    },
+    {
+      "id": "nr-0017",
+      "name": "Any Changes?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1250,
+        500
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "nr-if-001",
+              "leftValue": "={{ $json.changed_count }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "nr-0018",
+      "name": "Mark Tasks Requires Review",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1500,
+        400
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE regulatory_tasks SET status = 'requires_review' WHERE status IN ('detected', 'confirmed') AND project_id IN (SELECT id FROM projects WHERE current_phase NOT IN ('completed', 'archived'))",
+        "options": {
+          "alwaysOutputData": true
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "nr-0019",
+      "name": "Build Summary Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1750,
+        500
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const data = $('Collect Changes').first().json;\nconst now = new Date().toLocaleString('es-ES', {timeZone: 'Europe/Madrid', dateStyle: 'long', timeStyle: 'short'});\nlet changeSection = '';\nif (data.changed_count > 0) {\n  const names = data.changed_names.map(n => '<li>' + n + '</li>').join('');\n  changeSection = '<div style=\"background:#fdecea;border-left:4px solid #e74c3c;padding:12px 16px;margin:20px 0\"><strong>⚠️ ' + data.changed_count + ' fuente(s) cambiadas:</strong><ul>' + names + '</ul><p>Los tramites de proyectos activos han sido marcados como requires_review.</p></div>';\n} else {\n  changeSection = '<div style=\"background:#d5f5e3;border-left:4px solid #27ae60;padding:12px 16px;margin:20px 0\"><strong>Sin cambios detectados.</strong> Todas las fuentes son identicas a la ejecucion anterior.</div>';\n}\nif (data.new_count > 0) {\n  const newNames = data.new_names.map(n => '<li>' + n + '</li>').join('');\n  changeSection += '<div style=\"background:#e8f4fd;border-left:4px solid #3498db;padding:12px 16px;margin:10px 0\"><strong>Nuevas fuentes indexadas (' + data.new_count + '):</strong><ul>' + newNames + '</ul></div>';\n}\nconst body = '<html><body style=\"font-family:Arial,sans-serif;max-width:600px;margin:0 auto;color:#2c3e50\"><h2 style=\"color:#2c3e50;border-bottom:2px solid #27ae60;padding-bottom:8px\">Base de Conocimiento Normativa</h2><p>Actualizacion completada el <strong>' + now + '</strong>. Fuentes procesadas: <strong>' + data.total_sources + '</strong>.</p>' + changeSection + '<hr style=\"border:1px solid #ecf0f1;margin:20px 0\"><p style=\"font-size:11px;color:#95a5a6\">Sistema multiagente del estudio</p></body></html>';\nconst subjectTag = data.changed_count > 0 ? 'CAMBIOS DETECTADOS' : 'sin cambios';\nconst archEmail = ($('Load Architect Email').first()?.json?.value) || 'botelladesdeel98@gmail.com';\nreturn [{ json: { subject: '[Studio AI] Normativa ' + subjectTag + ' - ' + now, html_body: body, to: archEmail } }];"
+      }
+    },
+    {
+      "id": "nr-0013",
+      "name": "Send Summary Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        2000,
+        500
+      ],
+      "parameters": {
+        "sendTo": "={{ $json.to }}",
+        "subject": "={{ $json.subject }}",
+        "emailType": "html",
+        "message": "={{ $json.html_body }}",
+        "options": {}
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "PLACEHOLDER",
+          "name": "damian2botella"
+        }
+      }
+    },
+    {
+      "id": "296fad47-253f-442a-ba69-d4237fa529bb",
+      "name": "Load Architect Email",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        600,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT value FROM system_config WHERE key = 'architect_email'",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Respond Started",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Sources": {
+      "main": [
+        [
+          {
+            "node": "Split In Batches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split In Batches": {
+      "main": [
+        [
+          {
+            "node": "Fetch Content",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Collect Changes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Content": {
+      "main": [
+        [
+          {
+            "node": "Prepare LLM Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare LLM Prompt": {
+      "main": [
+        [
+          {
+            "node": "Call LLM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call LLM": {
+      "main": [
+        [
+          {
+            "node": "Parse Rules",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Rules": {
+      "main": [
+        [
+          {
+            "node": "Compute New Hash",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compute New Hash": {
+      "main": [
+        [
+          {
+            "node": "Read Previous Hash",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Previous Hash": {
+      "main": [
+        [
+          {
+            "node": "Attach Old Hash",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Attach Old Hash": {
+      "main": [
+        [
+          {
+            "node": "Delete Old Records",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delete Old Records": {
+      "main": [
+        [
+          {
+            "node": "Insert Knowledge Row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Knowledge Row": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Back",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Back": {
+      "main": [
+        [
+          {
+            "node": "Split In Batches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect Changes": {
+      "main": [
+        [
+          {
+            "node": "Any Changes?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Any Changes?": {
+      "main": [
+        [
+          {
+            "node": "Mark Tasks Requires Review",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Summary Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Tasks Requires Review": {
+      "main": [
+        [
+          {
+            "node": "Build Summary Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Summary Email": {
+      "main": [
+        [
+          {
+            "node": "Send Summary Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respond Started": {
+      "main": [
+        [
+          {
+            "node": "Load Architect Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Architect Email": {
+      "main": [
+        [
+          {
+            "node": "Load Sources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": null,
+  "versionId": "8bcba0e1-d475-4339-b3b0-c10c9a317301",
+  "tags": []
+}

@@ -1,0 +1,328 @@
+{
+  "name": "cron_aftercare_followup",
+  "active": true,
+  "nodes": [
+    {
+      "id": "af-01",
+      "name": "Schedule Daily 10am",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -700,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "daysInterval": 1,
+              "triggerAtHour": 10,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "af-02",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -700,
+        500
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "trigger-aftercare-followup",
+        "responseMode": "lastNode",
+        "authentication": "headerAuth"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "PLACEHOLDER",
+          "name": "Webhook API Key (entrante)"
+        }
+      },
+      "webhookId": "ceb8dcf5-8c9c-4688-b9ba-5847c02f9720"
+    },
+    {
+      "id": "af-03",
+      "name": "Find Stuck Assigned",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -460,
+        400
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT json_agg(row_to_json(t) ORDER BY t.days_assigned DESC) AS rows\nFROM (\n  SELECT ai.id, ai.severity, ai.category, ai.responsible_trade,\n         ai.assigned_to, ai.assigned_at,\n         LEFT(ai.description, 120) AS preview,\n         p.name AS project_name,\n         round((EXTRACT(EPOCH FROM (now() - ai.assigned_at))/86400)::numeric, 1) AS days_assigned\n  FROM aftercare_incidents ai\n  JOIN projects p ON p.id = ai.project_id\n  WHERE ai.status = 'assigned'\n    AND ai.assigned_at IS NOT NULL\n    AND ai.assigned_at < now() - INTERVAL '4 days'\n) t;",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "id": "af-04",
+      "name": "Has Stuck?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -220,
+        400
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "h1",
+              "leftValue": "={{ ($json.rows && $json.rows.length) || 0 }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "af-05",
+      "name": "Build Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        20,
+        320
+      ],
+      "parameters": {
+        "jsCode": "const list = $input.first().json.rows || [];\nconst sevColor = { urgent: '#dc2626', high: '#ea580c', medium: '#f59e0b', low: '#10b981' };\nconst rows = list.map(p => '<tr>' +\n  '<td><span style=\"background:' + (sevColor[p.severity] || '#6b7280') + ';color:white;padding:2px 6px;border-radius:3px\">' + (p.severity || '?').toUpperCase() + '</span></td>' +\n  '<td><b>' + (p.project_name || '?') + '</b><br><small>' + (p.category || '?') + ' / ' + (p.responsible_trade || '?') + '</small></td>' +\n  '<td>' + (p.assigned_to || '?') + '</td>' +\n  '<td>' + p.days_assigned + ' d</td>' +\n  '<td><small>' + (p.preview || '') + '</small></td>' +\n  '</tr>').join('');\nconst urgent = list.filter(p => p.severity === 'urgent').length;\nconst html = '<h2>Aftercare followup - incidencias asignadas sin avance</h2>' +\n  '<p>Total: <b>' + list.length + '</b>. Urgentes: <b style=\"color:#dc2626\">' + urgent + '</b>.</p>' +\n  '<p>Estas incidencias llevan mas de 4 dias en status <code>assigned</code> sin pasar a <code>in_progress</code> ni <code>resolved</code>. Considera contactar al gremio de nuevo o reasignar.</p>' +\n  '<table border=\"1\" cellpadding=\"6\" cellspacing=\"0\" style=\"border-collapse:collapse;font-family:sans-serif;font-size:13px\">' +\n  '<thead><tr style=\"background:#f3f4f6\"><th>Sev.</th><th>Proyecto / Categoria</th><th>Asignado a</th><th>Dias</th><th>Descripcion</th></tr></thead>' +\n  '<tbody>' + rows + '</tbody></table>' +\n  '<p style=\"font-size:11px;color:#6b7280\">Para marcar in_progress: actualizar status manualmente. Para resolver: POST /webhook/aftercare-resolve.</p>';\nreturn [{ json: { html_body: html, count: list.length, urgent: urgent } }];"
+      }
+    },
+    {
+      "id": "af-06",
+      "name": "Send Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        260,
+        320
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $('Load Architect Email').first().json.value }}",
+        "subject": "=ArquitAI - {{ $json.count }} aftercare assigned >4d sin avance",
+        "emailType": "html",
+        "message": "={{ $json.html_body }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "PLACEHOLDER",
+          "name": "damian2botella"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "af-07",
+      "name": "Log",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        500,
+        320
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, status, input_summary)\nVALUES (NULL, 'cron_aftercare_followup', 'review_stuck_assigned', 'success', $1)\nRETURNING id;",
+        "options": {
+          "queryReplacement": "={{ [ ('stuck=' + $json.count + ', urgent=' + $json.urgent) ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "af-08",
+      "name": "Nothing Stuck",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        20,
+        480
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "a4400751-65c1-481d-ba86-cdc080150765",
+      "name": "Load Architect Email",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -580,
+        400
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT value FROM system_config WHERE key = 'architect_email'",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "a564d09b-99eb-429a-8cd5-55a69bb45f86",
+      "name": "Init Super Admin Context",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -580,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT set_config('app.role', 'super_admin', false) AS role_set"
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Find Stuck Assigned": {
+      "main": [
+        [
+          {
+            "node": "Has Stuck?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Stuck?": {
+      "main": [
+        [
+          {
+            "node": "Build Email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Nothing Stuck",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Email": {
+      "main": [
+        [
+          {
+            "node": "Send Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Email": {
+      "main": [
+        [
+          {
+            "node": "Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Load Architect Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Architect Email": {
+      "main": [
+        [
+          {
+            "node": "Find Stuck Assigned",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Daily 10am": {
+      "main": [
+        [
+          {
+            "node": "Init Super Admin Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Init Super Admin Context": {
+      "main": [
+        [
+          {
+            "node": "Load Architect Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": null,
+  "versionId": "59f67378-d2fe-4f1c-8d0d-bbe0fcbb680f",
+  "tags": []
+}

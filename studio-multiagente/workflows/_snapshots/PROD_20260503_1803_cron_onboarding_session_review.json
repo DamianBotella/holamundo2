@@ -1,0 +1,326 @@
+{
+  "name": "cron_onboarding_session_review",
+  "active": true,
+  "nodes": [
+    {
+      "id": "cor-01",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 9 * * 1"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "cor-02",
+      "name": "Find Stuck Sessions",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        250,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, resume_token, sections_covered, total_cost_usd, created_at, updated_at, EXTRACT(EPOCH FROM (NOW() - updated_at))/86400 AS days_since_update FROM onboarding_sessions WHERE status = 'in_progress' AND updated_at < NOW() - INTERVAL '7 days' ORDER BY updated_at ASC LIMIT 20",
+        "options": {
+          "alwaysOutputData": true
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "cor-03",
+      "name": "Has Sessions?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        500,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $('Find Stuck Sessions').all().length }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "cor-04",
+      "name": "Aggregate Sessions",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        750,
+        220
+      ],
+      "parameters": {
+        "jsCode": "const sessions = $('Find Stuck Sessions').all().map(s => s.json);\nconst rows = sessions.map(s => {\n  const sec = (typeof s.sections_covered === 'string') ? JSON.parse(s.sections_covered) : (s.sections_covered || {});\n  const covered = Object.keys(sec).filter(k => sec[k] && sec[k].covered).length;\n  const days = Math.floor(s.days_since_update || 0);\n  return `<tr><td>${s.id.substring(0,8)}…</td><td>${covered}/8 secciones</td><td>$${(s.total_cost_usd||0).toFixed(4)}</td><td>${days} d sin actividad</td><td><a href=\"https://n8n-n8n.zzeluw.easypanel.host/webhook/setup-onboarding?token=${s.resume_token}\">Retomar</a></td></tr>`;\n}).join('\\n');\nconst html = `<h2>Sesiones de onboarding paradas (>7 d)</h2><p>Hay ${sessions.length} sesión(es) que llevan más de 7 días sin actividad y siguen <code>in_progress</code>. Continúalas o ciérralas manualmente:</p><table border=\"1\" cellpadding=\"6\" cellspacing=\"0\" style=\"border-collapse:collapse;\"><thead><tr><th>ID</th><th>Cobertura</th><th>Coste</th><th>Inactividad</th><th>Acción</th></tr></thead><tbody>${rows}</tbody></table><p style=\"font-size:12px;color:#666;\">Cron semanal (lun 09:00). Genera/cierra perfiles desde el admin: <a href=\"https://n8n-n8n.zzeluw.easypanel.host/webhook/admin-studio-profile\">/admin-studio-profile</a></p>`;\nreturn [{ json: { count: sessions.length, html } }];"
+      }
+    },
+    {
+      "id": "cor-05",
+      "name": "Send Email",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.1,
+      "position": [
+        1000,
+        220
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "ks2CqrtJCxLJTPdV",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "to_address": "={{ $('Find Architect Email').first().json.architect_email }}",
+            "subject": "=[ArquitAI] Onboarding: {{ $('Aggregate Sessions').first().json.count }} sesión(es) paradas >7 días",
+            "body_html": "={{ $('Aggregate Sessions').first().json.html }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "to_address",
+              "displayName": "to_address",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "subject",
+              "displayName": "subject",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "body_html",
+              "displayName": "body_html",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "cor-06",
+      "name": "Find Architect Email",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        750,
+        380
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT value AS architect_email FROM system_config WHERE key = 'architect_email' LIMIT 1",
+        "options": {
+          "alwaysOutputData": true
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "cor-07",
+      "name": "Done",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1250,
+        300
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "d1",
+              "name": "status",
+              "value": "ok",
+              "type": "string"
+            },
+            {
+              "id": "d2",
+              "name": "stuck_count",
+              "value": "={{ $('Find Stuck Sessions').all().length }}",
+              "type": "number"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "6153cc88-9885-44d5-b631-4aed77ecaede",
+      "name": "Init Super Admin Context",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        120,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT set_config('app.role', 'super_admin', false) AS role_set"
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Find Stuck Sessions": {
+      "main": [
+        [
+          {
+            "node": "Has Sessions?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Sessions?": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Sessions",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Find Architect Email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Sessions": {
+      "main": [
+        [
+          {
+            "node": "Send Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Architect Email": {
+      "main": [
+        [
+          {
+            "node": "Send Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Email": {
+      "main": [
+        [
+          {
+            "node": "Done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Init Super Admin Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Init Super Admin Context": {
+      "main": [
+        [
+          {
+            "node": "Find Stuck Sessions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": null,
+  "versionId": "136570e0-79ac-4b28-be79-6213b4c104fc",
+  "tags": []
+}

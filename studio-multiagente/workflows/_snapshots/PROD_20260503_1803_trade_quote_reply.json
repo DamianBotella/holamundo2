@@ -1,0 +1,330 @@
+{
+  "name": "trade_quote_reply",
+  "active": true,
+  "nodes": [
+    {
+      "id": "tr-01",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -700,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "trade-quote-reply",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "onError": "continueRegularOutput",
+      "webhookId": "21e64ed1-cc63-4b7c-aa6a-17c1dca2bb2d"
+    },
+    {
+      "id": "tr-02",
+      "name": "Extract Token",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -460,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const wh = $('Webhook').first().json;\nconst token = (wh.query && wh.query.token) || (wh.body && wh.body.token) || null;\nif (!token) { const e = { valid: false, error: 'token obligatorio (en query o body)' }; return [{ json: e }]; }\nconst body = wh.body || {};\nconst out = {\n  valid: true,\n  token: token,\n  amount: body.amount ? Number(body.amount) : null,\n  currency: body.currency || 'EUR',\n  payment_terms: (body.payment_terms || '').toString().slice(0, 500),\n  estimated_duration: (body.estimated_duration || '').toString().slice(0, 200),\n  reply_text: (body.reply_text || body.notes || '').toString().slice(0, 4000),\n  status: body.status || 'quoted'\n};\nreturn [{ json: out }];"
+      }
+    },
+    {
+      "id": "tr-03",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -220,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "v1",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "tr-04",
+      "name": "Apply Reply",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        20,
+        220
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE trade_quotes SET\n  status = CASE WHEN $1 IN ('quoted','rejected_by_supplier','accepted','withdrawn') THEN $1 ELSE 'quoted' END,\n  amount = NULLIF($2,'')::numeric,\n  currency = COALESCE(NULLIF($3,''), currency),\n  payment_terms = COALESCE(NULLIF($4,''), payment_terms),\n  estimated_duration = COALESCE(NULLIF($5,''), estimated_duration),\n  reply_text = $6,\n  reply_received_at = now()\n WHERE webhook_token = $7\nRETURNING id, project_id, supplier_name, status, amount;",
+        "options": {
+          "queryReplacement": "={{ [ $json.status, $json.amount === null || $json.amount === undefined ? '' : String($json.amount), $json.currency, $json.payment_terms, $json.estimated_duration, $json.reply_text, $json.token ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "tr-05",
+      "name": "Match?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        240,
+        220
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "m1",
+              "leftValue": "={{ $json.id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "tr-06",
+      "name": "Notify Damian",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        480,
+        140
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $('Load Architect Email').first().json.value }}",
+        "subject": "=Respuesta gremio: {{ $json.supplier_name }} — {{ $json.amount ? $json.amount + 'eur' : 'sin importe' }}",
+        "emailType": "html",
+        "message": "=<h3>Respuesta de presupuesto</h3><p><b>Gremio:</b> {{ $json.supplier_name }}</p><p><b>Estado:</b> {{ $json.status }}</p><p><b>Importe:</b> {{ $json.amount ? $json.amount + ' EUR' : '—' }}</p><p><b>Texto recibido:</b><br>{{ $('Extract Token').first().json.reply_text }}</p><p style=\"font-size:11px;color:#6b7280\">Quote ID: {{ $json.id }}</p>",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "PLACEHOLDER",
+          "name": "damian2botella"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "tr-07",
+      "name": "Respond 200",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        720,
+        140
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'received', quote_id: $('Apply Reply').first().json.id, supplier: $('Apply Reply').first().json.supplier_name, quote_status: $('Apply Reply').first().json.status, message: 'Gracias, hemos recibido tu respuesta. Revisaremos el presupuesto.'}) }}",
+        "options": {
+          "responseCode": 200
+        }
+      }
+    },
+    {
+      "id": "tr-08",
+      "name": "Respond 404",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        480,
+        320
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'not_found', error: 'Token no válido o expirado'}) }}",
+        "options": {
+          "responseCode": 404
+        }
+      }
+    },
+    {
+      "id": "tr-09",
+      "name": "Respond 400",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        20,
+        460
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'error', error: $json.error}) }}",
+        "options": {
+          "responseCode": 400
+        }
+      }
+    },
+    {
+      "id": "8ca28649-33ba-4540-ae84-6cfe46b2ff7c",
+      "name": "Load Architect Email",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -580,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT value FROM system_config WHERE key = 'architect_email'",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Extract Token": {
+      "main": [
+        [
+          {
+            "node": "Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid?": {
+      "main": [
+        [
+          {
+            "node": "Apply Reply",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 400",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply Reply": {
+      "main": [
+        [
+          {
+            "node": "Match?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Match?": {
+      "main": [
+        [
+          {
+            "node": "Notify Damian",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 404",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify Damian": {
+      "main": [
+        [
+          {
+            "node": "Respond 200",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Load Architect Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Architect Email": {
+      "main": [
+        [
+          {
+            "node": "Extract Token",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": null,
+  "versionId": "4abc1fe0-82a9-4572-967b-e0c0fb01ca0e",
+  "tags": []
+}

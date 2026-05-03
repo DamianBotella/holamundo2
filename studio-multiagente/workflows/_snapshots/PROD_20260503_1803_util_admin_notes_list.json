@@ -1,0 +1,110 @@
+{
+  "name": "util_admin_notes_list",
+  "active": true,
+  "nodes": [
+    {
+      "id": "nl-01",
+      "name": "Webhook GET",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -700,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "admin-notes-list",
+        "responseMode": "responseNode",
+        "authentication": "headerAuth"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "PLACEHOLDER",
+          "name": "Webhook API Key (entrante)"
+        }
+      },
+      "webhookId": "nl-trigger"
+    },
+    {
+      "id": "nl-02",
+      "name": "Load Notes",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -460,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH q AS (SELECT NULLIF(trim($1),'') AS pid)\nSELECT json_build_object(\n  'project_id', (SELECT pid FROM q),\n  'count', count(*),\n  'notes', json_agg(t.* ORDER BY t.pinned DESC, t.created_at DESC)\n) AS report FROM (\n  SELECT n.id, n.body, n.category, n.pinned, n.created_at, n.created_by,\n         p.id AS project_id, p.name AS project_name\n    FROM project_notes n\n    LEFT JOIN projects p ON p.id = n.project_id\n   WHERE (SELECT pid FROM q) IS NULL\n      OR n.project_id = (SELECT pid FROM q)::uuid\n) t;",
+        "options": {
+          "queryReplacement": "={{ [ ($('Webhook GET').first().json.query.project_id || '') ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "nl-03",
+      "name": "Respond JSON",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        -220,
+        300
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json.report) }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Cache-Control",
+                "value": "no-store"
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook GET": {
+      "main": [
+        [
+          {
+            "node": "Load Notes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Notes": {
+      "main": [
+        [
+          {
+            "node": "Respond JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": null,
+  "versionId": "9c8889ef-f70e-4b93-bc91-8d595e5714af",
+  "tags": []
+}

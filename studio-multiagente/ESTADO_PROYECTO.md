@@ -12,9 +12,9 @@
 | **X1** | E2E real del pipeline | ✅ **COMPLETO** (B30-B34) | — | [`docs/e2e_evidence_FINAL_2026-04-29.md`](docs/e2e_evidence_FINAL_2026-04-29.md) |
 | **X2** | Auditoría main_orchestrator | ✅ **CERRADO 100%** (B44-B48) — PA-1/3/4/5/6/7/8 aplicados, PA-2 descartado. E2E validado | — | [`docs/x2_orchestrator_audit_post_prod_2026-05-03.md`](docs/x2_orchestrator_audit_post_prod_2026-05-03.md) |
 | **X3** | Multi-tenant + RLS | ✅ **CERRADO 100%** (B49-B52) — 049+049b+050 aplicadas, 19 workflows con CTE, RLS validada E2E live | — | [`docs/x3_workflow_patch_pattern.md`](docs/x3_workflow_patch_pattern.md) |
-| **X4** | Auth Supabase | 📐 **DISEÑO COMPLETO** (B39) | bloqueado por X3 | [`docs/x4_auth_design.md`](docs/x4_auth_design.md) |
-| **X5** | API REST contractual | 📐 **CONTRACT v0.2 + 4 workflows** (B38) | bloqueado por X3+X4 | [`docs/api_v1.yaml`](docs/api_v1.yaml) |
-| **X6** | UI Foxhole | 📐 **DISEÑO COMPLETO** (B40) | bloqueado por X1-X5 | [`docs/x6_foxhole_ui_design.md`](docs/x6_foxhole_ui_design.md) |
+| **X4** | Auth Supabase | ⏳ **ESPERANDO DAMIÁN** (~30min) | — | [`docs/x4_auth_setup_guide.md`](docs/x4_auth_setup_guide.md) |
+| **X5** | API REST contractual | 📐 Migration 052 lista + 7 workflows en repo | bloqueado por X4 | [`docs/api_v1.yaml`](docs/api_v1.yaml) |
+| **X6** | UI Foxhole | 🟢 **M1 FOUNDATION** (B56) — scaffolding + design system + 2 páginas mock | M2-M5 bloqueados por X4+X5 | [`foxhole-ui/README.md`](foxhole-ui/README.md) |
 
 **Plan global**: [`docs/plan_pre_interfaz_foxhole.md`](docs/plan_pre_interfaz_foxhole.md).
 
@@ -143,6 +143,8 @@ git log --oneline -20
 | B52 | X3 CERRADO 100% | Damián aplicó 050 (RLS habilitada en ~30 tablas). Smoke E2E live: init_new_project + orchestrator + agent_briefing con RLS activo funcionan. Patrón CTE validado en producción real. Aislamiento real disponible para X4/X5. |
 | B53 | Migration 050b: super_admin bypass | Audit estático detectó 47 crones at risk bajo RLS. Migration 050b añade `OR is_super_admin()` bypass a todas las policies. Damián aplicó. |
 | B54 | 47 crones blindados | Patch masivo: 1 nodo "Init Super Admin Context" al inicio de cada cron. 188 ops MCP. Audit final: 47/47 cubiertos, 0 at risk. Sistema blindado bajo RLS. |
+| B55 | Snapshot 151 + 052 refinada | Snapshot completo prod (PA-6 max) + migration 052_api_views.sql lista (corregidos schema-mismatches del .draft). |
+| B56 | foxhole-ui M1 Foundation + X4 guide | Scaffolding completo Vite+React+TS+Tailwind con design system Foxhole, 5 componentes, 2 páginas, mock data. Guía X4 setup paso a paso para Damián. |
 
 ---
 

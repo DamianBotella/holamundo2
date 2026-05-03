@@ -1,0 +1,347 @@
+{
+  "name": "cron_external_backup",
+  "active": true,
+  "nodes": [
+    {
+      "id": "ceb-01",
+      "name": "Schedule Weekly",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -700,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks",
+              "weeksInterval": 1,
+              "triggerAtDay": [
+                0
+              ],
+              "triggerAtHour": 3,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "ceb-02",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -700,
+        500
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "trigger-external-backup",
+        "responseMode": "lastNode",
+        "authentication": "headerAuth"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "PLACEHOLDER",
+          "name": "Webhook API Key (entrante)"
+        }
+      },
+      "webhookId": "27ccc26c-456d-448a-9731-dad7efb7f183"
+    },
+    {
+      "id": "ceb-03",
+      "name": "Build Backup Snapshot",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -460,
+        400
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH snap AS (\n  SELECT json_build_object(\n    'metadata', json_build_object(\n      'generated_at', now()::text,\n      'schema_version', '008',\n      'tables_count', 9,\n      'encryption_version', 'pgp_sym_v1'\n    ),\n    'clients',           (SELECT COALESCE(json_agg(row_to_json(c)), '[]'::json) FROM clients c),\n    'projects',          (SELECT COALESCE(json_agg(row_to_json(p)), '[]'::json) FROM projects p),\n    'briefings',         (SELECT COALESCE(json_agg(row_to_json(b)), '[]'::json) FROM briefings b),\n    'design_options',    (SELECT COALESCE(json_agg(row_to_json(d)), '[]'::json) FROM design_options d),\n    'regulatory_tasks',  (SELECT COALESCE(json_agg(row_to_json(r)), '[]'::json) FROM regulatory_tasks r),\n    'proposals',         (SELECT COALESCE(json_agg(row_to_json(p2)), '[]'::json) FROM proposals p2),\n    'approvals',         (SELECT COALESCE(json_agg(row_to_json(a)), '[]'::json) FROM approvals a),\n    'project_intelligence', (SELECT COALESCE(json_agg(row_to_json(pi)), '[]'::json) FROM project_intelligence pi),\n    'consent_records',   (SELECT COALESCE(json_agg(row_to_json(cr)), '[]'::json) FROM consent_records cr),\n    'activity_log_30d',  (SELECT COALESCE(json_agg(row_to_json(al)), '[]'::json) FROM activity_log al WHERE created_at > now() - INTERVAL '30 days')\n  ) AS snapshot\n), enc AS (\n  SELECT snapshot, pii_encrypt(snapshot::text) AS blob FROM snap\n)\nSELECT\n  snapshot,\n  encode(blob, 'base64') AS encrypted_b64,\n  octet_length(blob) AS encrypted_size_bytes,\n  octet_length(snapshot::text) AS plaintext_size_bytes\nFROM enc;",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2
+    },
+    {
+      "id": "ceb-04",
+      "name": "Build Filename + Buffer",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -220,
+        400
+      ],
+      "parameters": {
+        "jsCode": "const row = $input.first().json;\nconst stamp = new Date().toISOString().replace(/[-:T]/g,'').slice(0,15);\nconst filename = 'arquitai_backup_' + stamp + '.json.enc';\nconst encryptedBuffer = Buffer.from(row.encrypted_b64, 'base64');\nconst snapshot = row.snapshot;\nconst tablesSummary = {};\nfor (const k of Object.keys(snapshot)) {\n  if (k === 'metadata') continue;\n  tablesSummary[k] = Array.isArray(snapshot[k]) ? snapshot[k].length : 0;\n}\nreturn [{\n  json: {\n    filename,\n    plaintextSizeBytes: row.plaintext_size_bytes,\n    encryptedSizeBytes: row.encrypted_size_bytes,\n    tablesSummary,\n    encrypted: true,\n    started_at: Date.now()\n  },\n  binary: {\n    data: {\n      data: encryptedBuffer.toString('base64'),\n      mimeType: 'application/octet-stream',\n      fileName: filename\n    }\n  }\n}];"
+      }
+    },
+    {
+      "id": "ceb-05",
+      "name": "Upload to Drive",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        20,
+        400
+      ],
+      "parameters": {
+        "resource": "file",
+        "operation": "upload",
+        "name": "={{ $json.filename }}",
+        "driveId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "My Drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "root"
+        },
+        "options": {},
+        "inputDataFieldName": "data"
+      },
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "PLACEHOLDER",
+          "name": "damian2botella"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "ceb-06",
+      "name": "Log Backup Success",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        260,
+        320
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO system_backups (backup_type, drive_file_id, drive_url, size_bytes, status, started_at, finished_at)\nVALUES ('table_export', $1, $2, $3::bigint, 'success', to_timestamp($4::numeric / 1000.0), now())\nRETURNING id;",
+        "options": {
+          "queryReplacement": "={{ [ ($json.id || 'unknown'), ($json.webViewLink || ''), $('Build Filename + Buffer').first().json.encryptedSizeBytes, $('Build Filename + Buffer').first().json.started_at ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ceb-07",
+      "name": "Log Backup Failure",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        260,
+        480
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO system_backups (backup_type, status, size_bytes, started_at, finished_at, error_message)\nVALUES ('table_export', 'failed', $1::bigint, to_timestamp($2::numeric / 1000.0), now(), $3)\nRETURNING id;",
+        "options": {
+          "queryReplacement": "={{ [ $('Build Filename + Buffer').first().json.encryptedSizeBytes, $('Build Filename + Buffer').first().json.started_at, ($json.message || ($json.error && $json.error.message) || 'unknown error') ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ceb-08",
+      "name": "Notify Damian",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        520,
+        400
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $('Load Architect Email').first().json.value }}",
+        "subject": "=ArquitAI backup semanal cifrado — {{ $('Build Filename + Buffer').first().json.filename }}",
+        "emailType": "html",
+        "message": "=<h3>Backup ArquitAI (cifrado pgp_sym)</h3>\n<p>Archivo: {{ $('Build Filename + Buffer').first().json.filename }}</p>\n<p>Tamaño cifrado: {{ Math.round($('Build Filename + Buffer').first().json.encryptedSizeBytes / 1024) }} KB</p>\n<p>Tamaño original (texto): {{ Math.round($('Build Filename + Buffer').first().json.plaintextSizeBytes / 1024) }} KB</p>\n<p>Tablas: {{ JSON.stringify($('Build Filename + Buffer').first().json.tablesSummary) }}</p>\n<p>Ubicación: Google Drive raíz</p>\n<p>Para descifrar: POST /webhook/backup-decrypt con {drive_file_id} y X-API-Key.</p>",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "PLACEHOLDER",
+          "name": "damian2botella"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "dd9298b1-15cf-4419-b236-cbb5fbc66def",
+      "name": "Load Architect Email",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -580,
+        400
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT value FROM system_config WHERE key = 'architect_email'",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "b99073c3-e9ee-4dc3-96aa-b0e2053cc37d",
+      "name": "Init Super Admin Context",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -580,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT set_config('app.role', 'super_admin', false) AS role_set"
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Build Backup Snapshot": {
+      "main": [
+        [
+          {
+            "node": "Build Filename + Buffer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Filename + Buffer": {
+      "main": [
+        [
+          {
+            "node": "Upload to Drive",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload to Drive": {
+      "main": [
+        [
+          {
+            "node": "Log Backup Success",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Backup Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Backup Success": {
+      "main": [
+        [
+          {
+            "node": "Notify Damian",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Load Architect Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Architect Email": {
+      "main": [
+        [
+          {
+            "node": "Build Backup Snapshot",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Weekly": {
+      "main": [
+        [
+          {
+            "node": "Init Super Admin Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Init Super Admin Context": {
+      "main": [
+        [
+          {
+            "node": "Load Architect Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": null,
+  "versionId": "9b6c5c1e-896e-462f-bb9c-ef2c532000dc",
+  "tags": []
+}

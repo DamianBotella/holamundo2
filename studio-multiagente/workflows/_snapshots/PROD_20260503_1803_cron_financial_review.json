@@ -1,0 +1,331 @@
+{
+  "name": "cron_financial_review",
+  "active": true,
+  "nodes": [
+    {
+      "id": "fr-01",
+      "name": "Schedule Weekly",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -700,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks",
+              "weeksInterval": 1,
+              "triggerAtDay": [
+                1
+              ],
+              "triggerAtHour": 8,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "fr-02",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -700,
+        500
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "trigger-financial-review",
+        "responseMode": "lastNode",
+        "authentication": "headerAuth"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "PLACEHOLDER",
+          "name": "Webhook API Key (entrante)"
+        }
+      },
+      "webhookId": "61ebf34b-dd6d-483e-b535-b410b56a5dd8"
+    },
+    {
+      "id": "fr-03",
+      "name": "Compute Reconciliation",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -460,
+        400
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH active_projects AS (\n  SELECT p.id, p.name, p.budget_target, p.current_phase\n    FROM projects p\n   WHERE p.current_phase NOT IN ('completed','archived','intake','briefing_done')\n), proj_costs AS (\n  SELECT ce.project_id, ce.total_estimated AS estimated\n    FROM cost_estimates ce\n    JOIN active_projects ap ON ap.id = ce.project_id\n   WHERE ce.id IN (\n     SELECT DISTINCT ON (project_id) id FROM cost_estimates ORDER BY project_id, version DESC\n   )\n), proj_invoices AS (\n  SELECT i.project_id,\n         sum(i.total_amount)                            AS total_facturado,\n         sum(i.total_amount) FILTER (WHERE i.paid_at IS NOT NULL) AS total_pagado,\n         count(*)                                       AS num_facturas,\n         count(*) FILTER (WHERE i.status='pending_review') AS pending_review,\n         count(*) FILTER (WHERE i.status='disputed')    AS disputed,\n         count(*) FILTER (WHERE i.ocr_confidence='low') AS low_confidence\n    FROM invoices i\n    JOIN active_projects ap ON ap.id = i.project_id\n   GROUP BY i.project_id\n), proj_certs AS (\n  SELECT c.project_id,\n         sum(c.amount)                                  AS total_certificado,\n         sum(c.paid_amount) FILTER (WHERE c.paid_amount IS NOT NULL) AS total_cobrado\n    FROM certifications c\n    JOIN active_projects ap ON ap.id = c.project_id\n   WHERE c.status != 'cancelled'\n   GROUP BY c.project_id\n)\nSELECT json_agg(row_to_json(t) ORDER BY t.deviation_pct DESC NULLS LAST) AS report\nFROM (\n  SELECT\n    ap.id AS project_id, ap.name AS project_name, ap.current_phase,\n    pc.estimated, ap.budget_target,\n    COALESCE(pi.total_facturado, 0)   AS total_facturado,\n    COALESCE(pi.total_pagado, 0)      AS total_pagado,\n    COALESCE(pi.num_facturas, 0)      AS num_facturas,\n    COALESCE(pi.pending_review, 0)    AS pending_review,\n    COALESCE(pi.disputed, 0)          AS disputed,\n    COALESCE(pi.low_confidence, 0)    AS low_confidence,\n    COALESCE(pcert.total_certificado, 0) AS total_certificado,\n    COALESCE(pcert.total_cobrado, 0)     AS total_cobrado,\n    CASE\n      WHEN pc.estimated IS NULL OR pc.estimated = 0 THEN NULL\n      ELSE round(((COALESCE(pi.total_facturado, 0) - pc.estimated) / pc.estimated * 100)::numeric, 2)\n    END AS deviation_pct,\n    COALESCE(pcert.total_certificado, 0) - COALESCE(pi.total_facturado, 0) AS margin_now\n  FROM active_projects ap\n  LEFT JOIN proj_costs pc       ON pc.project_id = ap.id\n  LEFT JOIN proj_invoices pi    ON pi.project_id = ap.id\n  LEFT JOIN proj_certs pcert    ON pcert.project_id = ap.id\n) t;",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "id": "fr-04",
+      "name": "Has Active?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -220,
+        400
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "h1",
+              "leftValue": "={{ ($json.report && $json.report.length) || 0 }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "fr-05",
+      "name": "Build Report Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        20,
+        320
+      ],
+      "parameters": {
+        "jsCode": "const list = ($input.first().json.report) || [];\nconst rows = list.map(p => {\n  const dev = p.deviation_pct;\n  const devStr = dev === null || dev === undefined ? '-' : (dev > 0 ? '+' + dev : dev) + '%';\n  let badge = '<span style=\"background:#10b981;color:white;padding:2px 6px;border-radius:3px\">OK</span>';\n  if (dev !== null && dev !== undefined) {\n    if (dev > 30) badge = '<span style=\"background:#dc2626;color:white;padding:2px 6px;border-radius:3px\">CRITICO</span>';\n    else if (dev > 10) badge = '<span style=\"background:#f59e0b;color:white;padding:2px 6px;border-radius:3px\">DESVIO</span>';\n  }\n  const flags = [];\n  if (p.pending_review > 0) flags.push(p.pending_review + ' por revisar');\n  if (p.disputed > 0) flags.push(p.disputed + ' disputadas');\n  if (p.low_confidence > 0) flags.push(p.low_confidence + ' baja confianza OCR');\n  const flagsStr = flags.length ? '<small style=\"color:#dc2626\">' + flags.join(' | ') + '</small>' : '-';\n  const margin = Number(p.margin_now) || 0;\n  const marginColor = margin >= 0 ? '#10b981' : '#dc2626';\n  return '<tr>' +\n    '<td>' + badge + '</td>' +\n    '<td>' + (p.project_name || '?') + '</td>' +\n    '<td>' + (p.estimated !== null ? Number(p.estimated).toLocaleString('es-ES') + 'eur' : '-') + '</td>' +\n    '<td>' + Number(p.total_facturado).toLocaleString('es-ES') + 'eur</td>' +\n    '<td>' + devStr + '</td>' +\n    '<td>' + Number(p.total_certificado).toLocaleString('es-ES') + 'eur</td>' +\n    '<td>' + Number(p.total_cobrado).toLocaleString('es-ES') + 'eur</td>' +\n    '<td style=\"color:' + marginColor + ';font-weight:bold\">' + margin.toLocaleString('es-ES') + 'eur</td>' +\n    '<td>' + flagsStr + '</td>' +\n    '</tr>';\n}).join('');\nconst alerts = list.filter(p => (p.deviation_pct || 0) > 10).length;\nconst html = '<h2>Resumen financiero semanal</h2>' +\n  '<p>Proyectos activos analizados: <b>' + list.length + '</b>. Con desviación &gt;10%: <b>' + alerts + '</b>.</p>' +\n  '<table border=\"1\" cellpadding=\"6\" cellspacing=\"0\" style=\"border-collapse:collapse;font-family:sans-serif;font-size:13px\">' +\n  '<thead><tr style=\"background:#f3f4f6\"><th>Estado</th><th>Proyecto</th><th>Estimado</th><th>Facturado</th><th>Desvío</th><th>Certificado</th><th>Cobrado</th><th>Margen actual</th><th>Alertas</th></tr></thead>' +\n  '<tbody>' + rows + '</tbody></table>' +\n  '<p style=\"font-size:12px;color:#6b7280\">Margen actual = certificado - facturado (cliente paga lo certificado, tú pagas las facturas).</p>';\nreturn [{ json: { html_body: html, count: list.length, alerts: alerts } }];"
+      }
+    },
+    {
+      "id": "fr-06",
+      "name": "Send Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        260,
+        320
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $('Load Architect Email').first().json.value }}",
+        "subject": "=ArquitAI — resumen financiero semanal ({{ $json.count }} proyectos, {{ $json.alerts }} con alerta)",
+        "emailType": "html",
+        "message": "={{ $json.html_body }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "PLACEHOLDER",
+          "name": "damian2botella"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "fr-07",
+      "name": "Log Activity",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        500,
+        320
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, status, input_summary)\nVALUES (NULL, 'cron_financial_review', 'review_finances', 'success', $1)\nRETURNING id;",
+        "options": {
+          "queryReplacement": "={{ [ ('proyectos=' + $json.count + ', alertas=' + $json.alerts) ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "fr-08",
+      "name": "No Active",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        20,
+        480
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "e45ceb24-a711-4842-85a9-e127b5179be8",
+      "name": "Load Architect Email",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -580,
+        400
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT value FROM system_config WHERE key = 'architect_email'",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "aede8de3-4f9e-4461-81ce-47c39201af72",
+      "name": "Init Super Admin Context",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -580,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT set_config('app.role', 'super_admin', false) AS role_set"
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Compute Reconciliation": {
+      "main": [
+        [
+          {
+            "node": "Has Active?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Active?": {
+      "main": [
+        [
+          {
+            "node": "Build Report Email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Active",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Report Email": {
+      "main": [
+        [
+          {
+            "node": "Send Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Email": {
+      "main": [
+        [
+          {
+            "node": "Log Activity",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Load Architect Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Architect Email": {
+      "main": [
+        [
+          {
+            "node": "Compute Reconciliation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Weekly": {
+      "main": [
+        [
+          {
+            "node": "Init Super Admin Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Init Super Admin Context": {
+      "main": [
+        [
+          {
+            "node": "Load Architect Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": null,
+  "versionId": "4bf6638a-d889-417b-aded-a5648ff512cd",
+  "tags": []
+}

@@ -1,0 +1,138 @@
+{
+  "name": "util_admin_studio_profile_html",
+  "active": true,
+  "nodes": [
+    {
+      "id": "asp-01",
+      "name": "Webhook GET",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -700,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "admin-studio-profile",
+        "responseMode": "responseNode",
+        "authentication": "headerAuth"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "PLACEHOLDER",
+          "name": "Webhook API Key (entrante)"
+        }
+      },
+      "webhookId": "asp-trigger"
+    },
+    {
+      "id": "asp-02",
+      "name": "Load Profile + Sessions",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -460,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT json_build_object(\n  'active_profile', (SELECT row_to_json(t) FROM (SELECT studio_id, identity, tone, priorities, red_lines, visit_checklist, materials_pref, trades_pref, jurisdiction, setup_source, setup_completed_at, created_at, updated_at, notes FROM studio_profile WHERE active=true ORDER BY setup_completed_at DESC NULLS LAST, created_at DESC LIMIT 1) t),\n  'inactive_profiles', coalesce((SELECT json_agg(t.* ORDER BY t.created_at DESC) FROM (SELECT studio_id, setup_source, setup_completed_at, created_at, identity->>'nombre_estudio' AS name FROM studio_profile WHERE active=false LIMIT 10) t), '[]'::json),\n  'sessions', coalesce((SELECT json_agg(t.* ORDER BY t.started_at DESC) FROM (SELECT id, status, sections_covered, started_at, last_message_at, completed_at, llm_total_cost_usd, llm_message_count, contact_email FROM onboarding_sessions LIMIT 10) t), '[]'::json),\n  'session_in_progress', (SELECT count(*) FROM onboarding_sessions WHERE status='in_progress')::int\n) AS report;",
+        "options": {
+          "alwaysOutputData": true
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "asp-03",
+      "name": "Build HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -220,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const r = $input.first().json.report || {};\nconst active = r.active_profile;\nconst inactive = Array.isArray(r.inactive_profiles) ? r.inactive_profiles : [];\nconst sessions = Array.isArray(r.sessions) ? r.sessions : [];\nconst sessionInProgress = r.session_in_progress || 0;\n\nfunction esc(s) { return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\nfunction dateShort(s) { if (!s) return '-'; return new Date(s).toISOString().substring(0,16).replace('T',' '); }\nfunction money(n) { return n != null ? '$' + Number(n).toFixed(4) : '$0'; }\n\nfunction parseJson(j) { if (j == null) return {}; if (typeof j === 'string') { try { return JSON.parse(j); } catch(e) { return {}; } } return j; }\n\nfunction renderSection(title, data, formatter) {\n  return `<div class=\"section\"><h3>${esc(title)}</h3>${data ? formatter(data) : '<p class=\"empty\">(sin datos)</p>'}</div>`;\n}\n\nlet activeHtml = '<p class=\"empty\">Sin profile activo.</p>';\nif (active) {\n  const id = parseJson(active.identity);\n  const tone = parseJson(active.tone);\n  const priorities = parseJson(active.priorities);\n  const redLines = parseJson(active.red_lines);\n  const visit = parseJson(active.visit_checklist);\n  const mat = parseJson(active.materials_pref);\n  const tr = parseJson(active.trades_pref);\n  const jur = parseJson(active.jurisdiction);\n  const sourceColor = { onboarding_chat: '#10b981', baseline: '#9ca3af', admin_edit: '#3b82f6', manual: '#6b7280' }[active.setup_source] || '#6b7280';\n  activeHtml = `<div class=\"active-card\">\n    <div class=\"badge\" style=\"background:${sourceColor}\">${esc(active.setup_source)}</div>\n    <h2>${esc(id.nombre_estudio || '(sin nombre)')}</h2>\n    <p class=\"meta\">${esc(id.persona_principal || '?')} · ${esc(id.ciudad || '?')} · ${id.anos_exp || 0} años exp · colegiado ${esc(id.colegiado_no || '-')}</p>\n    <p class=\"meta\">studio_id: <code>${esc(active.studio_id)}</code> · setup ${dateShort(active.setup_completed_at)} · updated ${dateShort(active.updated_at)}</p>\n    ${renderSection('1. Identidad', id, d => `<table><tr><td>Ámbito</td><td>${(d.ambito||[]).map(esc).join(', ')||'-'}</td></tr><tr><td>Tamaño</td><td>${esc(d.tamano||'-')}</td></tr></table>`)}\n    ${renderSection('2. Tono comunicacion', tone, d => `<table>${Object.entries(d).map(([k,v]) => `<tr><td>${esc(k)}</td><td>${esc(typeof v === 'object' ? JSON.stringify(v) : v)}</td></tr>`).join('')}</table>`)}\n    ${renderSection('3. Prioridades absolutas', priorities, d => Array.isArray(d) && d.length ? '<ol>' + d.map(p => `<li><strong>${esc(p.prioridad||'?')}</strong>${p.detalle ? ' — ' + esc(p.detalle) : ''}</li>`).join('') + '</ol>' : '<p class=\"empty\">vacio</p>')}\n    ${renderSection('4. Líneas rojas', redLines, d => Array.isArray(d) && d.length ? '<ul>' + d.map(l => `<li>${esc(l.texto || l.id || JSON.stringify(l))}</li>`).join('') + '</ul>' : '<p class=\"empty\">vacio</p>')}\n    ${renderSection('5. Visita inicial - checklist', visit, d => Array.isArray(d) && d.length ? '<ul>' + d.map(v => `<li>${esc(v.pregunta || JSON.stringify(v))}</li>`).join('') + '</ul>' : '<p class=\"empty\">vacio</p>')}\n    ${renderSection('6. Materiales preferidos', mat, d => `<p>Gama default: <strong>${esc(d.gama_default || '?')}</strong> · prefiere local: ${d.prefiere_local ? 'si' : 'no'}</p>`)}\n    ${renderSection('7. Gremios', tr, d => `<p>${(d.criterios_seleccion || []).length} criterios definidos · ${Object.keys(d.trade_to_contact || {}).length} contactos mapeados</p>`)}\n    ${renderSection('8. Jurisdicción', jur, d => `<p><strong>${esc(d.ccaa || '?')}</strong> · ${(d.ayuntamientos_habituales||[]).length} ayuntamientos habituales</p>`)}\n  </div>`;\n}\n\nconst sessionRows = sessions.length ? sessions.map(s => {\n  const sec = parseJson(s.sections_covered);\n  const covered = Object.values(sec).filter(v => v).length;\n  return `<tr>\n    <td><code style=\"font-size:11px\">${esc(s.id.substring(0,8))}</code></td>\n    <td>${esc(s.status)}</td>\n    <td style=\"text-align:right\">${covered}/8</td>\n    <td>${esc(s.contact_email || '-')}</td>\n    <td>${dateShort(s.started_at)}</td>\n    <td>${dateShort(s.completed_at)}</td>\n    <td style=\"text-align:right\">${s.llm_message_count || 0}</td>\n    <td style=\"text-align:right\">${money(s.llm_total_cost_usd)}</td>\n  </tr>`;\n}).join('') : '<tr><td colspan=\"8\" style=\"text-align:center;color:#888;padding:18px\">Sin sesiones</td></tr>';\n\nconst inactiveRows = inactive.length ? inactive.map(p => `<tr><td><code>${esc(p.studio_id.substring(0,8))}</code></td><td>${esc(p.setup_source)}</td><td>${esc(p.name || '-')}</td><td>${dateShort(p.created_at)}</td></tr>`).join('') : '<tr><td colspan=\"4\" style=\"text-align:center;color:#888;padding:14px\">Sin profiles inactivos</td></tr>';\n\nconst html = `<!DOCTYPE html><html lang=\"es\"><head><meta charset=\"utf-8\"><title>Studio Profile - ArquitAI</title>\n<style>\n  body{font-family:system-ui,sans-serif;max-width:1100px;margin:32px auto;padding:0 20px;color:#222;background:#f7f7f8}\n  h1{margin:0 0 8px} h2{margin:0 0 8px;font-size:22px} h3{margin:18px 0 8px;font-size:15px;color:#374151}\n  .sub{color:#888;font-size:13px;margin-bottom:24px}\n  .active-card{background:#fff;border:1px solid #ddd;border-radius:10px;padding:24px;margin-bottom:24px;position:relative}\n  .badge{position:absolute;top:14px;right:14px;color:white;padding:4px 10px;border-radius:10px;font-size:11px;font-weight:600}\n  .meta{color:#6b7280;font-size:13px;margin:0 0 12px} .meta code{background:#f3f4f6;padding:2px 4px;border-radius:3px;font-size:12px}\n  .section{margin-top:18px;padding-top:14px;border-top:1px solid #f3f4f6}\n  .section table{width:100%;border-collapse:collapse;font-size:13px}\n  .section table td{padding:4px 8px;border-bottom:1px solid #f3f4f6}\n  .section table td:first-child{color:#6b7280;width:30%}\n  .section ul, .section ol{margin:8px 0;padding-left:20px;font-size:13px}\n  .section .empty{color:#9ca3af;font-style:italic;font-size:13px;margin:0}\n  table.list{width:100%;border-collapse:collapse;background:#fff;border:1px solid #ddd;border-radius:8px;overflow:hidden;font-size:13px;margin-top:14px}\n  table.list th,table.list td{padding:8px 12px;border-bottom:1px solid #eee;text-align:left}\n  table.list th{background:#f0f0f3;font-weight:600;font-size:11px;text-transform:uppercase;color:#555}\n  table.list tr:last-child td{border-bottom:none}\n  .actions{display:flex;gap:10px;margin-top:14px}\n  .actions a{display:inline-block;padding:8px 14px;background:#3b82f6;color:#fff;text-decoration:none;border-radius:6px;font-size:13px}\n  .actions a.secondary{background:#fff;color:#3b82f6;border:1px solid #3b82f6}\n  .alert{background:#fef3c7;border-left:3px solid #f59e0b;padding:10px 14px;border-radius:4px;font-size:13px;color:#78350f;margin-bottom:18px}\n  .meta-foot{font-size:12px;color:#888;margin-top:24px}\n</style></head><body>\n<h1>Studio Profile - ArquitAI</h1>\n<p class=\"sub\">Perfil del estudio activo + historico. Para iniciar onboarding o reconfigurar, abre el chat.</p>\n${sessionInProgress > 0 ? `<div class=\"alert\">Hay ${sessionInProgress} sesion(es) de onboarding en progreso. Continua o cierra desde el chat.</div>` : ''}\n<div class=\"actions\">\n  <a href=\"/webhook/setup-onboarding\">Iniciar / continuar onboarding chat</a>\n  <a href=\"/webhook/admin-index\" class=\"secondary\">Volver al admin index</a>\n</div>\n${activeHtml}\n<h2 style=\"margin-top:32px;font-size:18px\">Sesiones de onboarding (últimas 10)</h2>\n<table class=\"list\"><thead><tr><th>id</th><th>status</th><th style=\"text-align:right\">cubierto</th><th>contacto</th><th>iniciado</th><th>completado</th><th style=\"text-align:right\">msgs</th><th style=\"text-align:right\">coste LLM</th></tr></thead><tbody>${sessionRows}</tbody></table>\n<h2 style=\"margin-top:32px;font-size:18px\">Profiles inactivos (historico)</h2>\n<table class=\"list\"><thead><tr><th>studio_id</th><th>source</th><th>nombre</th><th>creado</th></tr></thead><tbody>${inactiveRows}</tbody></table>\n<div class=\"meta-foot\">Generado ${new Date().toISOString()}</div>\n</body></html>`;\n\nreturn [{ json: { html } }];"
+      }
+    },
+    {
+      "id": "asp-04",
+      "name": "Respond HTML",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        20,
+        300
+      ],
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.html }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "text/html; charset=utf-8"
+              },
+              {
+                "name": "Cache-Control",
+                "value": "no-store"
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook GET": {
+      "main": [
+        [
+          {
+            "node": "Load Profile + Sessions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Profile + Sessions": {
+      "main": [
+        [
+          {
+            "node": "Build HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build HTML": {
+      "main": [
+        [
+          {
+            "node": "Respond HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": null,
+  "versionId": "cf7621d0-a3ef-4aa9-9f90-031eafcf27e1",
+  "tags": []
+}

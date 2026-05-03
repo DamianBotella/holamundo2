@@ -1,0 +1,104 @@
+{
+  "name": "util_admin_endpoints_html",
+  "active": true,
+  "nodes": [
+    {
+      "id": "ae-01",
+      "name": "Webhook GET",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -500,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "admin-endpoints",
+        "responseMode": "responseNode",
+        "authentication": "headerAuth"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "PLACEHOLDER",
+          "name": "Webhook API Key (entrante)"
+        }
+      },
+      "webhookId": "ae-trigger"
+    },
+    {
+      "id": "ae-02",
+      "name": "Build HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -260,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const BASE = 'https://n8n-n8n.zzeluw.easypanel.host';\n\nconst groups = [\n  {\n    title: 'Dashboards admin (HTML)',\n    color: '#3b82f6',\n    items: [\n      { method: 'GET', path: '/webhook/admin-index',                desc: 'Landing maestro con health score + cards + links' },\n      { method: 'GET', path: '/webhook/dashboard-html',              desc: 'Dashboard estudio (proyectos, finance, concierge)' },\n      { method: 'GET', path: '/webhook/security-dashboard-html',    desc: 'Eventos seguridad + blocklist + top IPs' },\n      { method: 'GET', path: '/webhook/llm-costs-html',              desc: 'Costes LLM por agente, proyecto, modelo' },\n      { method: 'GET', path: '/webhook/admin-llm-stats',             desc: 'Stats LLM 24h/7d/30d + banner unknown_agent' },\n      { method: 'GET', path: '/webhook/admin-pipeline-metrics',     desc: 'Distribucion por fase + estancados >14d' },\n      { method: 'GET', path: '/webhook/admin-pipeline',              desc: 'Kanban visual de proyectos' },\n      { method: 'GET', path: '/webhook/admin-trades-summary',       desc: 'Ratios por gremio + top 15 suppliers' },\n      { method: 'GET', path: '/webhook/admin-compliance-overview',  desc: 'Grade A/B/C/D + 11 checks por proyecto (sin LLM)' },\n      { method: 'GET', path: '/webhook/admin-tokens',                desc: 'Vista read-only de client_access_tokens' },\n      { method: 'GET', path: '/webhook/admin-search?q=<term>',       desc: 'Busqueda transversal' },\n      { method: 'GET', path: '/webhook/admin-activity',              desc: 'Timeline 48h security events + activity_log' },\n      { method: 'GET', path: '/webhook/admin-health-history',        desc: 'Tendencia 30d health score (SVG)' },\n      { method: 'GET', path: '/webhook/admin-workflows',             desc: 'Status crons criticos (OK/STALE/NEVER)' },\n      { method: 'GET', path: '/webhook/admin-help',                  desc: 'Pagina de ayuda con FAQ' },\n      { method: 'GET', path: '/webhook/admin-endpoints',             desc: 'ESTA pagina (lista de endpoints)' },\n      { method: 'GET', path: '/webhook/admin-export?dataset=<name>', desc: 'Export CSV multi-dataset' },\n      { method: 'GET', path: '/webhook/admin-project?project_id=<uuid>', desc: 'Drill-down por proyecto' },\n      { method: 'GET', path: '/webhook/admin-notes-list?project_id=<uuid>', desc: 'Listado de notas (filtrable)' }\n    ]\n  },\n  {\n    title: 'JSON endpoints',\n    color: '#10b981',\n    items: [\n      { method: 'GET',  path: '/webhook/dashboard-summary',         desc: 'Mismo que dashboard-html pero JSON' },\n      { method: 'GET',  path: '/webhook/security-dashboard',        desc: 'Security dashboard JSON' },\n      { method: 'POST', path: '/webhook/audit-project',             desc: 'Run compliance audit por proyecto', body: '{\"project_id\":\"<uuid>\",\"send_email\":true}' }\n    ]\n  },\n  {\n    title: 'Agentes (POST con auth)',\n    color: '#8b5cf6',\n    items: [\n      { method: 'POST', path: '/webhook/new-project',                  desc: 'Inicia proyecto nuevo (init_new_project)', body: '{\"client_email\":\"...\",\"client_name\":\"...\",\"project_name\":\"...\",\"project_type\":\"reforma_integral\",\"property_type\":\"piso\",\"property_area_m2\":72,\"location_city\":\"Madrid\",\"location_province\":\"Madrid\",\"budget_target\":48000,\"architect_intake_notes\":\"...\"}' },\n      { method: 'POST', path: '/webhook/contract-generate',            desc: 'Generar contrato con plantilla', body: '{\"project_id\":\"...\",\"contract_type\":\"encargo_profesional\",\"parties\":[],\"scope\":\"...\"}' },\n      { method: 'POST', path: '/webhook/contract-signed',              desc: 'Marcar contrato firmado', body: '{\"contract_id\":\"...\"}' },\n      { method: 'POST', path: '/webhook/certificate-generate',         desc: 'Generar certificado', body: '{\"project_id\":\"...\",\"certificate_type\":\"cfo\",\"signer_name\":\"...\",\"collegiate_no\":\"...\"}' },\n      { method: 'POST', path: '/webhook/permit-register',              desc: 'Registrar nuevo permit' },\n      { method: 'POST', path: '/webhook/site-report',                  desc: 'Vision LLM analiza foto obra' },\n      { method: 'POST', path: '/webhook/pathology-detect',             desc: 'Vision LLM detecta patologias' },\n      { method: 'POST', path: '/webhook/aftercare-submit',             desc: 'Aftercare interno (con auth)' },\n      { method: 'POST', path: '/webhook/qc-generate',                  desc: 'Genera checklist QC' },\n      { method: 'POST', path: '/webhook/qc-complete',                  desc: 'Actualiza un item del QC', body: '{\"qc_id\":\"...\",\"item_id\":\"...\",\"status\":\"pass|fail|skip\",\"comment\":\"...\"}' },\n      { method: 'GET',  path: '/webhook/qc-form?qc_id=<uuid>',          desc: 'Form HTML responsive movil para visita a obra' },\n      { method: 'POST', path: '/webhook/trigger-energy-assessor',      desc: 'Pre-evaluar HE0/HE1 + CO2', body: '{\"project_id\":\"...\"}' },\n      { method: 'POST', path: '/webhook/trigger-home-automation',      desc: 'Propuesta domotica', body: '{\"project_id\":\"...\",\"level\":\"medio\",\"ecosystem_pref\":\"home_assistant\"}' },\n      { method: 'POST', path: '/webhook/export-bc3',                    desc: 'Export presupuesto a BC3 (CYPE/Presto)', body: '{\"project_id\":\"...\"}' },\n      { method: 'POST', path: '/webhook/collab-register',              desc: 'Alta colaborador externo' },\n      { method: 'POST', path: '/webhook/collab-assign',                desc: 'Asignar entregable a colaborador' },\n      { method: 'POST', path: '/webhook/collab-update',                desc: 'Actualizar status assignment' },\n      { method: 'POST', path: '/webhook/admin-note',                   desc: 'Crear nota rapida en proyecto' },\n      { method: 'POST', path: '/webhook/admin-note-toggle',            desc: 'Pin/unpin/delete nota' }\n    ]\n  },\n  {\n    title: 'Endpoints publicos (cliente / gremio)',\n    color: '#f59e0b',\n    items: [\n      { method: 'POST', path: '/webhook/client-ask',                   desc: 'LLM concierge cliente (token en body)', body: '{\"token\":\"<client_access_token>\",\"question\":\"...\"}' },\n      { method: 'POST', path: '/webhook/gdpr-request',                 desc: 'Solicitud RGPD (token en body)' },\n      { method: 'POST', path: '/webhook/aftercare-public-submit',     desc: 'Reporte postventa (token + foto)' },\n      { method: 'GET',  path: '/webhook/aftercare-public-form?token=<t>', desc: 'Form HTML reporte postventa' },\n      { method: 'GET',  path: '/webhook/client-ask-form',              desc: 'Form HTML para client_ask' },\n      { method: 'GET',  path: '/webhook/project-summary?token=<t>',    desc: 'Vista publica del proyecto al cliente' },\n      { method: 'POST', path: '/webhook/trade-quote-reply',            desc: 'Gremio responde con presupuesto' }\n    ]\n  },\n  {\n    title: 'Crons (no callable, ejecucion automatica)',\n    color: '#6b7280',\n    items: [\n      { method: 'CRON', path: 'cron_health_check (06:00 diario)',                desc: 'Verifica funciones SQL + tablas + roundtrip pii' },\n      { method: 'CRON', path: 'cron_anomaly_detect (06:00 diario)',              desc: '8 heuristicas SQL anomalias economicas' },\n      { method: 'CRON', path: 'cron_data_integrity (05:30 diario)',              desc: '15 chequeos orphans/FKs/fases' },\n      { method: 'CRON', path: 'cron_workflow_audit (07:30 diario)',              desc: 'Verifica que crons criticos hayan corrido' },\n      { method: 'CRON', path: 'cron_compliance_audit_weekly (Dom 08:00)',        desc: 'Audit semanal de todos los proyectos activos' },\n      { method: 'CRON', path: 'cron_aftercare_review (09:30 diario)',            desc: 'Findings nuevos sin asignar' },\n      { method: 'CRON', path: 'cron_unknown_agent_alert (09:30 diario)',         desc: 'Alerta si agent_name=unknown_agent en 24h' },\n      { method: 'CRON', path: 'cron_aftercare_sla_breach (08:30 diario)',        desc: 'SLA por severidad incidentes asignados' },\n      { method: 'CRON', path: 'cron_qc_review (09:15 diario)',                   desc: 'Checklists blocked o sin progreso >7d' },\n      { method: 'CRON', path: 'cron_collab_review (10:00 diario)',               desc: 'Colaboradores deadline/delivered/invited' },\n      { method: 'CRON', path: 'cron_proposal_to_contract (10:30 diario)',        desc: 'Proposals aprobadas sin contract' },\n      { method: 'CRON', path: 'cron_qc_handover_to_acta (11:00 diario)',         desc: 'QC recepcion provisional -> acta' },\n      { method: 'CRON', path: 'cron_proposal_response_followup (11:00 diario)',  desc: 'Propuestas sin respuesta cliente >7d' },\n      { method: 'CRON', path: 'cron_pathology_review (12:00 diario)',            desc: 'Findings stale >30d + criticos unresolved' },\n      { method: 'CRON', path: 'cron_contract_followup (09:45 diario)',          desc: 'Contracts esperando firma >7d' },\n      { method: 'CRON', path: 'cron_invoice_approval_followup (11:30 diario)',   desc: 'Facturas pending/sin pagar/disputed' },\n      { method: 'CRON', path: 'cron_external_backup (Dom)',                      desc: 'Backup semanal a Drive cifrado' },\n      { method: 'CRON', path: 'cron_drive_cleanup (mensual)',                    desc: 'Limpia backups antiguos del Drive' },\n      { method: 'CRON', path: 'cron_briefing_postprocess (horario)',             desc: 'Auto-dispatch home_automation si menciona smart' }\n    ]\n  }\n];\n\nfunction esc(s) { return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\"/g,'&quot;'); }\nfunction methodColor(m) { return { GET:'#3b82f6', POST:'#10b981', CRON:'#6b7280' }[m] || '#666'; }\n\nconst sections = groups.map(g => {\n  const rows = g.items.map(i => {\n    const fullUrl = i.method === 'CRON' ? '' : BASE + i.path;\n    const curl = i.method === 'GET' ? `curl -H 'x-api-key: KEY' '${fullUrl}'` :\n                 i.method === 'POST' ? `curl -X POST -H 'x-api-key: KEY' -H 'Content-Type: application/json' -d '${esc(i.body || '{}')}' '${fullUrl}'` :\n                 '';\n    return `<tr>\n      <td><span style=\"background:${methodColor(i.method)};color:white;padding:2px 8px;border-radius:8px;font-size:11px;font-weight:600\">${i.method}</span></td>\n      <td><code style=\"font-size:13px\">${esc(i.path)}</code></td>\n      <td style=\"font-size:13px;color:#555\">${esc(i.desc)}</td>\n      ${curl ? `<td><button onclick=\"navigator.clipboard.writeText(${JSON.stringify(curl)});this.textContent='copiado'\" style=\"font-size:11px;padding:4px 8px;cursor:pointer;border:1px solid #ddd;background:#fff;border-radius:4px\">copiar curl</button></td>` : '<td></td>'}\n    </tr>`;\n  }).join('');\n  return `<h2 style=\"color:${g.color};margin-top:32px\">${esc(g.title)}</h2>\n<table style=\"width:100%;border-collapse:collapse;background:#fff;border:1px solid #ddd;border-radius:8px;overflow:hidden\">\n  <thead><tr style=\"background:#f0f0f3\"><th style=\"padding:8px;text-align:left;font-size:11px;text-transform:uppercase\">method</th><th style=\"padding:8px;text-align:left;font-size:11px;text-transform:uppercase\">path</th><th style=\"padding:8px;text-align:left;font-size:11px;text-transform:uppercase\">descripcion</th><th></th></tr></thead>\n  <tbody>${rows}</tbody>\n</table>`;\n}).join('');\n\nconst html = `<!DOCTYPE html><html lang=\"es\"><head><meta charset=\"utf-8\"><title>Endpoints — ArquitAI</title>\n<style>\n  body{font-family:system-ui,sans-serif;max-width:1200px;margin:32px auto;padding:0 20px;color:#222;background:#f7f7f8}\n  h1{margin:0 0 8px}\n  .sub{color:#888;font-size:13px;margin-bottom:24px}\n  table tr td{padding:6px 10px;border-bottom:1px solid #eee;vertical-align:middle}\n  table tr:last-child td{border-bottom:none}\n  code{background:#eef2ff;padding:2px 6px;border-radius:4px;font-family:monospace}\n  .meta{font-size:12px;color:#888;margin-top:24px}\n</style></head><body>\n<h1>Endpoints — ArquitAI</h1>\n<p class=\"sub\">Todos los endpoints disponibles. Sustituye <code>KEY</code> por tu valor de <code>x-api-key</code> antes de pegar el curl.</p>\n${sections}\n<div class=\"meta\">Generado ${new Date().toISOString()} · Para auditar runtime: <code>POST /webhook/audit-project</code></div>\n</body></html>`;\n\nreturn [{ json: { html } }];"
+      }
+    },
+    {
+      "id": "ae-03",
+      "name": "Respond HTML",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        -20,
+        300
+      ],
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.html }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "text/html; charset=utf-8"
+              },
+              {
+                "name": "Cache-Control",
+                "value": "no-store"
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook GET": {
+      "main": [
+        [
+          {
+            "node": "Build HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build HTML": {
+      "main": [
+        [
+          {
+            "node": "Respond HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": null,
+  "versionId": "18e16791-baa3-4b08-b01a-f93ae0f24e6b",
+  "tags": []
+}

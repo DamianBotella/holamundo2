@@ -1,0 +1,641 @@
+{
+  "name": "agent_pathology",
+  "active": true,
+  "nodes": [
+    {
+      "id": "ap-01",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -900,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "pathology-inspect",
+        "responseMode": "responseNode",
+        "authentication": "headerAuth"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "PLACEHOLDER",
+          "name": "Webhook API Key (entrante)"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "webhookId": "5d8d91ce-d40f-47bf-b40e-884d4fd26445"
+    },
+    {
+      "id": "ap-02",
+      "name": "Validate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -680,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const body = $('Webhook').first().json.body || {};\nif (!body.project_id) { const e = { valid: false, error: 'project_id obligatorio' }; return [{ json: e }]; }\nlet photoUrls = body.photo_urls;\nif (!photoUrls && body.photo_url) photoUrls = [body.photo_url];\nif (!Array.isArray(photoUrls)) photoUrls = [];\nphotoUrls = photoUrls.filter(u => typeof u === 'string' && u.startsWith('http')).slice(0, 6);\nif (photoUrls.length === 0) { const e = { valid: false, error: 'photo_url o photo_urls (>= 1) obligatorio' }; return [{ json: e }]; }\nconst out = {\n  valid: true,\n  project_id: body.project_id,\n  photo_urls: photoUrls,\n  description: (body.description || '').toString().slice(0, 2000),\n  location_in_property: (body.location_in_property || '').toString().slice(0, 200),\n  inspector: body.inspector || 'arquitecto',\n  started_at: Date.now()\n};\nreturn [{ json: out }];"
+      }
+    },
+    {
+      "id": "ap-03",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -460,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "v1",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ap-04",
+      "name": "Respond 400",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        -220,
+        480
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'error', error: $json.error}) }}",
+        "options": {
+          "responseCode": 400
+        }
+      }
+    },
+    {
+      "id": "ap-05",
+      "name": "Load Project Context",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -220,
+        220
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT json_build_object(\n  'project_id', p.id,\n  'project_name', p.name,\n  'project_type', p.project_type,\n  'property_type', p.property_type,\n  'property_area_m2', p.property_area_m2,\n  'location_city', p.location_city,\n  'location_province', p.location_province,\n  'metadata', p.metadata\n) AS context\nFROM projects p WHERE p.id = $1::uuid;",
+        "options": {
+          "queryReplacement": "={{ [$json.project_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ap-06",
+      "name": "Build Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        0,
+        220
+      ],
+      "parameters": {
+        "jsCode": "const ctx = $input.first().json.context || {};\nconst input = $('Validate').first().json;\nconst meta = ctx.metadata || {};\nconst yearOfBuild = meta.year_of_construction || meta.year_built || null;\nconst architectObs = meta.architect_observations || null;\n\nconst systemPrompt = 'Eres un arquitecto técnico español especialista en patología de la edificación. Inspeccionas imágenes de inmuebles para detectar patologías relevantes ANTES de presupuestar una reforma. Conoces especialmente los problemas típicos del parque inmobiliario español: humedades por capilaridad, aluminosis (forjados Magné 1958-1972), carbonatación del hormigón, instalaciones REBT pre-2002, carpintería con puente térmico, terrazo con potencial amianto, plomo en fontanería pre-1980. Respondes SOLO con JSON válido sin markdown.';\n\nconst userParts = [\n  'Inspecciona estas imágenes del inmueble \"' + (ctx.project_name || 'sin nombre') + '\" (' + (ctx.property_type || 'inmueble') + ', ' + (ctx.property_area_m2 ? ctx.property_area_m2 + ' m²' : 'sup. desconocida') + ', ' + (ctx.location_city || '') + (ctx.location_province ? ', ' + ctx.location_province : '') + ').',\n  '',\n  yearOfBuild ? 'AÑO DE CONSTRUCCIÓN: ' + yearOfBuild : '',\n  input.location_in_property ? 'UBICACIÓN EN EL INMUEBLE: ' + input.location_in_property : '',\n  input.description ? 'OBSERVACIÓN DEL INSPECTOR: ' + input.description : '',\n  architectObs ? 'OBSERVACIONES PREVIAS DEL ARQUITECTO: ' + architectObs : '',\n  '',\n  'Detecta TODAS las patologías visibles. Si no hay patologías relevantes, devuelve findings: [].',\n  '',\n  'Devuelve JSON exacto:',\n  '{',\n  '  \"findings\": [',\n  '    {',\n  '      \"pathology_type\": \"humedad_capilaridad|humedad_filtracion|humedad_condensacion|fisura_estructural|fisura_no_estructural|asentamiento|aluminosis|carbonatacion|oxidacion_armadura|instalacion_electrica_obsoleta|instalacion_fontaneria_obsoleta|instalacion_gas_obsoleta|carpinteria_deteriorada|puente_termico|sin_aislamiento|amianto_sospechoso|plomo_sospechoso|radon_sospechoso|termitas|xilofagos|moho|material_deteriorado|superficie_irregular|otra\",',\n  '      \"severity\": \"low|medium|high|critical\",',\n  '      \"urgency\": \"informativo|programar|urgente|inmediato\",',\n  '      \"structural\": true|false,',\n  '      \"affects_safety\": true|false,',\n  '      \"affects_habitability\": true|false,',\n  '      \"description\": \"qué se ve y dónde\",',\n  '      \"recommended_action\": \"intervención recomendada\",',\n  '      \"estimated_cost_min\": 0,',\n  '      \"estimated_cost_max\": 0,',\n  '      \"requires_specialist\": true|false,',\n  '      \"specialist_type\": \"—|estructurista|aparejador|tecnico_amianto|tecnico_radon|...\"',\n  '    }',\n  '  ],',\n  '  \"global_summary\": \"resumen 2-3 frases de las patologías detectadas y su impacto en la viabilidad de la reforma\",',\n  '  \"confidence\": \"low|medium|high\",',\n  '  \"requires_in_situ_diagnosis\": true|false',\n  '}',\n  '',\n  'Reglas:',\n  '- aluminosis: SOLO sospechar si forjado de hormigón a la vista con manchas marrón-rojizas + edif. 1958-1972. Marca specialist_type: \"laboratorio_aluminosis\".',\n  '- amianto_sospechoso: terrazos pre-1990, fibrocemento (uralita), bajantes antiguos, falsos techos. specialist_type: \"tecnico_amianto\".',\n  '- plomo_sospechoso: tuberías grises de fontanería en edif. pre-1980.',\n  '- humedad_capilaridad: manchas en planta baja con borde difuso, eflorescencias salinas, hasta ~1m altura.',\n  '- humedad_filtracion: bordes definidos, asociada a punto exterior (cubierta, fachada, junta).',\n  '- humedad_condensacion: rincones fríos, en techos sobre habitaciones húmedas, moho asociado.',\n  '- instalacion_electrica_obsoleta: cables empotrados sin tubo, ausencia de diferencial, secciones insuficientes, REBT pre-2002.',\n  '- Costes orientativos en EUR para una intervención típica en piso ~80m² (no obra completa, solo la patología).',\n  '- Si la imagen no permite ver claramente: confidence: \"low\" y requires_in_situ_diagnosis: true.'\n].filter(Boolean).join('\\n');\n\nconst contentArr = [{ type: 'text', text: userParts }];\nfor (const url of input.photo_urls) {\n  contentArr.push({ type: 'image_url', image_url: { url: url, detail: 'high' } });\n}\n\nconst payload = {\n  model: 'gpt-4o',\n  max_tokens: 2500,\n  temperature: 0.1,\n  messages: [\n    { role: 'system', content: systemPrompt },\n    { role: 'user', content: contentArr }\n  ]\n};\nreturn [{ json: { project_id: input.project_id, project_name: ctx.project_name, photo_urls: input.photo_urls, description: input.description, location_in_property: input.location_in_property, inspector: input.inspector, payload: payload, started_at: input.started_at } }];"
+      }
+    },
+    {
+      "id": "ap-07",
+      "name": "Call Vision",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        220,
+        220
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.payload) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "PLACEHOLDER",
+          "name": "orquestador ArquiAI"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "ap-08",
+      "name": "Parse Findings",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        160
+      ],
+      "parameters": {
+        "jsCode": "const llm = $input.first().json;\nconst built = $('Build Prompt').first().json;\nconst content = llm.choices && llm.choices[0] && llm.choices[0].message && llm.choices[0].message.content || '';\nconst usage = llm.usage || {};\nconst tokensIn = usage.prompt_tokens || 0;\nconst tokensOut = usage.completion_tokens || 0;\nconst cost = (tokensIn / 1000) * 0.0025 + (tokensOut / 1000) * 0.01;\n\nlet parsed = { findings: [], global_summary: '', confidence: 'low' };\ntry {\n  const m = content.match(/\\{[\\s\\S]*\\}/);\n  if (m) parsed = JSON.parse(m[0]);\n} catch (e) {\n  parsed = { findings: [], global_summary: 'parse error: ' + e.message, confidence: 'low' };\n}\n\nconst findings = Array.isArray(parsed.findings) ? parsed.findings : [];\n\nconst out = {\n  project_id: built.project_id,\n  project_name: built.project_name,\n  photo_urls: built.photo_urls,\n  description: built.description,\n  location_in_property: built.location_in_property,\n  inspector: built.inspector,\n  findings: findings,\n  global_summary: parsed.global_summary || '',\n  confidence: parsed.confidence || 'low',\n  requires_in_situ_diagnosis: parsed.requires_in_situ_diagnosis === true,\n  llm_model: llm.model || 'gpt-4o',\n  llm_tokens_in: tokensIn,\n  llm_tokens_out: tokensOut,\n  llm_cost: Math.round(cost * 100000) / 100000,\n  cost_per_finding: findings.length > 0 ? Math.round((cost / findings.length) * 100000) / 100000 : null,\n  has_critical: findings.some(f => f && (f.severity === 'critical' || f.severity === 'high' || f.affects_safety === true)),\n  high_count: findings.filter(f => f && f.severity === 'high').length,\n  critical_count: findings.filter(f => f && f.severity === 'critical').length\n};\nreturn [{ json: out }];"
+      }
+    },
+    {
+      "id": "ap-09",
+      "name": "Has Findings?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        660,
+        160
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "f1",
+              "leftValue": "={{ $json.findings.length }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ap-10",
+      "name": "Insert Findings (loop)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        80
+      ],
+      "parameters": {
+        "jsCode": "const parent = $input.first().json;\nreturn parent.findings.map(f => ({\n  json: {\n    ...parent,\n    pathology_type: f.pathology_type || 'otra',\n    severity: f.severity || 'medium',\n    urgency: f.urgency || 'programar',\n    structural: f.structural === true,\n    affects_safety: f.affects_safety === true,\n    affects_habitability: f.affects_habitability === true,\n    description_finding: f.description || '',\n    recommended_action: f.recommended_action || '',\n    estimated_cost_min: typeof f.estimated_cost_min === 'number' ? f.estimated_cost_min : null,\n    estimated_cost_max: typeof f.estimated_cost_max === 'number' ? f.estimated_cost_max : null,\n    requires_specialist: f.requires_specialist === true,\n    specialist_type: f.specialist_type || null,\n    finding_raw: f\n  }\n}));"
+      }
+    },
+    {
+      "id": "ap-11",
+      "name": "Insert Pathology",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1100,
+        80
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO pathology_findings (\n  project_id, inspector, location_in_property, photo_urls,\n  description, pathology_type, severity, urgency,\n  structural, affects_safety, affects_habitability,\n  recommended_action, estimated_intervention_cost_min, estimated_intervention_cost_max,\n  requires_specialist, specialist_type,\n  vision_summary, vision_raw,\n  llm_model, llm_tokens_in, llm_tokens_out, llm_cost\n) VALUES (\n  $1::uuid, $2, NULLIF($3,''), $4::text[],\n  $5, $6, $7, $8,\n  $9::boolean, $10::boolean, $11::boolean,\n  $12, NULLIF($13,'')::numeric, NULLIF($14,'')::numeric,\n  $15::boolean, NULLIF($16,''),\n  $17, $18::jsonb,\n  $19, NULLIF($20,'')::int, NULLIF($21,'')::int, NULLIF($22,'')::numeric\n) RETURNING id, severity, pathology_type, status;",
+        "options": {
+          "queryReplacement": "={{ [\n  $json.project_id,\n  $json.inspector,\n  $json.location_in_property || '',\n  '{' + ($json.photo_urls || []).map(u => '\"' + u.replace(/\"/g, '\\\\\"') + '\"').join(',') + '}',\n  $json.description_finding || $json.description || '',\n  $json.pathology_type,\n  $json.severity,\n  $json.urgency,\n  $json.structural,\n  $json.affects_safety,\n  $json.affects_habitability,\n  $json.recommended_action,\n  $json.estimated_cost_min === null || $json.estimated_cost_min === undefined ? '' : String($json.estimated_cost_min),\n  $json.estimated_cost_max === null || $json.estimated_cost_max === undefined ? '' : String($json.estimated_cost_max),\n  $json.requires_specialist,\n  $json.specialist_type || '',\n  $json.global_summary,\n  JSON.stringify($json.finding_raw),\n  $json.llm_model,\n  $json.cost_per_finding === null ? '' : String(Math.round((($json.llm_tokens_in || 0)/$json.findings.length))),\n  $json.cost_per_finding === null ? '' : String(Math.round((($json.llm_tokens_out || 0)/$json.findings.length))),\n  $json.cost_per_finding === null || $json.cost_per_finding === undefined ? '' : String($json.cost_per_finding)\n] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ap-12",
+      "name": "Aggregate Inserted",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        80
+      ],
+      "parameters": {
+        "jsCode": "const all = $input.all();\nconst inserted = all.map(it => it.json).filter(j => j && j.id);\nconst parent = $('Parse Findings').first().json;\nconst out = {\n  project_id: parent.project_id,\n  project_name: parent.project_name,\n  inserted_ids: inserted.map(i => i.id),\n  total_findings: inserted.length,\n  high_count: parent.high_count,\n  critical_count: parent.critical_count,\n  has_critical: parent.has_critical,\n  global_summary: parent.global_summary,\n  confidence: parent.confidence,\n  requires_in_situ_diagnosis: parent.requires_in_situ_diagnosis,\n  photo_urls: parent.photo_urls,\n  llm_cost: parent.llm_cost,\n  findings_detail: parent.findings\n};\nreturn [{ json: out }];"
+      }
+    },
+    {
+      "id": "ap-13",
+      "name": "Critical?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1540,
+        80
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.has_critical }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ap-14",
+      "name": "Build Alert Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst rows = (data.findings_detail || []).map(f => {\n  const sev = (f.severity || 'medium').toLowerCase();\n  const sevColor = { critical: '#7f1d1d', high: '#dc2626', medium: '#f59e0b', low: '#10b981' }[sev] || '#6b7280';\n  const safetyBadge = f.affects_safety ? '<span style=\"background:#dc2626;color:white;padding:2px 4px;border-radius:3px;font-size:11px\">SEGURIDAD</span>' : '';\n  const structBadge = f.structural ? '<span style=\"background:#7c2d12;color:white;padding:2px 4px;border-radius:3px;font-size:11px\">ESTRUCTURAL</span>' : '';\n  const cost = (f.estimated_cost_min || f.estimated_cost_max) ? (f.estimated_cost_min || 0) + '-' + (f.estimated_cost_max || 0) + 'eur' : 'no estimado';\n  return '<tr>' +\n    '<td><span style=\"background:' + sevColor + ';color:white;padding:2px 8px;border-radius:3px;font-weight:bold\">' + sev.toUpperCase() + '</span> ' + safetyBadge + ' ' + structBadge + '</td>' +\n    '<td><b>' + (f.pathology_type || '?') + '</b><br><small>' + (f.description || '?') + '</small></td>' +\n    '<td>' + (f.urgency || '?') + '</td>' +\n    '<td>' + cost + '</td>' +\n    '<td><small>' + (f.recommended_action || '?') + (f.requires_specialist ? '<br>Especialista: ' + (f.specialist_type || 'sin especificar') : '') + '</small></td>' +\n    '</tr>';\n}).join('');\nconst photos = (data.photo_urls || []).map(u => '<a href=\"' + u + '\">foto</a>').join(' &middot; ');\nconst html = '<h2>Patologías detectadas — ' + (data.project_name || '?') + '</h2>' +\n  '<p><b>' + data.total_findings + ' patologías detectadas</b> &middot; ' + data.critical_count + ' críticas &middot; ' + data.high_count + ' altas &middot; confianza: ' + data.confidence + '</p>' +\n  '<p>' + (data.global_summary || '') + '</p>' +\n  (data.requires_in_situ_diagnosis ? '<p style=\"color:#dc2626\"><b>⚠ Requiere diagnóstico in situ adicional.</b></p>' : '') +\n  '<table border=\"1\" cellpadding=\"6\" cellspacing=\"0\" style=\"border-collapse:collapse;font-family:sans-serif;font-size:13px\">' +\n  '<thead><tr style=\"background:#f3f4f6\"><th>Severidad</th><th>Tipo</th><th>Urgencia</th><th>Coste estimado</th><th>Acción</th></tr></thead>' +\n  '<tbody>' + rows + '</tbody></table>' +\n  '<p>Fotos: ' + photos + '</p>';\nreturn [{ json: { html: html, project_name: data.project_name, total_findings: data.total_findings, critical_count: data.critical_count, high_count: data.high_count } }];"
+      }
+    },
+    {
+      "id": "ap-15",
+      "name": "Send Alert",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1980,
+        0
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $('Load Architect Email').first().json.value }}",
+        "subject": "=ArquitAI patologías — {{ $json.project_name }}: {{ $json.critical_count }} crít + {{ $json.high_count }} altas",
+        "emailType": "html",
+        "message": "={{ $json.html }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "PLACEHOLDER",
+          "name": "damian2botella"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "ap-16",
+      "name": "Respond 201",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        2200,
+        80
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'analyzed', project_id: $('Aggregate Inserted').first().json.project_id, total_findings: $('Aggregate Inserted').first().json.total_findings, critical: $('Aggregate Inserted').first().json.critical_count, high: $('Aggregate Inserted').first().json.high_count, has_critical: $('Aggregate Inserted').first().json.has_critical, requires_in_situ_diagnosis: $('Aggregate Inserted').first().json.requires_in_situ_diagnosis, summary: $('Aggregate Inserted').first().json.global_summary, finding_ids: $('Aggregate Inserted').first().json.inserted_ids, llm_cost: $('Aggregate Inserted').first().json.llm_cost}) }}",
+        "options": {
+          "responseCode": 201
+        }
+      }
+    },
+    {
+      "id": "ap-17",
+      "name": "Respond No Findings",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        880,
+        240
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'analyzed', project_id: $json.project_id, total_findings: 0, summary: $json.global_summary || 'No se detectaron patologías relevantes en las imágenes.', confidence: $json.confidence, requires_in_situ_diagnosis: $json.requires_in_situ_diagnosis, llm_cost: $json.llm_cost}) }}",
+        "options": {
+          "responseCode": 200
+        }
+      }
+    },
+    {
+      "id": "ap-18",
+      "name": "Handle Vision Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        320
+      ],
+      "parameters": {
+        "jsCode": "const err = $input.first().json;\nconst built = $('Build Prompt').first().json;\nconst msg = (err && (err.message || (err.error && err.error.message))) || 'vision error';\nreturn [{ json: { project_id: built.project_id, error: msg } }];"
+      }
+    },
+    {
+      "id": "ap-19",
+      "name": "Respond 502",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        660,
+        320
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'vision_error', error: $json.error}) }}",
+        "options": {
+          "responseCode": 502
+        }
+      }
+    },
+    {
+      "id": "11f52f3b-3363-4fe5-8ef9-1cd37d3d849a",
+      "name": "Load Architect Email",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -800,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT value FROM system_config WHERE key = 'architect_email'",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Validate": {
+      "main": [
+        [
+          {
+            "node": "Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid?": {
+      "main": [
+        [
+          {
+            "node": "Load Project Context",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 400",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Project Context": {
+      "main": [
+        [
+          {
+            "node": "Build Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Prompt": {
+      "main": [
+        [
+          {
+            "node": "Call Vision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call Vision": {
+      "main": [
+        [
+          {
+            "node": "Parse Findings",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Handle Vision Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Findings": {
+      "main": [
+        [
+          {
+            "node": "Has Findings?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Findings?": {
+      "main": [
+        [
+          {
+            "node": "Insert Findings (loop)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond No Findings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Findings (loop)": {
+      "main": [
+        [
+          {
+            "node": "Insert Pathology",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Pathology": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Inserted",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Inserted": {
+      "main": [
+        [
+          {
+            "node": "Critical?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Critical?": {
+      "main": [
+        [
+          {
+            "node": "Build Alert Email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 201",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Alert Email": {
+      "main": [
+        [
+          {
+            "node": "Send Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Alert": {
+      "main": [
+        [
+          {
+            "node": "Respond 201",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Handle Vision Error": {
+      "main": [
+        [
+          {
+            "node": "Respond 502",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Load Architect Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Architect Email": {
+      "main": [
+        [
+          {
+            "node": "Validate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": null,
+  "versionId": "f2f71a9b-712b-4af4-8efc-b868cb6fc5ff",
+  "tags": []
+}

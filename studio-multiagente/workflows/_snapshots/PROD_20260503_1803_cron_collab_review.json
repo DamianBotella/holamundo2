@@ -1,0 +1,302 @@
+{
+  "name": "cron_collab_review",
+  "active": true,
+  "nodes": [
+    {
+      "id": "ccr-01",
+      "name": "Schedule 10:00 Daily",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -700,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 10 * * *"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "ccr-02",
+      "name": "Load Architect Email",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -460,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT value AS architect_email FROM system_config WHERE key = 'architect_email' LIMIT 1",
+        "options": {
+          "alwaysOutputData": true
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ccr-03",
+      "name": "Find Issues",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -220,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT json_build_object(\n  'overdue', coalesce((SELECT json_agg(t.* ORDER BY t.deadline ASC) FROM (\n    SELECT a.id::text AS assignment_id, a.role, a.scope, a.status, a.deadline,\n      (CURRENT_DATE - a.deadline)::int AS days_overdue,\n      a.fee_eur, c.name AS collaborator_name, c.email AS collaborator_email, c.specialty,\n      p.id::text AS project_id, p.name AS project_name\n    FROM collab_assignments a\n    JOIN collaborators c ON c.id = a.collaborator_id\n    JOIN projects p ON p.id = a.project_id\n    WHERE a.deadline IS NOT NULL\n      AND a.deadline < CURRENT_DATE\n      AND a.status NOT IN ('approved', 'closed', 'cancelled', 'rejected', 'rejected_delivery')\n  ) t), '[]'::json),\n  'stale_delivered', coalesce((SELECT json_agg(t.* ORDER BY t.delivered_at ASC) FROM (\n    SELECT a.id::text AS assignment_id, a.role, a.scope, a.status, a.delivered_at,\n      floor(EXTRACT(EPOCH FROM (now() - a.delivered_at))/86400)::int AS days_since_delivery,\n      a.fee_eur, c.name AS collaborator_name, c.email AS collaborator_email,\n      p.id::text AS project_id, p.name AS project_name\n    FROM collab_assignments a\n    JOIN collaborators c ON c.id = a.collaborator_id\n    JOIN projects p ON p.id = a.project_id\n    WHERE a.status = 'delivered'\n      AND a.delivered_at IS NOT NULL\n      AND a.delivered_at < now() - INTERVAL '7 days'\n  ) t), '[]'::json),\n  'invited_no_response', coalesce((SELECT json_agg(t.* ORDER BY t.invited_at ASC) FROM (\n    SELECT a.id::text AS assignment_id, a.role, a.scope, a.invited_at,\n      floor(EXTRACT(EPOCH FROM (now() - a.invited_at))/86400)::int AS days_since_invite,\n      c.name AS collaborator_name, c.email AS collaborator_email,\n      p.id::text AS project_id, p.name AS project_name\n    FROM collab_assignments a\n    JOIN collaborators c ON c.id = a.collaborator_id\n    JOIN projects p ON p.id = a.project_id\n    WHERE a.status = 'invited'\n      AND a.invited_at < now() - INTERVAL '5 days'\n  ) t), '[]'::json),\n  'total_issues', (\n    (SELECT count(*) FROM collab_assignments WHERE deadline IS NOT NULL AND deadline < CURRENT_DATE AND status NOT IN ('approved','closed','cancelled','rejected','rejected_delivery'))\n  + (SELECT count(*) FROM collab_assignments WHERE status = 'delivered' AND delivered_at < now() - INTERVAL '7 days')\n  + (SELECT count(*) FROM collab_assignments WHERE status = 'invited' AND invited_at < now() - INTERVAL '5 days')\n  )::int\n) AS report;",
+        "options": {
+          "alwaysOutputData": true
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ccr-04",
+      "name": "Has Issues?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        20,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "ic1",
+              "leftValue": "={{ $json.report.total_issues }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ccr-05",
+      "name": "Build Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        160
+      ],
+      "parameters": {
+        "jsCode": "const r = $('Find Issues').first().json.report || {};\nconst overdue = Array.isArray(r.overdue) ? r.overdue : [];\nconst stale = Array.isArray(r.stale_delivered) ? r.stale_delivered : [];\nconst invited = Array.isArray(r.invited_no_response) ? r.invited_no_response : [];\nconst total = r.total_issues || 0;\n\nfunction esc(s) { return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\nfunction money(n) { return n != null ? Number(n).toFixed(0) + ' EUR' : '-'; }\nfunction dateShort(s) { if (!s) return '-'; return new Date(s).toISOString().substring(0,10); }\n\nconst rowsOverdue = overdue.map(a => `<tr style=\"background:${a.days_overdue > 14 ? '#fee' : '#fff8e0'}\">\n  <td>${esc(a.collaborator_name)} <small style=\"color:#666\">(${esc(a.specialty || '')})</small></td>\n  <td>${esc(a.project_name)}</td>\n  <td>${esc(a.role)}</td>\n  <td>${esc(a.status)}</td>\n  <td>${dateShort(a.deadline)}</td>\n  <td style=\"text-align:right;color:#c00;font-weight:600\">+${a.days_overdue}d</td>\n  <td style=\"text-align:right\">${money(a.fee_eur)}</td>\n</tr>`).join('');\n\nconst rowsStale = stale.map(a => `<tr>\n  <td>${esc(a.collaborator_name)}</td>\n  <td>${esc(a.project_name)}</td>\n  <td>${esc(a.role)}</td>\n  <td>${dateShort(a.delivered_at)}</td>\n  <td style=\"text-align:right;font-weight:600\">${a.days_since_delivery}d</td>\n  <td style=\"text-align:right\">${money(a.fee_eur)}</td>\n</tr>`).join('');\n\nconst rowsInvited = invited.map(a => `<tr>\n  <td>${esc(a.collaborator_name)}</td>\n  <td>${esc(a.project_name)}</td>\n  <td>${esc(a.role)}</td>\n  <td>${dateShort(a.invited_at)}</td>\n  <td style=\"text-align:right\">${a.days_since_invite}d</td>\n</tr>`).join('');\n\nconst sections = [];\nif (overdue.length > 0) {\n  sections.push(`<h3 style=\"margin-top:24px\">Deadline vencido (${overdue.length})</h3><p style=\"font-size:13px;color:#555\">Colaboradores que se comprometieron a entregar y la fecha ya paso. Hay que recordarles o cerrar/cancelar.</p>\n<table style=\"width:100%;border-collapse:collapse;font-size:13px\"><thead><tr style=\"background:#f0f0f3\"><th align=\"left\">colaborador</th><th align=\"left\">proyecto</th><th align=\"left\">rol</th><th align=\"left\">status</th><th align=\"left\">deadline</th><th align=\"right\">retraso</th><th align=\"right\">honorario</th></tr></thead><tbody>${rowsOverdue}</tbody></table>`);\n}\nif (stale.length > 0) {\n  sections.push(`<h3 style=\"margin-top:24px\">Entregados sin aprobar (${stale.length})</h3><p style=\"font-size:13px;color:#555\">El colaborador ya entrego pero llevas mas de 7 dias sin aprobar. Revisar y marcar approved/rejected_delivery.</p>\n<table style=\"width:100%;border-collapse:collapse;font-size:13px\"><thead><tr style=\"background:#f0f0f3\"><th align=\"left\">colaborador</th><th align=\"left\">proyecto</th><th align=\"left\">rol</th><th align=\"left\">entregado</th><th align=\"right\">dias</th><th align=\"right\">honorario</th></tr></thead><tbody>${rowsStale}</tbody></table>`);\n}\nif (invited.length > 0) {\n  sections.push(`<h3 style=\"margin-top:24px\">Invitados sin respuesta (${invited.length})</h3><p style=\"font-size:13px;color:#555\">Mas de 5 dias sin que el colaborador haya aceptado/rechazado la invitacion.</p>\n<table style=\"width:100%;border-collapse:collapse;font-size:13px\"><thead><tr style=\"background:#f0f0f3\"><th align=\"left\">colaborador</th><th align=\"left\">proyecto</th><th align=\"left\">rol</th><th align=\"left\">invitado</th><th align=\"right\">dias</th></tr></thead><tbody>${rowsInvited}</tbody></table>`);\n}\n\nconst html = `<div style=\"font-family:system-ui,sans-serif;color:#222;max-width:780px\">\n<h2>Colaboradores - revision diaria (${total} pendientes)</h2>\n${sections.join('\\n')}\n<p style=\"font-size:12px;color:#888;margin-top:24px\">cron_collab_review - generado ${new Date().toISOString()}</p>\n</div>`;\n\nconst subject = `[Collaboradores] ${total} pendientes (${overdue.length} vencidos / ${stale.length} sin aprobar / ${invited.length} sin respuesta)`;\n\nreturn [{ json: { html, subject, total } }];"
+      }
+    },
+    {
+      "id": "ccr-06",
+      "name": "Send Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        500,
+        160
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $('Load Architect Email').first().json.architect_email }}",
+        "subject": "={{ $json.subject }}",
+        "emailType": "html",
+        "message": "={{ $json.html }}",
+        "options": {}
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "PLACEHOLDER",
+          "name": "Gmail Notifications"
+        }
+      }
+    },
+    {
+      "id": "ccr-07",
+      "name": "Log Issues Found",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        740,
+        160
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, status, output_summary) VALUES (NULL, 'cron_collab_review', 'collab_review_clean', 'warning', $1)",
+        "options": {
+          "queryReplacement": "={{ [ 'ran_with_issues: ' + $('Build Email').first().json.total + ' pendientes' ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ccr-08",
+      "name": "Log Clean",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        260,
+        440
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, status, output_summary) VALUES (NULL, 'cron_collab_review', 'collab_review_clean', 'success', '0 issues en colaboradores')",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "28b74a60-cf1b-4313-abd4-5803e2f7a89f",
+      "name": "Init Super Admin Context",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -580,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT set_config('app.role', 'super_admin', false) AS role_set"
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Load Architect Email": {
+      "main": [
+        [
+          {
+            "node": "Find Issues",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Issues": {
+      "main": [
+        [
+          {
+            "node": "Has Issues?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Issues?": {
+      "main": [
+        [
+          {
+            "node": "Build Email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Clean",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Email": {
+      "main": [
+        [
+          {
+            "node": "Send Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Email": {
+      "main": [
+        [
+          {
+            "node": "Log Issues Found",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule 10:00 Daily": {
+      "main": [
+        [
+          {
+            "node": "Init Super Admin Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Init Super Admin Context": {
+      "main": [
+        [
+          {
+            "node": "Load Architect Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": null,
+  "versionId": "c6211252-005c-428d-a8a1-311f8218811e",
+  "tags": []
+}

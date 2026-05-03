@@ -1,0 +1,464 @@
+{
+  "name": "orquestador arqui",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "b1dc9e57-cae6-4d9e-af52-de848f619fc8",
+      "name": "Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        -640,
+        48
+      ],
+      "notes": "Recibe: prompt, system_prompt, model, temperature, max_tokens, project_id, agent_name"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\n\nreturn [{\n  json: {\n    prompt: input.prompt || '',\n    system_prompt: input.system_prompt || 'Eres un asistente especializado en arquitectura técnica y reformas de vivienda.',\n    model: input.model || 'gpt-4o',\n    temperature: (input.temperature !== undefined && input.temperature !== null) ? Number(input.temperature) : 0.3,\n    max_tokens: input.max_tokens || 2000,\n    project_id: input.project_id || null,\n    agent_name: input.agent_name || 'unknown',\n    start_time: Date.now()\n  }\n}];"
+      },
+      "id": "a4daaa00-5140-4e6a-8544-d2117cf6c3b2",
+      "name": "Set Defaults",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -416,
+        48
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: $json.model, temperature: $json.temperature, max_tokens: $json.max_tokens, messages: [{ role: 'system', content: $json.system_prompt }, { role: 'user', content: $json.prompt }] }) }}",
+        "options": {}
+      },
+      "id": "3ea579cf-be5b-46bd-abd4-24a5e76441cb",
+      "name": "Llamar LLM",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -208,
+        48
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "PLACEHOLDER",
+          "name": "Header Auth account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-001",
+              "leftValue": "={{ $json.choices }}",
+              "rightValue": "",
+              "operator": {
+                "type": "object",
+                "operation": "exists"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a7181ea4-f0f6-45d7-9dd6-d1b988d0a1e9",
+      "name": "Llamada exitosa?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        32,
+        48
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "s-001",
+              "name": "success",
+              "value": true,
+              "type": "boolean"
+            },
+            {
+              "id": "s-002",
+              "name": "content",
+              "value": "={{ $json.choices[0].message.content }}",
+              "type": "string"
+            },
+            {
+              "id": "s-003",
+              "name": "llm_model",
+              "value": "={{ $json.model }}",
+              "type": "string"
+            },
+            {
+              "id": "s-004",
+              "name": "tokens_in",
+              "value": "={{ $json.usage.prompt_tokens }}",
+              "type": "number"
+            },
+            {
+              "id": "s-005",
+              "name": "tokens_out",
+              "value": "={{ $json.usage.completion_tokens }}",
+              "type": "number"
+            },
+            {
+              "id": "s-006",
+              "name": "cost_estimated",
+              "value": "={{ ($json.usage.prompt_tokens * 0.0000025) + ($json.usage.completion_tokens * 0.00001) }}",
+              "type": "number"
+            },
+            {
+              "id": "s-007",
+              "name": "error_message",
+              "value": "",
+              "type": "string"
+            },
+            {
+              "id": "s-008",
+              "name": "log_status",
+              "value": "success",
+              "type": "string"
+            },
+            {
+              "id": "s-009",
+              "name": "project_id",
+              "value": "={{ $('Set Defaults').first().json.project_id }}",
+              "type": "string"
+            },
+            {
+              "id": "s-010",
+              "name": "agent_name",
+              "value": "={{ $('Set Defaults').first().json.agent_name }}",
+              "type": "string"
+            },
+            {
+              "id": "s-011",
+              "name": "duration_ms",
+              "value": "={{ Date.now() - $('Set Defaults').first().json.start_time }}",
+              "type": "number"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "8a187be8-87b1-48e2-96f7-d4a952a98f62",
+      "name": "Preparar Exito",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        240,
+        -96
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "e-001",
+              "name": "success",
+              "value": false,
+              "type": "boolean"
+            },
+            {
+              "id": "e-002",
+              "name": "content",
+              "value": "",
+              "type": "string"
+            },
+            {
+              "id": "e-003",
+              "name": "llm_model",
+              "value": "={{ $('Set Defaults').first().json.model }}",
+              "type": "string"
+            },
+            {
+              "id": "e-004",
+              "name": "tokens_in",
+              "value": 0,
+              "type": "number"
+            },
+            {
+              "id": "e-005",
+              "name": "tokens_out",
+              "value": 0,
+              "type": "number"
+            },
+            {
+              "id": "e-006",
+              "name": "cost_estimated",
+              "value": 0,
+              "type": "number"
+            },
+            {
+              "id": "e-007",
+              "name": "error_message",
+              "value": "={{ $json.error?.message || 'Error desconocido en llamada LLM' }}",
+              "type": "string"
+            },
+            {
+              "id": "e-008",
+              "name": "log_status",
+              "value": "error",
+              "type": "string"
+            },
+            {
+              "id": "e-009",
+              "name": "project_id",
+              "value": "={{ $('Set Defaults').first().json.project_id }}",
+              "type": "string"
+            },
+            {
+              "id": "e-010",
+              "name": "agent_name",
+              "value": "={{ $('Set Defaults').first().json.agent_name }}",
+              "type": "string"
+            },
+            {
+              "id": "e-011",
+              "name": "duration_ms",
+              "value": "={{ Date.now() - $('Set Defaults').first().json.start_time }}",
+              "type": "number"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "8e084b71-5bfb-43e0-b2be-dff074b8efad",
+      "name": "Preparar Error",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        240,
+        192
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "e0a313e2-21ad-44b8-b4b7-852231b9f0c8",
+      "name": "Merge",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        464,
+        48
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (agent_name, action, llm_model, llm_tokens_in, llm_tokens_out, llm_cost_estimated, duration_ms, status, error_message, execution_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+        "options": {}
+      },
+      "id": "acd0aa4b-4cef-48fb-b38d-ebbb6d64012e",
+      "name": "Log Actividad",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        688,
+        48
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "o-001",
+              "name": "success",
+              "value": "={{ $('Merge').first().json.success }}",
+              "type": "boolean"
+            },
+            {
+              "id": "o-002",
+              "name": "content",
+              "value": "={{ $('Merge').first().json.content }}",
+              "type": "string"
+            },
+            {
+              "id": "o-003",
+              "name": "error_message",
+              "value": "={{ $('Merge').first().json.error_message }}",
+              "type": "string"
+            },
+            {
+              "id": "o-004",
+              "name": "llm_model",
+              "value": "={{ $('Merge').first().json.llm_model }}",
+              "type": "string"
+            },
+            {
+              "id": "o-005",
+              "name": "tokens_in",
+              "value": "={{ $('Merge').first().json.tokens_in }}",
+              "type": "number"
+            },
+            {
+              "id": "o-006",
+              "name": "tokens_out",
+              "value": "={{ $('Merge').first().json.tokens_out }}",
+              "type": "number"
+            },
+            {
+              "id": "o-007",
+              "name": "duration_ms",
+              "value": "={{ $('Merge').first().json.duration_ms }}",
+              "type": "number"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "d7441b3e-5052-4248-87df-e30d5d264d24",
+      "name": "Output Final",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        912,
+        48
+      ]
+    }
+  ],
+  "connections": {
+    "Trigger": {
+      "main": [
+        [
+          {
+            "node": "Set Defaults",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Defaults": {
+      "main": [
+        [
+          {
+            "node": "Llamar LLM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Llamar LLM": {
+      "main": [
+        [
+          {
+            "node": "Llamada exitosa?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Llamada exitosa?": {
+      "main": [
+        [
+          {
+            "node": "Preparar Exito",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Preparar Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Exito": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Error": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Log Actividad",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Actividad": {
+      "main": [
+        [
+          {
+            "node": "Output Final",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "pinData": {
+    "Trigger": [
+      {
+        "json": {
+          "prompt": "¿Qué es una reforma integral de vivienda? Responde en 2 frases.",
+          "agent_name": "test",
+          "project_id": null
+        }
+      }
+    ]
+  },
+  "versionId": "2ea29c9d-f3da-4838-8c5d-f39045d5be04",
+  "tags": []
+}

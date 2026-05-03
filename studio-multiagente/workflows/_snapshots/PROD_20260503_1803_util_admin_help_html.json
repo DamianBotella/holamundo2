@@ -1,0 +1,108 @@
+{
+  "name": "util_admin_help_html",
+  "active": true,
+  "nodes": [
+    {
+      "id": "hp-01",
+      "name": "Webhook GET",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -700,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "admin-help",
+        "responseMode": "responseNode",
+        "authentication": "headerAuth"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "PLACEHOLDER",
+          "name": "Webhook API Key (entrante)"
+        }
+      },
+      "webhookId": "hp-trigger"
+    },
+    {
+      "id": "hp-02",
+      "name": "Build HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -460,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const section = (title, body) => '<section style=\"background:white;padding:16px;border-radius:8px;margin:16px 0\"><h2 style=\"margin:0 0 12px;color:#1f2937;font-size:16px\">'+title+'</h2>'+body+'</section>';\nconst link = (path, label, descr) => '<li style=\"margin:6px 0\"><a href=\"'+path+'\" style=\"color:#2563eb;text-decoration:none;font-weight:500\"><code>'+path+'</code></a> — <span style=\"color:#374151\">'+label+'</span><br><span style=\"color:#6b7280;font-size:12px\">'+descr+'</span></li>';\nconst html = '<!DOCTYPE html><html lang=\"es\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>Help — ArquitAI</title>' +\n'<style>body{font-family:-apple-system,Arial,sans-serif;max-width:780px;margin:24px auto;padding:16px;color:#1f2937;background:#f3f4f6}h1{color:#0f172a;margin:0 0 4px}h3{color:#374151;font-size:14px;margin:16px 0 4px}code{background:#e5e7eb;padding:1px 6px;border-radius:3px;font-size:12px}.meta{color:#64748b;font-size:13px}details{margin:6px 0}summary{cursor:pointer;font-weight:500;padding:4px 0}details[open] summary{margin-bottom:6px}ul{padding-left:20px;line-height:1.6}</style>' +\n'</head><body>' +\n'<a href=\"/webhook/admin-index\" style=\"color:#2563eb;font-size:13px;text-decoration:none\">← Admin index</a>' +\n'<h1>Ayuda</h1>' +\n'<div class=\"meta\">Comandos, endpoints y FAQ del sistema.</div>' +\n\nsection('Endpoints HTML (visualizacion)', '<ul>' +\n  link('/webhook/admin-index', 'Landing maestro', 'Score actual + cards + links a todo') +\n  link('/webhook/dashboard-html', 'Dashboard estudio', 'KPIs business: proyectos, finance, concierge') +\n  link('/webhook/security-dashboard-html', 'Security dashboard', 'Eventos, blocklist, top IPs') +\n  link('/webhook/llm-costs-html', 'Costes LLM', 'Por agente, proyecto, modelo, errores') +\n  link('/webhook/admin-pipeline', 'Pipeline kanban', 'Proyectos por fase, click para drill-down') +\n  link('/webhook/admin-search?q=&lt;term&gt;', 'Buscador', 'Proyectos/clientes/eventos por nombre/IP/email') +\n  link('/webhook/admin-activity', 'Actividad reciente', 'Timeline 48h security + activity_log') +\n  link('/webhook/admin-tokens', 'Tokens cliente', 'Estado de tokens activos/revocados/expirados') +\n  link('/webhook/admin-workflows', 'Workflows audit', 'Status de 14 crons criticos (OK/STALE)') +\n  link('/webhook/admin-health-history', 'Health history', 'Tendencia 30d del system_health_score') +\n  link('/webhook/admin-help', 'Esta pagina', 'Comandos y FAQ') +\n'</ul>') +\n\nsection('Endpoints API (JSON / CSV / acciones)', '<ul>' +\n  link('GET /webhook/dashboard-summary', 'Dashboard JSON', 'Mismo dato del web pero estructurado') +\n  link('GET /webhook/security-dashboard', 'Security JSON', 'Para parser/automatizacion') +\n  link('GET /webhook/admin-export?dataset=&lt;name&gt;', 'CSV download', 'datasets: projects, invoices, tokens, aftercare, contracts, llm_calls') +\n  link('GET /webhook/admin-project?project_id=&lt;uuid&gt;', 'Project drill-down', 'Vista admin completa de un proyecto') +\n  link('POST /webhook/admin-note', 'Crear nota proyecto', 'JSON: {project_id, body, category, pinned}') +\n'</ul>') +\n\nsection('FAQ', \n  '<details><summary>El score esta en yellow/red, que hago?</summary><p>Abre <code>/webhook/security-dashboard-html</code> y revisa critical_unresolved + ips_blocked. Tambien <code>/webhook/admin-activity</code> para ver errores recientes.</p></details>' +\n  '<details><summary>Como creo un proyecto nuevo?</summary><p>POST a <code>/webhook/new-project</code> con el JSON del payload (ver init_new_project workflow). El form HTML aun no esta construido.</p></details>' +\n  '<details><summary>Como reviso el flujo de un proyecto especifico?</summary><p>Click en su tarjeta del pipeline o usa <code>/webhook/admin-project?project_id=&lt;uuid&gt;</code></p></details>' +\n  '<details><summary>Llego un email critical, debo intervenir?</summary><p>Si el subject lleva [ARQUITAI CRITICAL] -> revisa inmediatamente. Otros emails (semanales, KPIs) son informativos.</p></details>' +\n  '<details><summary>Como rotar la encryption_key?</summary><p>NO rotar a la ligera. Requiere descifrar todas las columnas _enc, cambiar la key, re-cifrar. Ver <code>migration 008</code> seccion comentada al final.</p></details>' +\n  '<details><summary>Como anyado una nota rapida a un proyecto?</summary><p><code>curl -X POST /webhook/admin-note -H \"X-API-Key: ...\" -d \\'{\"project_id\":\"&lt;uuid&gt;\",\"body\":\"...\",\"category\":\"client_pref\",\"pinned\":true}\\'</code></p></details>' +\n  '<details><summary>Que workflow se ejecuta cuando creo un proyecto?</summary><p><code>init_new_project</code> -> crea row en projects + clients + estructura Drive. Luego <code>main_orchestrator</code> dispara <code>agent_briefing</code>.</p></details>' +\n  '<details><summary>Como veo cuanto me cuesta un proyecto en LLM?</summary><p><code>/webhook/llm-costs-html</code> tabla \"por proyecto 30d\".</p></details>' +\n  '<details><summary>Que hago si un cron critico esta STALE?</summary><p>Abre n8n executions, filtra por workflow, ve el ultimo run. Si fallo: investiga el error. Si esta desactivado: reactivar manualmente.</p></details>'\n) +\n\nsection('Capa de seguridad', \n  '<h3>Auto-bans</h3><ul>' +\n  '<li>3+ honeypot hits/10min -> ban 24h</li>' +\n  '<li>5+ pattern (SQL inj/XSS/etc) hits/10min -> ban 24h</li>' +\n  '</ul>' +\n  '<h3>Rate limits por endpoint</h3><ul>' +\n  '<li><code>client-ask</code>: 10/min, 60/h</li>' +\n  '<li><code>gdpr-request</code>: 5/min, 20/h</li>' +\n  '<li><code>aftercare-submit</code>: 5/min, 30/h</li>' +\n  '<li><code>contract-signed</code>: 10/min, 100/h</li>' +\n  '</ul>'\n) +\n\nsection('Comandos utiles (terminal)',\n  '<pre style=\"background:#1f2937;color:#f3f4f6;padding:12px;border-radius:6px;font-size:12px;overflow-x:auto\">'+\n  '# Ver estado actual\\ncurl -sS https://n8n-n8n.zzeluw.easypanel.host/webhook/security-dashboard \\\\\\n  -H \"X-API-Key: $WEBHOOK_KEY\" | jq\\n\\n'+\n  '# Buscar proyecto\\ncurl -sS \"https://n8n-n8n.zzeluw.easypanel.host/webhook/admin-search?q=Embajadores\" \\\\\\n  -H \"X-API-Key: $WEBHOOK_KEY\"\\n\\n'+\n  '# Exportar facturas a CSV\\ncurl -sS \"https://n8n-n8n.zzeluw.easypanel.host/webhook/admin-export?dataset=invoices\" \\\\\\n  -H \"X-API-Key: $WEBHOOK_KEY\" -o invoices.csv'+\n  '</pre>'\n) +\n\n'<p style=\"color:#94a3b8;font-size:11px;margin-top:32px;text-align:center\">Para mas detalle: <code>studio-multiagente/knowledge/seguridad/referencia_workflows.md</code> tiene el listado exhaustivo.</p>' +\n'</body></html>';\nreturn [{ json: { html } }];"
+      }
+    },
+    {
+      "id": "hp-03",
+      "name": "Respond HTML",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        -220,
+        300
+      ],
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.html }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "text/html; charset=utf-8"
+              },
+              {
+                "name": "X-Frame-Options",
+                "value": "DENY"
+              },
+              {
+                "name": "Cache-Control",
+                "value": "no-store"
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook GET": {
+      "main": [
+        [
+          {
+            "node": "Build HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build HTML": {
+      "main": [
+        [
+          {
+            "node": "Respond HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": null,
+  "versionId": "3bb288a8-0aba-497b-b01a-3bb206a71371",
+  "tags": []
+}

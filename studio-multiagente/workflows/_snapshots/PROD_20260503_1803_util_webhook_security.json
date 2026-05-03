@@ -1,0 +1,112 @@
+{
+  "name": "util_webhook_security",
+  "active": true,
+  "nodes": [
+    {
+      "id": "uws-01",
+      "name": "Execute Sub-workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        240,
+        300
+      ],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    },
+    {
+      "id": "uws-02",
+      "name": "Normalize Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        460,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const input = $input.first().json || {};\nconst headers = input.headers || {};\nconst sourceIp = (input.source_ip\n  || headers['x-real-ip']\n  || (headers['x-forwarded-for'] || '').toString().split(',')[0].trim()\n  || 'unknown').slice(0, 64);\nconst userAgent = (input.user_agent || headers['user-agent'] || 'unknown').toString().slice(0, 500);\nconst endpoint = (input.endpoint || 'unknown').toString().slice(0, 80);\nconst maxPerMinute = Number.isFinite(input.max_per_minute) ? input.max_per_minute : 30;\nconst projectId = input.project_id || null;\nconst agentName = input.agent_name || 'webhook_entry';\nreturn [{ json: { source_ip: sourceIp, user_agent: userAgent, endpoint, max_per_minute: maxPerMinute, project_id: projectId, agent_name: agentName } }];"
+      }
+    },
+    {
+      "id": "uws-03",
+      "name": "Rate Limit + Audit",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        700,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH rl AS (\n  SELECT CASE WHEN allowed THEN 'allowed' ELSE 'blocked' END AS verdict, reason FROM check_rate_limit($1::text, $2::text, $3::int, ($3::int * 60))\n), valid_pid AS (\n  SELECT id FROM projects WHERE id = NULLIF($4,'')::uuid\n), log AS (\n  INSERT INTO activity_log (project_id, agent_name, action, status, source_ip, user_agent, input_summary)\n  VALUES ((SELECT id FROM valid_pid), $5, 'webhook_received', 'success', $1, $6,\n          format('endpoint=%s rate_limit_max=%s', $2, $3))\n  RETURNING id\n)\nSELECT rl.verdict AS verdict, log.id AS log_id FROM rl, log;",
+        "options": {
+          "queryReplacement": "={{ [$json.source_ip, $json.endpoint, $json.max_per_minute, $json.project_id || '', $json.agent_name, $json.user_agent] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "uws-04",
+      "name": "Build Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        940,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const dbRow = $input.first().json || {};\nconst input = $('Normalize Input').first().json;\nconst verdict = dbRow.verdict || 'allowed';\nconst allowed = verdict !== 'blocked';\nconst out = {\n  allowed,\n  blocked: !allowed,\n  verdict,\n  source_ip: input.source_ip,\n  user_agent: input.user_agent,\n  endpoint: input.endpoint,\n  log_id: dbRow.log_id || null\n};\nreturn [{ json: out }];"
+      }
+    }
+  ],
+  "connections": {
+    "Execute Sub-workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "Normalize Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Input": {
+      "main": [
+        [
+          {
+            "node": "Rate Limit + Audit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rate Limit + Audit": {
+      "main": [
+        [
+          {
+            "node": "Build Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": null,
+  "versionId": "9e26e97a-350c-495a-bcf9-043ec394087d",
+  "tags": []
+}

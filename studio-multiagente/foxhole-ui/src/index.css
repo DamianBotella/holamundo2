@@ -1,0 +1,67 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  html, body, #root {
+    height: 100%;
+  }
+
+  body {
+    background-color: #0e1014;
+    color: #e6e8eb;
+    font-family: 'Inter', system-ui, sans-serif;
+  }
+
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  *::-webkit-scrollbar-track {
+    background: #0e1014;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: #2a2e36;
+    border-radius: 4px;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background: #3a3e46;
+  }
+}
+
+@layer components {
+  .foxhole-card {
+    @apply bg-foxhole-surface border border-foxhole-border rounded-lg;
+  }
+  .foxhole-card-hover {
+    @apply foxhole-card transition-colors hover:border-foxhole-border-strong cursor-pointer;
+  }
+  .foxhole-kpi {
+    @apply foxhole-card p-4 flex flex-col gap-1;
+  }
+  .foxhole-kpi-label {
+    @apply text-xs uppercase tracking-wider text-foxhole-muted font-mono;
+  }
+  .foxhole-kpi-value {
+    @apply text-2xl font-mono font-medium text-foxhole-fg;
+  }
+  .foxhole-badge {
+    @apply inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-mono;
+  }
+  .foxhole-badge-critical {
+    @apply foxhole-badge bg-foxhole-danger/15 text-foxhole-danger;
+  }
+  .foxhole-badge-warning {
+    @apply foxhole-badge bg-foxhole-warning/15 text-foxhole-warning;
+  }
+  .foxhole-badge-info {
+    @apply foxhole-badge bg-foxhole-info/15 text-foxhole-info;
+  }
+  .foxhole-badge-success {
+    @apply foxhole-badge bg-foxhole-accent/15 text-foxhole-accent;
+  }
+}

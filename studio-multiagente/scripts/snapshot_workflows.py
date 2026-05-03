@@ -63,6 +63,15 @@ CRITICAL_WORKFLOWS = {
     "error_handler",
 }
 
+# Para snapshot completo (--all), excluir workflows obsoletos/test
+EXCLUDED_FROM_FULL = {
+    "_test_session_persistence_X3",  # workflow temporal X3 (eliminado)
+    "METEORIHUELA",
+    "SUB-WORKFLOW AEMET",
+    "orquestador arqui",
+    "Agente Icebreaker - Conseguir Clientes - La Tribu Divisual",
+}
+
 
 def env(name: str) -> str:
     val = os.environ.get(name)

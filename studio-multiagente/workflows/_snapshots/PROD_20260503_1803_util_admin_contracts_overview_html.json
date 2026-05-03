@@ -1,0 +1,138 @@
+{
+  "name": "util_admin_contracts_overview_html",
+  "active": true,
+  "nodes": [
+    {
+      "id": "aco-01",
+      "name": "Webhook GET",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -700,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "admin-contracts-overview",
+        "responseMode": "responseNode",
+        "authentication": "headerAuth"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "PLACEHOLDER",
+          "name": "Webhook API Key (entrante)"
+        }
+      },
+      "webhookId": "aco-trigger"
+    },
+    {
+      "id": "aco-02",
+      "name": "Load Contracts Stats",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -460,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT json_build_object(\n  'totals', (SELECT json_build_object(\n    'count_total', count(*),\n    'count_draft', count(*) FILTER (WHERE status='draft'),\n    'count_sent', count(*) FILTER (WHERE status IN ('sent','ready_to_sign','partially_signed')),\n    'count_signed', count(*) FILTER (WHERE status='signed'),\n    'count_expired_unsigned', count(*) FILTER (WHERE status NOT IN ('signed','cancelled','rejected','expired') AND expires_at IS NOT NULL AND expires_at < now()),\n    'amount_signed_30d', round(coalesce(sum(amount_eur) FILTER (WHERE status='signed' AND signed_at > now() - INTERVAL '30 days'), 0)::numeric, 2)\n  ) FROM contracts),\n  'by_type', coalesce((SELECT json_agg(t.* ORDER BY t.count DESC) FROM (\n    SELECT contract_type AS type,\n      count(*)::int AS count,\n      count(*) FILTER (WHERE status='signed')::int AS signed,\n      count(*) FILTER (WHERE status IN ('sent','ready_to_sign','partially_signed'))::int AS awaiting,\n      count(*) FILTER (WHERE status='draft')::int AS draft\n    FROM contracts\n    GROUP BY contract_type\n  ) t), '[]'::json),\n  'pending_action', coalesce((SELECT json_agg(t.* ORDER BY t.urgency DESC) FROM (\n    SELECT c.id::text AS contract_id, c.contract_type, c.title, c.status,\n      c.amount_eur, c.created_at, c.sent_at, c.expires_at, c.signer_email,\n      p.id::text AS project_id, p.name AS project_name,\n      CASE\n        WHEN c.status NOT IN ('signed','cancelled','rejected','expired') AND c.expires_at IS NOT NULL AND c.expires_at < now() THEN 100\n        WHEN c.status='draft' AND c.created_at < now() - INTERVAL '14 days' THEN 80\n        WHEN c.status IN ('sent','ready_to_sign','partially_signed') AND c.sent_at < now() - INTERVAL '7 days' THEN 60\n        ELSE 0\n      END AS urgency\n    FROM contracts c JOIN projects p ON p.id = c.project_id\n    WHERE c.status NOT IN ('signed','cancelled','rejected','expired')\n    ORDER BY urgency DESC LIMIT 25\n  ) t), '[]'::json)\n) AS report;",
+        "options": {
+          "alwaysOutputData": true
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "aco-03",
+      "name": "Build HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -220,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const r = $input.first().json.report || {};\nconst t = r.totals || {};\nconst byType = Array.isArray(r.by_type) ? r.by_type : [];\nconst pending = Array.isArray(r.pending_action) ? r.pending_action : [];\n\nfunction esc(s) { return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }\nfunction money(n) { return n != null && n > 0 ? Number(n).toLocaleString('es-ES', {minimumFractionDigits: 2}) + ' EUR' : '-'; }\nfunction dateShort(s) { if (!s) return '-'; return new Date(s).toISOString().substring(0,10); }\n\nconst statusColor = { draft:'#888', sent:'#3b82f6', ready_to_sign:'#3b82f6', partially_signed:'#f59e0b', signed:'#27ae60', rejected:'#c00', expired:'#c00', cancelled:'#666' };\n\nconst rowsType = byType.map(c => `<tr>\n  <td>${esc(c.type)}</td>\n  <td style=\"text-align:right\">${c.count}</td>\n  <td style=\"text-align:right;color:#27ae60;font-weight:600\">${c.signed}</td>\n  <td style=\"text-align:right;color:#3b82f6\">${c.awaiting}</td>\n  <td style=\"text-align:right;color:#888\">${c.draft}</td>\n</tr>`).join('');\n\nconst rowsPending = pending.map(c => {\n  const cls = c.urgency >= 100 ? ' style=\"background:#fee\"' : (c.urgency >= 80 ? ' style=\"background:#fff8e0\"' : '');\n  return `<tr${cls}>\n    <td><span style=\"background:${statusColor[c.status] || '#888'};color:white;padding:2px 8px;border-radius:10px;font-size:11px\">${esc(c.status)}</span></td>\n    <td>${esc(c.contract_type)}</td>\n    <td>${esc(c.title || '-')}</td>\n    <td>${esc(c.project_name)}</td>\n    <td>${esc(c.signer_email || '-')}</td>\n    <td style=\"text-align:right\">${money(c.amount_eur)}</td>\n    <td>${dateShort(c.expires_at)}</td>\n  </tr>`;\n}).join('');\n\nconst html = `<!DOCTYPE html><html lang=\"es\"><head><meta charset=\"utf-8\"><title>Contracts Overview - ArquitAI</title>\n<style>\n  body{font-family:system-ui,sans-serif;max-width:1200px;margin:32px auto;padding:0 20px;color:#222;background:#f7f7f8}\n  h1{margin:0 0 8px}.sub{color:#888;font-size:13px;margin-bottom:24px}\n  h2{margin:32px 0 12px;font-size:18px;border-bottom:1px solid #ddd;padding-bottom:6px}\n  .cards{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:24px}\n  .card{background:#fff;border:1px solid #ddd;border-radius:8px;padding:14px;text-align:center}\n  .card h3{margin:0 0 4px;font-size:11px;color:#666;text-transform:uppercase}\n  .card .v{font-size:22px;font-weight:600}\n  .card .sub{font-size:12px;color:#888;margin-top:4px}\n  table{width:100%;border-collapse:collapse;background:#fff;border:1px solid #ddd;border-radius:8px;overflow:hidden;font-size:13px}\n  th,td{padding:8px 10px;border-bottom:1px solid #eee;text-align:left}\n  th{background:#f0f0f3;font-weight:600;font-size:11px;text-transform:uppercase;color:#555}\n  tr:last-child td{border-bottom:none}\n  .meta{font-size:12px;color:#888;margin-top:24px}\n  @media (max-width:900px){.cards{grid-template-columns:repeat(2,1fr)}}\n</style></head><body>\n<h1>Contracts Overview - ArquitAI</h1>\n<p class=\"sub\">Vista agregada de contratos del estudio (encargo, obra, actas, etc). Para vigilancia: cron_contract_followup diario 09:45.</p>\n<div class=\"cards\">\n  <div class=\"card\"><h3>Total</h3><div class=\"v\">${t.count_total || 0}</div></div>\n  <div class=\"card\"><h3>Draft</h3><div class=\"v\">${t.count_draft || 0}</div></div>\n  <div class=\"card\"><h3>Esperando firma</h3><div class=\"v\" style=\"color:${t.count_sent > 0 ? '#3b82f6' : '#888'}\">${t.count_sent || 0}</div></div>\n  <div class=\"card\"><h3>Signed</h3><div class=\"v\" style=\"color:#27ae60\">${t.count_signed || 0}</div><div class=\"sub\">30d: ${money(t.amount_signed_30d)}</div></div>\n  <div class=\"card\"><h3>Expired sin marcar</h3><div class=\"v\" style=\"color:${t.count_expired_unsigned > 0 ? '#c00' : '#666'}\">${t.count_expired_unsigned || 0}</div></div>\n</div>\n<h2>Por tipo</h2>\n<table><thead><tr><th>tipo</th><th style=\"text-align:right\">total</th><th style=\"text-align:right\">signed</th><th style=\"text-align:right\">awaiting</th><th style=\"text-align:right\">draft</th></tr></thead><tbody>${rowsType || '<tr><td colspan=\"5\" style=\"text-align:center;color:#888;padding:14px\">Sin contratos</td></tr>'}</tbody></table>\n<h2>Pendientes de accion (top 25 por urgencia)</h2>\n<table><thead><tr><th>status</th><th>tipo</th><th>titulo</th><th>proyecto</th><th>firmante</th><th style=\"text-align:right\">importe</th><th>expira</th></tr></thead><tbody>${rowsPending || '<tr><td colspan=\"7\" style=\"text-align:center;color:#888;padding:14px\">Sin contratos pendientes (estado saludable)</td></tr>'}</tbody></table>\n<div class=\"meta\">Generado ${new Date().toISOString()}</div>\n</body></html>`;\n\nreturn [{ json: { html } }];"
+      }
+    },
+    {
+      "id": "aco-04",
+      "name": "Respond HTML",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        20,
+        300
+      ],
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.html }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "text/html; charset=utf-8"
+              },
+              {
+                "name": "Cache-Control",
+                "value": "no-store"
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook GET": {
+      "main": [
+        [
+          {
+            "node": "Load Contracts Stats",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Contracts Stats": {
+      "main": [
+        [
+          {
+            "node": "Build HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build HTML": {
+      "main": [
+        [
+          {
+            "node": "Respond HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": null,
+  "versionId": "88871455-70f0-45d9-b01c-4a2c67683c5f",
+  "tags": []
+}

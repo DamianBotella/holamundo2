@@ -1,0 +1,298 @@
+{
+  "name": "invoice_decision",
+  "active": true,
+  "nodes": [
+    {
+      "id": "id-01",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -700,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "invoice-decision",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "onError": "continueRegularOutput",
+      "webhookId": "f625af5b-27a7-4c1d-a344-c857e48b2d14"
+    },
+    {
+      "id": "id-02",
+      "name": "Validate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -460,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const wh = $input.first().json;\nconst q = wh.query || {};\nif (!q.id) { const e = { valid: false, error: 'id obligatorio' }; return [{ json: e }]; }\nif (!q.token) { const e = { valid: false, error: 'token obligatorio' }; return [{ json: e }]; }\nconst valid = ['approved','disputed','rejected'];\nif (!q.decision || !valid.includes(q.decision)) {\n  const e = { valid: false, error: 'decision debe ser approved|disputed|rejected' };\n  return [{ json: e }];\n}\nconst out = {\n  valid: true,\n  invoice_id: q.id,\n  token: q.token,\n  decision: q.decision\n};\nreturn [{ json: out }];"
+      }
+    },
+    {
+      "id": "id-03",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -220,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "v1",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "id-04",
+      "name": "Apply Decision",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        20,
+        220
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE invoices\n   SET status = $3,\n       approved_by = CASE WHEN $3 = 'approved' THEN 'damian' ELSE approved_by END,\n       approved_at = CASE WHEN $3 = 'approved' THEN now() ELSE approved_at END\n WHERE id = $1::uuid AND webhook_token = $2\nRETURNING id, supplier_name, total_amount, status, invoice_number;",
+        "options": {
+          "queryReplacement": "={{ [ $json.invoice_id, $json.token, $json.decision ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "id-05",
+      "name": "Match?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        240,
+        220
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "m1",
+              "leftValue": "={{ $json.id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "id-06",
+      "name": "Build HTML Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        140
+      ],
+      "parameters": {
+        "jsCode": "const inv = $input.first().json;\nconst color = { approved: '#10b981', disputed: '#f59e0b', rejected: '#dc2626' }[inv.status] || '#6b7280';\nconst label = { approved: 'aprobada', disputed: 'disputada', rejected: 'rechazada' }[inv.status] || inv.status;\nconst html = '<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Decisión registrada</title></head>' +\n  '<body style=\"font-family:Arial,sans-serif;max-width:600px;margin:40px auto;padding:24px;text-align:center\">' +\n  '<h1 style=\"color:' + color + '\">Factura ' + label + '</h1>' +\n  '<p>Proveedor: <b>' + (inv.supplier_name || '?') + '</b></p>' +\n  '<p>Número: ' + (inv.invoice_number || '?') + '</p>' +\n  '<p>Total: ' + (inv.total_amount !== null ? Number(inv.total_amount).toLocaleString('es-ES') + ' EUR' : '?') + '</p>' +\n  '<p style=\"color:#6b7280;margin-top:32px\">Decisión registrada en el sistema. Puedes cerrar esta pestaña.</p>' +\n  '</body></html>';\nreturn [{ json: { html: html } }];"
+      }
+    },
+    {
+      "id": "id-07",
+      "name": "Respond HTML 200",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        720,
+        140
+      ],
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.html }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "text/html; charset=utf-8"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "id-08",
+      "name": "Respond 404",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        480,
+        320
+      ],
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "<!DOCTYPE html><html><body style=\"font-family:Arial;max-width:600px;margin:40px auto;text-align:center\"><h1 style=\"color:#dc2626\">Token no válido</h1><p>No se ha podido aplicar la decisión. Posibles causas: el enlace ha expirado, el token es incorrecto, o la factura ha sido eliminada.</p></body></html>",
+        "options": {
+          "responseCode": 404,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "text/html; charset=utf-8"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "id-09",
+      "name": "Respond 400",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        20,
+        460
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'error', error: $json.error}) }}",
+        "options": {
+          "responseCode": 400
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate": {
+      "main": [
+        [
+          {
+            "node": "Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid?": {
+      "main": [
+        [
+          {
+            "node": "Apply Decision",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 400",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply Decision": {
+      "main": [
+        [
+          {
+            "node": "Match?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Match?": {
+      "main": [
+        [
+          {
+            "node": "Build HTML Response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 404",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build HTML Response": {
+      "main": [
+        [
+          {
+            "node": "Respond HTML 200",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": null,
+  "versionId": "1bd592c8-5ecc-4c5d-a758-3390cceef416",
+  "tags": []
+}

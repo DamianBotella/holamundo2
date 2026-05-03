@@ -1,0 +1,167 @@
+{
+  "name": "util_price_search",
+  "active": true,
+  "nodes": [
+    {
+      "id": "ups-0001",
+      "name": "Receive Material Query",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [
+        300,
+        300
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "ups-0002",
+      "name": "Build Search URL",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        500,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst materialName = data.material_name || '';\nconst category = data.category || '';\nconst qualityTier = data.quality_tier || 'media';\nconst encoded = encodeURIComponent(materialName);\nconst searchUrl = `https://www.leroymerlin.es/buscador.aspx?s=${encoded}`;\nreturn [{ json: {\n  material_name: materialName,\n  category: category,\n  quality_tier: qualityTier,\n  search_url: searchUrl,\n  jina_url: `https://r.jina.ai/${searchUrl}`\n}}];"
+      }
+    },
+    {
+      "id": "ups-0003",
+      "name": "Fetch Leroy Merlin Prices",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        700,
+        300
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.jina_url }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "ups-0004",
+      "name": "Parse Web Prices",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        900,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const resp = $input.first().json;\nconst markdown = (resp.data || resp.body || '').toString();\nconst materialName = $('Build Search URL').first().json.material_name;\nconst pricePattern = /(\\d+[,.]?\\d*)\\s*[€$](?:\\s*\\/\\s*m[²2])?/g;\nconst prices = [];\nlet match;\nwhile ((match = pricePattern.exec(markdown)) !== null) {\n  const val = parseFloat(match[1].replace(',', '.'));\n  if (val > 0.5 && val < 50000) prices.push(val);\n}\nprices.sort((a, b) => a - b);\nconst validPrices = prices.slice(0, 20);\nconst minPrice = validPrices.length > 0 ? Math.min(...validPrices) : null;\nconst maxPrice = validPrices.length > 0 ? Math.max(...validPrices) : null;\nconst avgPrice = validPrices.length > 0\n  ? Math.round(validPrices.reduce((a, b) => a + b, 0) / validPrices.length * 100) / 100\n  : null;\nreturn [{ json: {\n  material_name: materialName,\n  category: $('Build Search URL').first().json.category,\n  quality_tier: $('Build Search URL').first().json.quality_tier,\n  web_min_price: minPrice,\n  web_max_price: maxPrice,\n  web_avg_price: avgPrice,\n  prices_found: validPrices.length,\n  source_url: $('Build Search URL').first().json.search_url\n}}];"
+      }
+    },
+    {
+      "id": "ups-0005",
+      "name": "Lookup Supplier Catalog",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1100,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM supplier_catalog WHERE category = $1 AND (item_name ILIKE '%' || $2 || '%' OR brand ILIKE '%' || $2 || '%') AND (valid_until IS NULL OR valid_until >= CURRENT_DATE) ORDER BY unit_price ASC LIMIT 3",
+        "options": {
+          "queryReplacement": "={{ [$('Build Search URL').first().json.category, $('Build Search URL').first().json.material_name] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "PLACEHOLDER",
+          "name": "Postgres account"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "id": "ups-0006",
+      "name": "Merge Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1300,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const allItems = $input.all();\nconst webData = $('Parse Web Prices').first().json;\nconst catalogItems = allItems.filter(i => i.json.id && i.json.unit_price);\nconst catalogPrices = catalogItems.map(i => parseFloat(i.json.unit_price)).filter(p => p > 0);\nconst catalogMin = catalogPrices.length > 0 ? Math.min(...catalogPrices) : null;\nconst catalogMax = catalogPrices.length > 0 ? Math.max(...catalogPrices) : null;\nconst catalogAvg = catalogPrices.length > 0\n  ? Math.round(catalogPrices.reduce((a, b) => a + b, 0) / catalogPrices.length * 100) / 100\n  : null;\nconst finalMin = catalogMin !== null ? catalogMin : webData.web_min_price;\nconst finalMax = catalogMax !== null ? catalogMax : webData.web_max_price;\nconst finalAvg = catalogAvg !== null ? catalogAvg : webData.web_avg_price;\nconst source = catalogItems.length > 0 ? 'catalog' : (webData.prices_found > 0 ? 'web_search' : 'not_found');\nreturn [{ json: {\n  material_name: webData.material_name,\n  category: webData.category,\n  min_price: finalMin,\n  avg_price: finalAvg,\n  max_price: finalMax,\n  source: source,\n  source_url: source === 'web_search' ? webData.source_url : null,\n  catalog_matches: catalogItems.length,\n  web_prices_found: webData.prices_found\n}}];"
+      }
+    }
+  ],
+  "connections": {
+    "Receive Material Query": {
+      "main": [
+        [
+          {
+            "node": "Build Search URL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Search URL": {
+      "main": [
+        [
+          {
+            "node": "Fetch Leroy Merlin Prices",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Leroy Merlin Prices": {
+      "main": [
+        [
+          {
+            "node": "Parse Web Prices",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Web Prices": {
+      "main": [
+        [
+          {
+            "node": "Lookup Supplier Catalog",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lookup Supplier Catalog": {
+      "main": [
+        [
+          {
+            "node": "Merge Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": null,
+  "versionId": "0957900e-9a1f-4b2c-8218-417f10963941",
+  "tags": []
+}

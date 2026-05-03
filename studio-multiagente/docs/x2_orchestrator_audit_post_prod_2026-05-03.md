@@ -18,7 +18,7 @@ Con MCP n8n arriba, snapshotada producción (87 nodos main_orchestrator + 18 cr�
 | PA-5 | 🟡 | CONFIRMADO sistémico (23/25 fixed) | ✅ **APLICADO** |
 | PA-6 | 🟢 | CONFIRMADO | ✅ **RESUELTO** (snapshot multi-workflow guardado) |
 | PA-7 | 🆕 | CONFIRMADO | ✅ **APLICADO** (2 huérfanos eliminados) |
-| PA-8 | 🆕 | CONFIRMADO | Diseño documentado, **pendiente** |
+| PA-8 | 🆕 | CONFIRMADO | ✅ **APLICADO** (B45 — branch false con Log + Respond) |
 
 ---
 
@@ -221,19 +221,17 @@ Después de Load Project, añadir:
 
 **Decisión bloqueante:** advisory_xact_lock vs lock table explícita. Recomendación: lock table (la tabla con DELETE manual). Migración nueva (054).
 
-### PA-8: Regulatory Complete? sin branch false
+### PA-8: Regulatory Complete? sin branch false — APLICADO ✅ (B45)
 
-**Problema:** `agent_regulatory` con `advance_phase: false` deja el flow colgado.
+**Estado original:** `Regulatory Complete?` IF solo tenía branch `[0]` (true) → `Update Phase analysis_done`. Si `agent_regulatory` devolvía `advance_phase: false`, el flow se quedaba colgado y el webhook devolvía timeout.
 
-**Diseño recomendado:** añadir 2 nodos (paralelo a `Update Phase analysis_done`):
-- `Log Regulatory Pending` — INSERT activity_log con status='success', action='regulatory_pending_review' + details.
-- `Respond Regulatory Pending` — webhook 200 con status='pending'.
+**Fix aplicado:** añadidos 2 nodos al orchestrator (al patrón existente de Pending de otras fases):
+- `Log Regulatory Pending` (postgres at [0, 720]) — INSERT activity_log con status='success', action='regulatory_pending_review', details jsonb con `{phase:'design_done', agent_executed:'agent_regulatory', advance_phase:false}`.
+- `Respond Regulatory Pending` (noOp at [256, 720]) — terminal del flow (n8n responderá 200 con el output del Log).
 
-Conectar `Regulatory Complete?` rama [1] (false) → `Log Regulatory Pending` → `Respond Regulatory Pending`.
+Conexiones: `Regulatory Complete?` branch=false → `Log Regulatory Pending` → `Respond Regulatory Pending`.
 
-**Esfuerzo:** ~10 min (2 nodos + 2 conexiones).
-
-**Decisión bloqueante:** ninguna técnica. Aplicarlo cualquier sesión.
+main_orchestrator: 85 → 87 nodos (vuelve al recuento original tras balance PA-7 -2 + PA-8 +2).
 
 ---
 
@@ -265,15 +263,16 @@ No son bloqueantes para producción. Documentados aquí para futura sesión de c
 
 ---
 
-## 6. Stats finales (post-fixes B44)
+## 6. Stats finales (post-fixes B44+B45)
 
-| Métrica | Antes B44 | Después B44 | Δ |
+| Métrica | Antes B44 | Después B45 | Δ |
 |---|---|---|---|
 | Snapshots producción en repo | 0 | 19 críticos | +19 |
-| main_orchestrator nodos | 87 | 85 | −2 (huérfanos) |
-| INSERTs activity_log con `details` | 0/26 (0%) | 23/25 (92%) | +23 |
-| executeWorkflow con onError | 1/31 (3%) | 1/31 (3%) | 0 |
+| main_orchestrator nodos | 87 | 87 (−2 PA-7, +2 PA-8) | 0 neto |
+| INSERTs activity_log con `details` | 0/26 (0%) | 24/26 (92%) | +24 |
+| executeWorkflow con onError | 1/31 (3%) | 1/31 (3%) | 0 (PA-3 pendiente) |
 | Workflows snapshotted | 0 | 19 | +19 |
+| IF nodes con todas las branches | 10/11 | 11/11 (100%) | +1 (PA-8) |
 
 ---
 

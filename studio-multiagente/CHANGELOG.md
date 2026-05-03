@@ -2,6 +2,25 @@
 
 Histórico cronológico de hitos del sistema. Generado a partir de git log.
 
+## 2026-05-03 — Bloque 45 (X2 cierre): PA-8 aplicado
+
+Continuación de la sesión autónoma B44 sobre el orchestrator de producción.
+
+**PA-8 aplicado**: añadido branch false al IF `Regulatory Complete?` con 2 nodos nuevos siguiendo el patrón de los otros Pending de fase:
+- `Log Regulatory Pending` (postgres) — INSERT activity_log con `details` jsonb (action='regulatory_pending_review').
+- `Respond Regulatory Pending` (noOp) — terminal del flow.
+
+Conexiones: `Regulatory Complete?` branch=false → `Log Regulatory Pending` → `Respond Regulatory Pending`.
+
+main_orchestrator vuelve a 87 nodos (−2 PA-7 + 2 PA-8 = 0 neto vs original).
+
+Cobertura X2 al cierre:
+- Aplicados: PA-5, PA-6, PA-7, PA-8.
+- Descartado: PA-2.
+- Pendientes con diseño documentado: PA-1, PA-3, PA-4 (requieren sesión dirigida con Damián).
+
+---
+
 ## 2026-05-03 — Bloque 44 (X2 sobre PROD): snapshot + fixes PA-5/PA-6/PA-7
 
 Sesión autónoma con MCP n8n recuperado. Auditoría real sobre los 19 workflows críticos en producción (151 totales).

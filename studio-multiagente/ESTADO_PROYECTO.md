@@ -128,11 +128,12 @@ git log --oneline -20
 | B42 | 62e6c79 | error_handler v2 | error_handler_v2.json + v_recent_errors + spec |
 | B43 | 1e33416 | Cierre jornada | ESTADO_PROYECTO + 3 workflows API + requirements |
 
-### Jornada 2026-05-03 (B44)
+### Jornada 2026-05-03 (B44-B45)
 
 | Commit | Bloque | Producto |
 |---|---|---|
 | B44 | X2 sobre PROD (sesión autónoma) | Snapshot 19 workflows críticos + PA-5 a 23 INSERTs activity_log + PA-7 elimina 2 huérfanos + doc audit_post_prod |
+| B45 | X2 cierre PA-8 | Branch false en `Regulatory Complete?` (Log Regulatory Pending + Respond Regulatory Pending). main_orchestrator vuelve a 87 nodos. |
 
 ---
 

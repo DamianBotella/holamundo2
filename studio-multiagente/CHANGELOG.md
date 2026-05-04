@@ -2,6 +2,54 @@
 
 Histórico cronológico de hitos del sistema. Generado a partir de git log.
 
+## 2026-05-04 — Bloque 57 (X4 CERRADO 100%): Auth Supabase funcionando
+
+Sesion guiada paso a paso con Damian para configurar Supabase Auth.
+
+Ejecutado:
+1. Email Auth habilitado en Supabase + Confirm email desactivado.
+2. Migration 051 aplicada (tabla user_profiles + helpers + view v_my_profile).
+3. Migration 053 aplicada (pending_invitations + trigger on_auth_user_created
+   + custom_access_token_hook + is_user_active).
+4. Hook "Customize Access Token Claims (JWT)" registrado en Dashboard
+   apuntando a public.custom_access_token_hook.
+5. Usuario super_admin creado (botelladesdeel98@gmail.com) + perfil vinculado
+   al tenant damian-mtnz con role='super_admin'.
+6. Smoke test JWT validado: el token contiene tenant_id, role='super_admin'
+   y full_name como custom claims.
+
+Bugs encontrados y resueltos durante el setup:
+- Policy user_profiles solo tenia USING (sin WITH CHECK) -> INSERTs siempre
+  rechazados. Fix: anadido WITH CHECK en CREATE POLICY user_self_or_admin.
+- Trigger on_auth_user_created intentaba INSERT en user_profiles sin contexto
+  super_admin -> RLS bloqueaba -> "Database error creating new user". Fix
+  temporal: funcion vaciada (returns NEW directo). Pendiente reescribir con
+  set_config('app.role','super_admin',true) interno + recrear el INSERT
+  automatico cuando lleguen invitations a colaboradores reales.
+- custom_access_token_hook fallaba al leer user_profiles sin bypass RLS ->
+  Auth devolvia 500 en login. Fix: anadido SECURITY DEFINER + search_path
+  explicito + EXCEPTION WHEN OTHERS THEN RETURN event (defensivo, login
+  nunca queda bloqueado por el Hook).
+
+JWT validado contiene los 3 claims esperados (decodificado en sesion):
+  role: "super_admin"
+  tenant_id: "bbf3f07e-206c-4a4a-affe-592ae3d6c4c9"
+  full_name: "Damián Martínez"
+
+Estado pipeline al cierre:
+- X1, X2, X3: cerrados 100%.
+- X4: CERRADO 100% (este bloque).
+- X5: pendiente importar 7 workflows API + smoke endpoints (3-4h).
+- X6 M1: scaffolding hecho (B56). M2-M4 esperan a X5.
+
+Pendiente proxima sesion (no urgente):
+- Reescribir on_auth_user_created con bypass RLS correcto para que invitations
+  funcionen automaticamente. Por ahora la funcion esta vaciada — usuarios
+  nuevos NO obtienen user_profile auto, hay que crearlo manualmente con SQL.
+  Solo afecta cuando lleguen colaboradores reales (no urgente para MVP).
+
+---
+
 ## 2026-05-03 — Bloque 56 (foxhole-ui M1 Foundation + setup X4)
 
 Plan 6h autonomo. X3 cerrado, X4 requiere intervencion Damian, asi que avanzamos

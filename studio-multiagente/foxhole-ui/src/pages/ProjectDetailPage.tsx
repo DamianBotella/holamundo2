@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { ArrowLeft, AlertTriangle, MapPin, Wallet } from 'lucide-react';
 import { api } from '@/lib/api';
 import type { ProjectSummary } from '@/lib/types';
+import type { TimelineEvent } from '@/lib/api';
 import { PHASE_LABELS_EXPORT } from '@/components/ProjectCard';
 
 interface Props {
@@ -20,6 +21,11 @@ export function ProjectDetailPage({ projectId, onBack }: Props) {
     queryFn: api.alerts,
   });
   const projectAlerts = alerts.filter((a) => a.project_id === projectId);
+
+  const { data: timeline = [] } = useQuery<TimelineEvent[]>({
+    queryKey: ['timeline', projectId],
+    queryFn: () => api.projectTimeline(projectId),
+  });
 
   if (isLoading) {
     return <div className="p-8 text-center text-foxhole-muted">Cargando...</div>;
@@ -104,12 +110,43 @@ export function ProjectDetailPage({ projectId, onBack }: Props) {
 
         <div className="foxhole-card p-4">
           <h2 className="text-xs font-mono uppercase tracking-wider text-foxhole-muted mb-3">
-            Pipeline de agentes
+            Timeline de agentes
           </h2>
-          <p className="text-sm text-foxhole-subtle italic">
-            (M3) Timeline + agent_runs + outputs por agente. Pendiente conectar a v_timeline +
-            v_agent_runs + v_project_detail.
-          </p>
+          {timeline.length === 0 ? (
+            <p className="text-sm text-foxhole-subtle italic">Sin eventos</p>
+          ) : (
+            <div className="flex flex-col gap-2 max-h-96 overflow-y-auto">
+              {timeline.map((t) => (
+                <div key={t.id} className="border-l-2 border-foxhole-border pl-3 py-1">
+                  <div className="flex items-center gap-2 text-xs font-mono text-foxhole-muted">
+                    <span>{new Date(t.timestamp).toLocaleString('es-ES')}</span>
+                    {t.agent_name && (
+                      <span className="text-foxhole-accent">{t.agent_name}</span>
+                    )}
+                    {t.status && (
+                      <span
+                        className={
+                          t.status === 'success'
+                            ? 'text-foxhole-success'
+                            : t.status === 'failed' || t.status === 'error'
+                            ? 'text-foxhole-warning'
+                            : 'text-foxhole-muted'
+                        }
+                      >
+                        {t.status}
+                      </span>
+                    )}
+                  </div>
+                  {t.action && <div className="text-sm">{t.action}</div>}
+                  {t.output_summary && (
+                    <div className="text-xs text-foxhole-muted mt-1 line-clamp-2">
+                      {t.output_summary}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 

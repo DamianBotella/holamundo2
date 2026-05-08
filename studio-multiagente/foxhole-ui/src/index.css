@@ -12,56 +12,142 @@
   }
 
   body {
-    background-color: #0e1014;
-    color: #e6e8eb;
-    font-family: 'Inter', system-ui, sans-serif;
+    background-color: #1e1a16;
+    color: #e8e0cc;
+    font-family: 'Inter', 'Roboto Condensed', system-ui, sans-serif;
   }
 
   *::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
+    width: 10px;
+    height: 10px;
   }
   *::-webkit-scrollbar-track {
-    background: #0e1014;
+    background: #14110e;
   }
   *::-webkit-scrollbar-thumb {
-    background: #2a2e36;
-    border-radius: 4px;
+    background: #3a3028;
+    border: 1px solid #5b4a38;
+    border-radius: 0;
   }
   *::-webkit-scrollbar-thumb:hover {
-    background: #3a3e46;
+    background: #5b4a38;
   }
 }
 
 @layer components {
+  /* ==========================================================
+     Foxhole "campaign briefing" card — papel envejecido + tinta
+     ========================================================== */
   .foxhole-card {
-    @apply bg-foxhole-surface border border-foxhole-border rounded-lg;
+    @apply relative bg-foxhole-surface border border-foxhole-border-strong rounded-none;
+    background-image:
+      /* manchas sutiles de papel envejecido */
+      radial-gradient(circle at 18% 22%, rgba(180, 155, 110, 0.04) 0%, transparent 38%),
+      radial-gradient(circle at 80% 75%, rgba(140, 110, 75, 0.05) 0%, transparent 42%),
+      /* trama de fibra */
+      repeating-linear-gradient(
+        45deg,
+        rgba(232, 224, 204, 0.012) 0,
+        rgba(232, 224, 204, 0.012) 1px,
+        transparent 1px,
+        transparent 4px
+      );
+    box-shadow:
+      inset 0 0 0 1px rgba(180, 155, 110, 0.06),
+      0 2px 0 0 rgba(0, 0, 0, 0.3);
   }
+
+  /* Esquinas militares (estilo ficha de campana): 4 trazos en L */
+  .foxhole-corner {
+    @apply foxhole-card;
+  }
+  .foxhole-corner::before,
+  .foxhole-corner::after {
+    content: '';
+    position: absolute;
+    width: 14px;
+    height: 14px;
+    border: 2px solid #b49b6e;
+    pointer-events: none;
+  }
+  .foxhole-corner::before {
+    top: -1px;
+    left: -1px;
+    border-right: none;
+    border-bottom: none;
+  }
+  .foxhole-corner::after {
+    bottom: -1px;
+    right: -1px;
+    border-left: none;
+    border-top: none;
+  }
+
+  /* Card hover */
   .foxhole-card-hover {
-    @apply foxhole-card transition-colors hover:border-foxhole-border-strong cursor-pointer;
+    @apply foxhole-card transition-colors hover:border-foxhole-tan cursor-pointer;
   }
+
+  /* KPIs */
   .foxhole-kpi {
     @apply foxhole-card p-4 flex flex-col gap-1;
   }
   .foxhole-kpi-label {
-    @apply text-xs uppercase tracking-wider text-foxhole-muted font-mono;
+    @apply text-[10px] uppercase tracking-[0.2em] text-foxhole-muted font-display font-medium;
   }
   .foxhole-kpi-value {
-    @apply text-2xl font-mono font-medium text-foxhole-fg;
+    @apply text-2xl font-mono font-medium text-foxhole-bone;
   }
+
+  /* Stencil heading militar */
+  .foxhole-stencil {
+    @apply font-display uppercase tracking-[0.18em] text-foxhole-tan font-semibold;
+    text-shadow: 0 1px 0 rgba(0, 0, 0, 0.6);
+  }
+
+  /* Badge militar (rounded none + border) */
   .foxhole-badge {
-    @apply inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-mono;
+    @apply inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-mono uppercase tracking-wider border;
   }
-  .foxhole-badge-critical {
-    @apply foxhole-badge bg-foxhole-danger/15 text-foxhole-danger;
+  .foxhole-badge-critical { @apply foxhole-badge bg-foxhole-danger/15  text-foxhole-state-failed  border-foxhole-state-failed/40; }
+  .foxhole-badge-warning  { @apply foxhole-badge bg-foxhole-warning/15 text-foxhole-state-waiting border-foxhole-state-waiting/40; }
+  .foxhole-badge-info     { @apply foxhole-badge bg-foxhole-info/15    text-foxhole-info          border-foxhole-info/40; }
+  .foxhole-badge-success  { @apply foxhole-badge bg-foxhole-accent/15  text-foxhole-state-working border-foxhole-state-working/40; }
+
+  /* Botones militares */
+  .foxhole-btn {
+    @apply inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs font-display font-semibold uppercase tracking-[0.14em] border transition-colors;
   }
-  .foxhole-badge-warning {
-    @apply foxhole-badge bg-foxhole-warning/15 text-foxhole-warning;
+  .foxhole-btn-primary {
+    @apply foxhole-btn bg-foxhole-state-working/15 text-foxhole-state-working border-foxhole-state-working/60 hover:bg-foxhole-state-working/30;
   }
-  .foxhole-badge-info {
-    @apply foxhole-badge bg-foxhole-info/15 text-foxhole-info;
+  .foxhole-btn-danger {
+    @apply foxhole-btn bg-foxhole-state-failed/15 text-foxhole-state-failed border-foxhole-state-failed/60 hover:bg-foxhole-state-failed/30;
   }
-  .foxhole-badge-success {
-    @apply foxhole-badge bg-foxhole-accent/15 text-foxhole-accent;
+  .foxhole-btn-ghost {
+    @apply foxhole-btn bg-transparent text-foxhole-muted border-foxhole-border-strong hover:text-foxhole-bone hover:border-foxhole-tan;
+  }
+
+  /* Divider con tinta (linea con doble trazo) */
+  .foxhole-divider {
+    @apply relative;
+    background: linear-gradient(
+      to right,
+      transparent 0,
+      #5b4a38 8%,
+      #b49b6e 50%,
+      #5b4a38 92%,
+      transparent 100%
+    );
+    height: 1px;
+  }
+
+  /* Pulso de "waiting approval" */
+  @keyframes foxhole-pulse-amber {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(224, 168, 92, 0.6); }
+    50%      { box-shadow: 0 0 0 4px rgba(224, 168, 92, 0); }
+  }
+  .foxhole-pulse-amber {
+    animation: foxhole-pulse-amber 1.6s infinite ease-out;
   }
 }

@@ -76,7 +76,7 @@ SELECT
     SELECT json_agg(r ORDER BY r.priority, r.created_at) FROM (
       SELECT id, task_type, title, description, entity, required_docs,
              estimated_timeline, estimated_cost, priority, status,
-             draft_message
+             draft_message, created_at
         FROM regulatory_tasks
        WHERE project_id = p.id
     ) r
@@ -92,7 +92,8 @@ SELECT
   ) AS cost_estimate,
   (
     SELECT row_to_json(pr) FROM (
-      SELECT id, version, summary, total_amount, status, sent_at, created_at
+      SELECT id, version, title, executive_summary, total_price,
+             status, sent_at, created_at
         FROM proposals
        WHERE project_id = p.id
        ORDER BY version DESC LIMIT 1
@@ -100,8 +101,8 @@ SELECT
   ) AS proposal,
   (
     SELECT row_to_json(pl) FROM (
-      SELECT id, version, milestones, gantt, total_duration_days,
-             estimated_start_date, status, created_at
+      SELECT id, version, phases, milestones, dependencies, critical_path,
+             total_duration_days, start_date, end_date, status, created_at
         FROM project_plans
        WHERE project_id = p.id
        ORDER BY version DESC LIMIT 1

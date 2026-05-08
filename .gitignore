@@ -65,3 +65,16 @@ $RECYCLE.BIN/
 .claude/scheduled_tasks.lock
 .claude/projects/
 .claude/plans/
+
+# Python bytecode
+__pycache__/
+*.pyc
+
+# TypeScript incremental build cache
+*.tsbuildinfo
+
+
+# Vite config compilados desde TS (vite.config.ts es la fuente)
+studio-multiagente/foxhole-ui/vite.config.js
+studio-multiagente/foxhole-ui/vite.config.d.ts
+

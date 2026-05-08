@@ -1,7 +1,7 @@
 {
   "name": "api_project_timeline",
-  "_description": "GET /api/v1/projects/{id}/timeline - eventos cronologicos del proyecto. Lee v_timeline. Cursor pagination.",
-  "_status": "DRAFT - importar tras X3+X4+052_api_views.",
+  "_description": "GET /api/v1/project-timeline?id=<UUID> - eventos cronologicos del proyecto. Lee v_timeline. Cursor pagination.",
+  "_status": "PRODUCTION - importado en n8n (ID oAuhXaI289VoDKsK). Path con ?id= por bug n8n con :id en path. Decode JWT inline (sin sub-workflow).",
   "nodes": [
     {
       "parameters": {
@@ -102,7 +102,7 @@
         "query": "SELECT set_session_context($1::uuid, $2::uuid, $3)",
         "options": { "queryReplacement": "={{ [$json.user_id, $json.tenant_id, $json.role] }}" }
       },
-      "credentials": { "postgres": { "id": "PLACEHOLDER_POSTGRES_ID", "name": "Postgres account" } },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
       "position": [1440, 100],
@@ -117,7 +117,7 @@
           "queryReplacement": "={{ [$('Validate Params').first().json.project_id, $('Validate Params').first().json.cursor_before?.ts || null, $('Validate Params').first().json.limit + 1] }}"
         }
       },
-      "credentials": { "postgres": { "id": "PLACEHOLDER_POSTGRES_ID", "name": "Postgres account" } },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
       "position": [1680, 100],

@@ -1,0 +1,12 @@
+Spritesheets de agentes (PNG + JSON Aseprite).
+
+Naming: {sprite_id}.png + {sprite_id}.json
+Tamano: 48x64 (default) / 64x80 (orquestador)
+Animaciones por sprite: idle_sit (3f), work_generic (6f), wait_stand (4f), fail_sit (2f)
+
+Pipeline (sec 7 spec):
+- Tier 1 (5): director_v1, receptionist_v1, drafter_v1, accountant_v1, normative_v1
+- Tier 2 (5): foreman_v1, site_inspector_v1, archivist_v1, safety_v1, tramitador_v1
+- Tier 3 (resto): sprite generico tintado por categoria
+
+Placeholder hasta que existan: rect 48x64 con tint en StudioAgent.tsx.

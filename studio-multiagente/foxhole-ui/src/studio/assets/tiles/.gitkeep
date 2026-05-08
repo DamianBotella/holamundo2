@@ -1,0 +1,16 @@
+Tiles de suelo y paredes (PNG, 64x32 isometrico 2:1).
+
+Mapeo room_id -> tile (placeholder en StudioPatterns.tsx hoy):
+- reception -> tile_paper
+- drawing_room -> tile_wood
+- normative_library -> tile_wood_dark
+- accounting_office -> tile_wood
+- main_office -> tile_stone
+- meeting_room -> tile_stone
+- site_terrace -> tile_concrete
+- trades_workshop -> tile_wood
+- archive -> tile_wood_dark
+- urgency_corridor -> tile_urgency
+
+Cuando lleguen los assets se cargan via Pixi Assets.load() y se sustituye
+StudioPatterns.tsx por Tilemap real.

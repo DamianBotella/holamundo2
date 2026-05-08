@@ -5,24 +5,43 @@ export default {
     extend: {
       colors: {
         foxhole: {
-          bg: '#0e1014',
-          surface: '#1a1d23',
-          'surface-2': '#22262d',
-          border: '#2a2e36',
-          'border-strong': '#3a3e46',
-          fg: '#e6e8eb',
-          muted: '#8b9099',
-          subtle: '#5a6068',
-          accent: '#a3c46a',
-          'accent-bright': '#bdd685',
-          warning: '#d4a847',
-          danger: '#cc4848',
-          info: '#5b87b3',
+          // Estructura
+          bg: '#1e1a16',
+          'bg-deep': '#14110e',
+          surface: '#2a2218',
+          'surface-2': '#3f3227',
+          border: '#3a3028',
+          'border-strong': '#5b4a38',
+          // Texto
+          fg: '#e8e0cc',
+          muted: '#b49b6e',
+          subtle: '#a89880',
+          // Acentos militares
+          accent: '#84bc9c',
+          'accent-bright': '#a3d4b8',
+          olive: '#556b2f',
+          tan: '#b49b6e',
+          bone: '#e8e0cc',
+          'bone-dim': '#a89880',
+          // Estados
+          'state-idle':    '#7a8a70',
+          'state-working': '#84bc9c',
+          'state-waiting': '#e0a85c',
+          'state-failed':  '#8b2e1f',
+          // Alertas
+          warning: '#c68866',
+          danger: '#a04030',
+          info: '#4a6b8a',
+          success: '#4a7a50',
         },
       },
       fontFamily: {
-        sans: ['Inter', 'system-ui', 'sans-serif'],
-        mono: ['JetBrains Mono', 'Berkeley Mono', 'ui-monospace', 'monospace'],
+        // Display: titulos militares condensados
+        display: ['Oswald', 'Anton', 'Bebas Neue', 'sans-serif'],
+        // Sans: texto general
+        sans: ['Inter', 'Roboto Condensed', 'system-ui', 'sans-serif'],
+        // Mono: datos tecnicos, codigos, coordenadas
+        mono: ['"JetBrains Mono"', '"IBM Plex Mono"', 'Berkeley Mono', 'ui-monospace', 'monospace'],
       },
       boxShadow: {
         'foxhole-glow': '0 0 0 1px rgba(163, 196, 106, 0.18)',

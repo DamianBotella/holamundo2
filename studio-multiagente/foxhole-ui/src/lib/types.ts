@@ -68,3 +68,72 @@ export interface MyProfile {
   tenant_id: string;
   tenant_name: string;
 }
+
+// X7 — Studio canvas
+export type AgentState = 'idle' | 'working' | 'waiting_approval' | 'failed';
+export type AgentCategory = 'core' | 'auxiliary' | 'util' | 'orchestrator';
+
+export interface StudioRoom {
+  room_id: string;
+  display_name: string;
+  description: string | null;
+  bounding_box: { x: number; y: number; w: number; h: number };
+  floor_color: string | null;
+  background_sprite: string | null;
+  display_order: number;
+}
+
+export interface StudioAgent {
+  agent_name: string;
+  display_name: string;
+  category: AgentCategory;
+  room_id: string;
+  default_position: { x: number; y: number };
+  sprite_id: string;
+  description: string | null;
+  display_order: number;
+  state: AgentState;
+  active_count: number;
+  pending_approvals_count: number;
+  recent_failures: number;
+  last_started_at: string | null;
+  active_project_ids: string[];
+}
+
+export interface StudioFeedEvent {
+  id: string;
+  project_id: string | null;
+  agent_name: string;
+  action: string;
+  status: 'success' | 'error' | 'warning' | 'skipped' | string;
+  output_summary: string | null;
+  timestamp: string;
+}
+
+export interface PendingApproval {
+  approval_id: string;
+  project_id: string;
+  project_name: string | null;
+  approval_type: string;
+  agent_name: string;
+  summary: string;
+  requested_by: string;
+  created_at: string;
+  expires_at: string | null;
+}
+
+export interface ApprovalDecisionResult {
+  approval_id: string;
+  project_id: string;
+  approval_type: string;
+  status: 'approved' | 'rejected';
+  decided_at: string;
+  decided_by: string;
+}
+
+export interface AgentChatResponse {
+  agent_name: string;
+  display_name: string;
+  response: string;
+  timestamp: string;
+}

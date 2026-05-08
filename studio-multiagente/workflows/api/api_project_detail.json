@@ -1,12 +1,12 @@
 {
   "name": "api_project_detail",
-  "_description": "GET /api/v1/projects/{id} - detalle completo del proyecto. Lee v_project_detail con TODAS las relaciones JSON-aggregadas.",
-  "_status": "DRAFT - importar tras X3 + X4 + 052_api_views aplicada.",
+  "_description": "GET /api/v1/project-detail?id=<UUID> - detalle completo del proyecto. Lee v_project_detail con TODAS las relaciones JSON-aggregadas.",
+  "_status": "PRODUCTION - importado en n8n (ID 2iRTGufiBvpIIJDW). Path con ?id= por bug n8n con :id en path.",
   "nodes": [
     {
       "parameters": {
         "httpMethod": "GET",
-        "path": "api/v1/projects/:id",
+        "path": "api/v1/project-detail",
         "responseMode": "responseNode",
         "options": {}
       },
@@ -19,7 +19,7 @@
     {
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const auth = $input.first().json.headers?.authorization || '';\nif (!auth.startsWith('Bearer ')) return [{ json: { _error: 'AUTH_MISSING_TOKEN', _status: 401 } }];\nconst token = auth.slice(7);\ntry {\n  const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'));\n  if (!payload.sub) throw new Error('No sub');\n  if (payload.exp && Date.now()/1000 > payload.exp) throw new Error('JWT expired');\n\n  const projectId = $input.first().json.params?.id;\n  if (!projectId) return [{ json: { _error: 'VALIDATION_FAILED', _status: 400, _details: 'project id required in path' } }];\n  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(projectId)) {\n    return [{ json: { _error: 'VALIDATION_FAILED', _status: 400, _details: 'project id must be UUID' } }];\n  }\n\n  return [{ json: {\n    user_id:    payload.sub,\n    tenant_id:  payload.tenant_id || null,\n    role:       payload.role || 'architect',\n    project_id: projectId,\n    request_id: 'req_' + Math.random().toString(36).slice(2, 10)\n  }}];\n} catch (e) {\n  return [{ json: { _error: 'AUTH_INVALID_TOKEN', _status: 401, _details: e.message } }];\n}"
+        "jsCode": "const auth = $input.first().json.headers?.authorization || '';\nif (!auth.startsWith('Bearer ')) return [{ json: { _error: 'AUTH_MISSING_TOKEN', _status: 401 } }];\nconst token = auth.slice(7);\ntry {\n  const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'));\n  if (!payload.sub) throw new Error('No sub');\n  if (payload.exp && Date.now()/1000 > payload.exp) throw new Error('JWT expired');\n\n  const projectId = $input.first().json.query?.id;\n  if (!projectId) return [{ json: { _error: 'VALIDATION_FAILED', _status: 400, _details: 'project id required as ?id= query param' } }];\n  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(projectId)) {\n    return [{ json: { _error: 'VALIDATION_FAILED', _status: 400, _details: 'project id must be UUID' } }];\n  }\n\n  return [{ json: {\n    user_id:    payload.sub,\n    tenant_id:  payload.tenant_id || null,\n    role:       payload.role || 'architect',\n    project_id: projectId,\n    request_id: 'req_' + Math.random().toString(36).slice(2, 10)\n  }}];\n} catch (e) {\n  return [{ json: { _error: 'AUTH_INVALID_TOKEN', _status: 401, _details: e.message } }];\n}"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -61,7 +61,7 @@
         "query": "SELECT set_session_context($1::uuid, $2::uuid, $3)",
         "options": { "queryReplacement": "={{ [$json.user_id, $json.tenant_id, $json.role] }}" }
       },
-      "credentials": { "postgres": { "id": "PLACEHOLDER_POSTGRES_ID", "name": "Postgres account" } },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
       "position": [960, 200],
@@ -74,7 +74,7 @@
         "query": "SELECT * FROM v_project_detail WHERE id = $1::uuid LIMIT 1",
         "options": { "queryReplacement": "={{ [$('Decode JWT + Path').first().json.project_id] }}" }
       },
-      "credentials": { "postgres": { "id": "PLACEHOLDER_POSTGRES_ID", "name": "Postgres account" } },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
       "position": [1200, 200],

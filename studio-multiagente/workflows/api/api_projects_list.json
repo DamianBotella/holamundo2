@@ -69,7 +69,7 @@
         }
       },
       "credentials": {
-        "postgres": { "id": "PLACEHOLDER_POSTGRES_ID", "name": "Postgres account" }
+        "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" }
       },
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
@@ -86,7 +86,7 @@
         }
       },
       "credentials": {
-        "postgres": { "id": "PLACEHOLDER_POSTGRES_ID", "name": "Postgres account" }
+        "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" }
       },
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,

@@ -62,7 +62,7 @@
         "query": "SELECT set_session_context($1::uuid, $2::uuid, $3)",
         "options": { "queryReplacement": "={{ [$json.user_id, $json.tenant_id, $json.role] }}" }
       },
-      "credentials": { "postgres": { "id": "PLACEHOLDER_POSTGRES_ID", "name": "Postgres account" } },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
       "position": [960, 200],
@@ -77,7 +77,7 @@
           "queryReplacement": "={{ [$('GET /alerts/global').first().json.query?.severity || null, Math.min(parseInt($('GET /alerts/global').first().json.query?.limit || '50'), 200)] }}"
         }
       },
-      "credentials": { "postgres": { "id": "PLACEHOLDER_POSTGRES_ID", "name": "Postgres account" } },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
       "position": [1200, 200],

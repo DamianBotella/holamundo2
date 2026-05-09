@@ -1,0 +1,234 @@
+{
+  "name": "api_projects_create",
+  "_description": "POST /api/v1/projects/create - Crea cliente (si no existe) + proyecto multi-tenant. Dispara el orchestrator. Reemplaza al webhook publico /new-project con la version autenticada.",
+  "_status": "B60 (Fase A.3 wizard).",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "api/v1/projects/create",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "id": "api-projcreate-webhook",
+      "name": "POST /projects/create",
+      "webhookId": "276a49ab-1623-410d-919b-b1533c320420"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Decodificar JWT del header Authorization\nconst auth = $input.first().json.headers?.authorization || '';\nif (!auth.startsWith('Bearer ')) {\n  return [{ json: { _error: 'AUTH_MISSING_TOKEN', _status: 401 } }];\n}\nconst token = auth.slice(7);\ntry {\n  const parts = token.split('.');\n  if (parts.length !== 3) throw new Error('JWT malformed');\n  const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));\n  if (!payload.sub) throw new Error('No sub claim');\n  if (payload.exp && Date.now()/1000 > payload.exp) throw new Error('JWT expired');\n  return [{ json: {\n    user_id: payload.sub,\n    tenant_id: payload.tenant_id || null,\n    role: payload.role || 'architect',\n    request_id: 'req_' + Math.random().toString(36).slice(2, 10),\n    body: $input.first().json.body || $input.first().json\n  }}];\n} catch (e) {\n  return [{ json: { _error: 'AUTH_INVALID_TOKEN', _status: 401, _details: e.message } }];\n}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 300],
+      "id": "api-projcreate-decode-jwt",
+      "name": "Decode JWT"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "check-jwt-error",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": "",
+              "operator": { "type": "string", "operation": "exists" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [720, 300],
+      "id": "api-projcreate-if-jwt-error",
+      "name": "JWT OK?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details || $json._error } }) }}",
+        "options": { "responseCode": "={{ $json._status || 401 }}" }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [960, 460],
+      "id": "api-projcreate-respond-401",
+      "name": "Respond 401"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const sess = $input.first().json;\nconst body = sess.body || {};\n\n// Validar tenant_id presente en JWT (pre-X4 los tokens no lo tenian)\nif (!sess.tenant_id) {\n  return [{ json: { _error: 'AUTH_NO_TENANT', _status: 403, _details: 'JWT sin tenant_id claim' } }];\n}\n\n// Campos obligatorios\nconst required = ['client_name', 'project_name', 'project_type'];\nconst missing = required.filter(f => !body[f] || body[f].toString().trim() === '');\nif (missing.length > 0) {\n  return [{ json: { _error: 'VALIDATION_MISSING_FIELDS', _status: 400, _details: 'Campos obligatorios faltantes: ' + missing.join(', '), _missing: missing } }];\n}\n\n// Validar project_type\nconst validTypes = ['reforma_integral', 'redistribucion', 'cambio_uso', 'adecuacion', 'apoyo_tecnico', 'otro'];\nif (!validTypes.includes(body.project_type)) {\n  return [{ json: { _error: 'VALIDATION_INVALID_TYPE', _status: 400, _details: 'project_type invalido. Valores permitidos: ' + validTypes.join(', '), _received: body.project_type } }];\n}\n\nconst validUrgency = ['normal', 'alta', 'urgente'];\nconst urgency = body.urgency && validUrgency.includes(body.urgency) ? body.urgency : 'normal';\n\nconst validPropertyTypes = ['piso', 'casa', 'local', 'atico', 'bajo', 'duplex', 'otro'];\nconst propertyType = body.property_type && validPropertyTypes.includes(body.property_type) ? body.property_type : null;\n\n// Validar email basico si viene\nif (body.client_email && !/^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$/.test(body.client_email)) {\n  return [{ json: { _error: 'VALIDATION_BAD_EMAIL', _status: 400, _details: 'Email cliente con formato invalido' } }];\n}\n\nreturn [{ json: {\n  user_id: sess.user_id,\n  tenant_id: sess.tenant_id,\n  role: sess.role,\n  request_id: sess.request_id,\n  client_name: body.client_name.trim(),\n  client_email: body.client_email ? body.client_email.trim() : null,\n  client_phone: body.client_phone ? body.client_phone.trim() : null,\n  project_name: body.project_name.trim(),\n  project_type: body.project_type,\n  location_address: body.location_address || null,\n  location_city: body.location_city || null,\n  location_province: body.location_province || null,\n  property_type: propertyType,\n  property_area_m2: body.property_area_m2 ? parseFloat(body.property_area_m2) : null,\n  budget_target: body.budget_target ? parseFloat(body.budget_target) : null,\n  budget_flexible: body.budget_flexible === true || body.budget_flexible === 'true',\n  urgency: urgency,\n  notes: body.notes ? body.notes.trim() : null\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [960, 200],
+      "id": "api-projcreate-validate",
+      "name": "Validate Input"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "check-validation-error",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": "",
+              "operator": { "type": "string", "operation": "exists" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1200, 200],
+      "id": "api-projcreate-if-validation",
+      "name": "Input Valid?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details, missing_fields: $json._missing || [] } }) }}",
+        "options": { "responseCode": "={{ $json._status || 400 }}" }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1440, 380],
+      "id": "api-projcreate-respond-400",
+      "name": "Respond 400"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT set_session_context($1::uuid, $2::uuid, $3)",
+        "options": {
+          "queryReplacement": "={{ [$json.user_id, $json.tenant_id, $json.role] }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1440, 100],
+      "id": "api-projcreate-set-session",
+      "name": "Set Session Context"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH input AS (\n  SELECT $1::uuid AS tenant_id,\n         $2::text AS client_name,\n         NULLIF($3::text, '') AS client_email,\n         NULLIF($4::text, '') AS client_phone\n),\nfound AS (\n  SELECT c.id\n  FROM clients c, input i\n  WHERE c.tenant_id = i.tenant_id\n    AND i.client_email IS NOT NULL\n    AND c.email = i.client_email\n  LIMIT 1\n),\nins AS (\n  INSERT INTO clients (tenant_id, name, email, phone)\n  SELECT i.tenant_id, i.client_name, i.client_email, i.client_phone\n  FROM input i\n  WHERE NOT EXISTS (SELECT 1 FROM found)\n  RETURNING id\n)\nSELECT id FROM found UNION ALL SELECT id FROM ins LIMIT 1",
+        "options": {
+          "queryReplacement": "={{ [$('Validate Input').first().json.tenant_id, $('Validate Input').first().json.client_name, $('Validate Input').first().json.client_email || '', $('Validate Input').first().json.client_phone || ''] }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1680, 100],
+      "id": "api-projcreate-upsert-client",
+      "name": "Upsert Client"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO projects (\n  tenant_id, client_id, name, project_type,\n  budget_target, budget_flexible,\n  location_address, location_city, location_province,\n  property_type, property_area_m2, urgency,\n  current_phase, status, metadata\n) VALUES (\n  $1::uuid, $2::uuid, $3, $4,\n  $5::numeric, $6::boolean,\n  $7, $8, $9,\n  $10, $11::numeric, $12,\n  'intake', 'active', $13::jsonb\n) RETURNING id, name, current_phase, created_at",
+        "options": {
+          "queryReplacement": "={{ [\n  $('Validate Input').first().json.tenant_id,\n  $json.id,\n  $('Validate Input').first().json.project_name,\n  $('Validate Input').first().json.project_type,\n  $('Validate Input').first().json.budget_target,\n  $('Validate Input').first().json.budget_flexible,\n  $('Validate Input').first().json.location_address,\n  $('Validate Input').first().json.location_city,\n  $('Validate Input').first().json.location_province,\n  $('Validate Input').first().json.property_type,\n  $('Validate Input').first().json.property_area_m2,\n  $('Validate Input').first().json.urgency,\n  JSON.stringify({ notes: $('Validate Input').first().json.notes, created_via: 'wizard_v1', created_by_user: $('Validate Input').first().json.user_id })\n] }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1920, 100],
+      "id": "api-projcreate-insert-project",
+      "name": "Insert Project"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, status, output_summary)\nVALUES ($1::uuid, 'api_projects_create', 'project_created', 'success', $2)",
+        "options": {
+          "queryReplacement": "={{ [$json.id, 'Proyecto ' + $json.name + ' creado desde wizard'] }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [2160, 100],
+      "id": "api-projcreate-log-activity",
+      "name": "Log Activity"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://n8n-n8n.zzeluw.easypanel.host/webhook/orchestrator",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ project_id: $('Insert Project').first().json.id, action: 'advance' }) }}",
+        "options": { "timeout": 8000 }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2400, 100],
+      "id": "api-projcreate-trigger-orch",
+      "name": "Trigger Orchestrator",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({\n  data: {\n    project_id: $('Insert Project').first().json.id,\n    project_name: $('Insert Project').first().json.name,\n    current_phase: $('Insert Project').first().json.current_phase,\n    created_at: $('Insert Project').first().json.created_at,\n    briefing_triggered: true\n  },\n  meta: {\n    request_id: $('Validate Input').first().json.request_id,\n    timestamp: new Date().toISOString()\n  }\n}) }}",
+        "options": {
+          "responseCode": 201,
+          "responseHeaders": {
+            "entries": [
+              { "name": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }
+            ]
+          }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [2640, 100],
+      "id": "api-projcreate-respond-201",
+      "name": "Respond 201"
+    }
+  ],
+  "connections": {
+    "POST /projects/create": { "main": [[{ "node": "Decode JWT", "type": "main", "index": 0 }]] },
+    "Decode JWT": { "main": [[{ "node": "JWT OK?", "type": "main", "index": 0 }]] },
+    "JWT OK?": { "main": [
+      [{ "node": "Respond 401", "type": "main", "index": 0 }],
+      [{ "node": "Validate Input", "type": "main", "index": 0 }]
+    ]},
+    "Validate Input": { "main": [[{ "node": "Input Valid?", "type": "main", "index": 0 }]] },
+    "Input Valid?": { "main": [
+      [{ "node": "Respond 400", "type": "main", "index": 0 }],
+      [{ "node": "Set Session Context", "type": "main", "index": 0 }]
+    ]},
+    "Set Session Context": { "main": [[{ "node": "Upsert Client", "type": "main", "index": 0 }]] },
+    "Upsert Client": { "main": [[{ "node": "Insert Project", "type": "main", "index": 0 }]] },
+    "Insert Project": { "main": [[{ "node": "Log Activity", "type": "main", "index": 0 }]] },
+    "Log Activity": { "main": [[{ "node": "Trigger Orchestrator", "type": "main", "index": 0 }]] },
+    "Trigger Orchestrator": { "main": [[{ "node": "Respond 201", "type": "main", "index": 0 }]] }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

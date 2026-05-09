@@ -137,3 +137,48 @@ export interface AgentChatResponse {
   response: string;
   timestamp: string;
 }
+
+// B60 — Wizard Nuevo Proyecto (POST /api/v1/projects/create)
+export type ProjectType =
+  | 'reforma_integral'
+  | 'redistribucion'
+  | 'cambio_uso'
+  | 'adecuacion'
+  | 'apoyo_tecnico'
+  | 'otro';
+
+export type PropertyType =
+  | 'piso'
+  | 'casa'
+  | 'local'
+  | 'atico'
+  | 'bajo'
+  | 'duplex'
+  | 'otro';
+
+export type Urgency = 'normal' | 'alta' | 'urgente';
+
+export interface CreateProjectPayload {
+  client_name: string;
+  client_email: string | null;
+  client_phone: string | null;
+  project_name: string;
+  project_type: ProjectType;
+  location_address: string | null;
+  location_city: string | null;
+  location_province: string | null;
+  property_type: PropertyType | null;
+  property_area_m2: number | null;
+  budget_target: number | null;
+  budget_flexible: boolean;
+  urgency: Urgency;
+  notes: string | null;
+}
+
+export interface CreateProjectResponse {
+  project_id: string;
+  project_name: string;
+  current_phase: ProjectPhase;
+  created_at: string;
+  briefing_triggered: boolean;
+}

@@ -9,6 +9,8 @@ import type {
   PendingApproval,
   ApprovalDecisionResult,
   AgentChatResponse,
+  CreateProjectPayload,
+  CreateProjectResponse,
 } from './types';
 import { mockProfile, mockProjects, mockMetrics, mockAlerts } from './mock-data';
 import { getAccessToken } from './session';
@@ -198,6 +200,17 @@ export const api = {
       {
         method: 'POST',
         body: JSON.stringify({ agent_name: agentName, message }),
+      },
+    );
+    return r.data;
+  },
+
+  createProject: async (payload: CreateProjectPayload): Promise<CreateProjectResponse> => {
+    const r = await fetchAPI<EnvelopeResponse<CreateProjectResponse>>(
+      '/projects/create',
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
       },
     );
     return r.data;

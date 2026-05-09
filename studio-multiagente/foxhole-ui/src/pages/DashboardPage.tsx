@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState, useMemo } from 'react';
-import { Search } from 'lucide-react';
+import { Search, Plus } from 'lucide-react';
 import { api } from '@/lib/api';
 import { DashboardKPIs } from '@/components/DashboardKPIs';
 import { PhaseColumnView } from '@/components/PhaseColumnView';
@@ -8,9 +8,10 @@ import { ActivityFeed } from '@/components/ActivityFeed';
 
 interface Props {
   onProjectClick: (id: string) => void;
+  onNewProject: () => void;
 }
 
-export function DashboardPage({ onProjectClick }: Props) {
+export function DashboardPage({ onProjectClick, onNewProject }: Props) {
   const [search, setSearch] = useState('');
 
   const { data: metrics } = useQuery({ queryKey: ['metrics'], queryFn: api.metrics });
@@ -46,6 +47,14 @@ export function DashboardPage({ onProjectClick }: Props) {
         <span className="text-xs font-mono text-foxhole-muted">
           {filtered.length} de {projects.length} proyectos
         </span>
+        <button
+          onClick={onNewProject}
+          className="foxhole-btn-primary flex items-center gap-1.5 px-3 py-2 text-sm ml-auto"
+          title="Crear nuevo proyecto"
+        >
+          <Plus className="w-4 h-4" />
+          Nuevo proyecto
+        </button>
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-4">

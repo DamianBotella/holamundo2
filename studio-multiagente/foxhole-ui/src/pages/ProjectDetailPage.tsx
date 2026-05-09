@@ -4,6 +4,7 @@ import { api } from '@/lib/api';
 import type { ProjectSummary } from '@/lib/types';
 import type { TimelineEvent } from '@/lib/api';
 import { PHASE_LABELS_EXPORT } from '@/components/ProjectCard';
+import { ProjectDeliverablesPanel } from '@/components/ProjectDeliverablesPanel';
 
 interface Props {
   projectId: string;
@@ -150,15 +151,7 @@ export function ProjectDetailPage({ projectId, onBack }: Props) {
         </div>
       </div>
 
-      <div className="foxhole-card p-4">
-        <h2 className="text-xs font-mono uppercase tracking-wider text-foxhole-muted mb-3">
-          Outputs
-        </h2>
-        <p className="text-sm text-foxhole-subtle italic">
-          (M3) Briefing + design_options + regulatory_tasks + cost_estimate + proposal +
-          project_plan agregados desde v_project_detail.
-        </p>
-      </div>
+      <ProjectDeliverablesPanel projectId={projectId} />
     </div>
   );
 }

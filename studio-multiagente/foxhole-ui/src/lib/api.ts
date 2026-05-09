@@ -12,6 +12,7 @@ import type {
   CreateProjectPayload,
   CreateProjectResponse,
   ConversationHistoryResponse,
+  ProjectDeliverables,
 } from './types';
 import { mockProfile, mockProjects, mockMetrics, mockAlerts } from './mock-data';
 import { getAccessToken } from './session';
@@ -225,6 +226,76 @@ export const api = {
       `/studio/conversations?${qs.toString()}`,
       {
         headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' },
+      },
+    );
+    return r.data;
+  },
+
+  // B67 — Deliverables y agentes pre-launch
+  projectDeliverables: async (projectId: string): Promise<ProjectDeliverables> => {
+    const r = await fetchAPI<EnvelopeResponse<ProjectDeliverables>>(
+      `/project-deliverables?id=${encodeURIComponent(projectId)}&_=${Date.now()}`,
+      { headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' } },
+    );
+    return r.data;
+  },
+
+  runGrantsFinder: async (projectId: string): Promise<unknown> => {
+    const r = await fetchAPI<EnvelopeResponse<unknown>>(
+      '/agents/grants-finder/analyze',
+      { method: 'POST', body: JSON.stringify({ project_id: projectId }) },
+    );
+    return r.data;
+  },
+
+  runRCD: async (
+    projectId: string,
+    opts?: { tipo_obra_override?: string; anio_edificio?: number },
+  ): Promise<{ draft_id: string; total_toneladas: number; alertas_peligrosos: unknown[] }> => {
+    const r = await fetchAPI<EnvelopeResponse<{ draft_id: string; total_toneladas: number; alertas_peligrosos: unknown[] }>>(
+      '/agents/rcd/generate-draft',
+      { method: 'POST', body: JSON.stringify({ project_id: projectId, ...(opts || {}) }) },
+    );
+    return r.data;
+  },
+
+  approveRCD: async (draftId: string): Promise<{ final_id: string }> => {
+    const r = await fetchAPI<EnvelopeResponse<{ final_id: string }>>(
+      '/rcd/approve',
+      { method: 'POST', body: JSON.stringify({ draft_id: draftId }) },
+    );
+    return r.data;
+  },
+
+  runIEE: async (
+    projectId: string,
+    opts?: { anio_construccion?: number; numero_plantas?: number; numero_viviendas?: number },
+  ): Promise<{ draft_id: string; calificacion_global: string }> => {
+    const r = await fetchAPI<EnvelopeResponse<{ draft_id: string; calificacion_global: string }>>(
+      '/agents/iee/generate-draft',
+      { method: 'POST', body: JSON.stringify({ project_id: projectId, ...(opts || {}) }) },
+    );
+    return r.data;
+  },
+
+  approveIEE: async (draftId: string): Promise<{ final_id: string }> => {
+    const r = await fetchAPI<EnvelopeResponse<{ final_id: string }>>(
+      '/iee/approve',
+      { method: 'POST', body: JSON.stringify({ draft_id: draftId }) },
+    );
+    return r.data;
+  },
+
+  runTelematicFiling: async (
+    projectId: string,
+    tipoTramite: string,
+    municipio?: string,
+  ): Promise<unknown> => {
+    const r = await fetchAPI<EnvelopeResponse<unknown>>(
+      '/agents/telematic-filing/prepare',
+      {
+        method: 'POST',
+        body: JSON.stringify({ project_id: projectId, tipo_tramite: tipoTramite, ...(municipio ? { municipio } : {}) }),
       },
     );
     return r.data;

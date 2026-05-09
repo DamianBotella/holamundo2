@@ -1,0 +1,116 @@
+{
+  "name": "api_project_deliverables",
+  "_description": "GET /api/v1/project-deliverables?id=X - devuelve outputs persistidos de los 4 agentes pre-launch para un proyecto: ultimo iee_reports approved, ultimo rcd_studies approved, ultimo output de agent_grants_finder, ultimo output de agent_telematic_filing. Usado por ProjectDeliverablesPanel.",
+  "_status": "B67 (UI Fase B).",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "api/v1/project-deliverables",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "id": "pd-webhook",
+      "name": "GET /project-deliverables",
+      "webhookId": "a9b0c1d2-e3f4-4a5b-9c6d-7e8f9a0b1c23"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const auth = $input.first().json.headers?.authorization || '';\nif (!auth.startsWith('Bearer ')) return [{ json: { _error: 'AUTH_MISSING_TOKEN', _status: 401 } }];\nconst token = auth.slice(7);\ntry {\n  const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'));\n  if (!payload.sub) throw new Error('No sub');\n  if (payload.exp && Date.now()/1000 > payload.exp) throw new Error('JWT expired');\n  if (!payload.tenant_id) throw new Error('No tenant_id');\n  const q = $input.first().json.query || {};\n  const projectId = (q.id || '').trim();\n  if (!projectId) return [{ json: { _error: 'VALIDATION_FAILED', _status: 400, _details: 'id query param requerido' } }];\n  return [{ json: {\n    user_id: payload.sub,\n    tenant_id: payload.tenant_id,\n    role: payload.role || 'architect',\n    project_id: projectId,\n    request_id: 'req_' + Math.random().toString(36).slice(2, 10)\n  }}];\n} catch (e) {\n  return [{ json: { _error: 'AUTH_INVALID_TOKEN', _status: 401, _details: e.message } }];\n}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 300],
+      "id": "pd-decode",
+      "name": "Decode JWT + Query"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict", "version": 2 },
+          "conditions": [
+            { "id": "pd-c1", "leftValue": "={{ $json._error }}", "rightValue": "", "operator": { "type": "string", "operation": "exists", "singleValue": true } }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [720, 300],
+      "id": "pd-if-auth",
+      "name": "Auth OK?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details || $json._error } }) }}",
+        "options": { "responseCode": "={{ $json._status || 401 }}" }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [960, 460],
+      "id": "pd-respond-error",
+      "name": "Respond Error"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH ctx AS (SELECT set_session_context($1::uuid, $2::uuid, $3) AS ok),\nproj AS (\n  SELECT projects.id AS project_id, projects.name, projects.location_city\n  FROM projects, ctx WHERE projects.id = $4::uuid LIMIT 1\n),\niee AS (\n  SELECT iee_reports.id AS iee_id, iee_reports.calificacion_global,\n         iee_reports.estado_conservacion, iee_reports.condiciones_accesibilidad,\n         iee_reports.eficiencia_energetica, iee_reports.recomendaciones,\n         iee_reports.draft_content, iee_reports.approved_at\n  FROM iee_reports, proj\n  WHERE iee_reports.project_id = proj.project_id\n  ORDER BY iee_reports.approved_at DESC LIMIT 1\n),\niee_dr AS (\n  SELECT iee_reports_draft.id AS draft_id, iee_reports_draft.calificacion_global,\n         iee_reports_draft.draft_content, iee_reports_draft.created_at\n  FROM iee_reports_draft, proj\n  WHERE iee_reports_draft.project_id = proj.project_id\n    AND iee_reports_draft.status = 'draft'\n  ORDER BY iee_reports_draft.created_at DESC LIMIT 1\n),\nrcd AS (\n  SELECT rcd_studies.id AS rcd_id, rcd_studies.tipo_obra, rcd_studies.total_toneladas,\n         rcd_studies.coste_gestion_eur, rcd_studies.alertas_peligrosos,\n         rcd_studies.draft_content, rcd_studies.approved_at\n  FROM rcd_studies, proj\n  WHERE rcd_studies.project_id = proj.project_id\n  ORDER BY rcd_studies.approved_at DESC LIMIT 1\n),\nrcd_dr AS (\n  SELECT rcd_studies_draft.id AS draft_id, rcd_studies_draft.total_toneladas,\n         rcd_studies_draft.coste_gestion_eur, rcd_studies_draft.alertas_peligrosos,\n         rcd_studies_draft.created_at\n  FROM rcd_studies_draft, proj\n  WHERE rcd_studies_draft.project_id = proj.project_id\n    AND rcd_studies_draft.status = 'draft'\n  ORDER BY rcd_studies_draft.created_at DESC LIMIT 1\n),\ngrants_exec AS (\n  SELECT agent_executions.id AS exec_id, agent_executions.output, agent_executions.metadata, agent_executions.finished_at\n  FROM agent_executions, proj\n  WHERE agent_executions.project_id = proj.project_id\n    AND agent_executions.agent_name = 'agent_grants_finder'\n    AND agent_executions.status = 'completed'\n  ORDER BY agent_executions.finished_at DESC LIMIT 1\n),\ntelematic_exec AS (\n  SELECT agent_executions.id AS exec_id, agent_executions.input, agent_executions.output, agent_executions.metadata, agent_executions.finished_at\n  FROM agent_executions, proj\n  WHERE agent_executions.project_id = proj.project_id\n    AND agent_executions.agent_name = 'agent_telematic_filing'\n    AND agent_executions.status = 'completed'\n  ORDER BY agent_executions.finished_at DESC LIMIT 1\n)\nSELECT\n  (SELECT row_to_json(proj)         FROM proj)         AS project,\n  (SELECT row_to_json(iee)          FROM iee)          AS iee_approved,\n  (SELECT row_to_json(iee_dr)       FROM iee_dr)       AS iee_draft,\n  (SELECT row_to_json(rcd)          FROM rcd)          AS rcd_approved,\n  (SELECT row_to_json(rcd_dr)       FROM rcd_dr)       AS rcd_draft,\n  (SELECT row_to_json(grants_exec)  FROM grants_exec)  AS grants_last,\n  (SELECT row_to_json(telematic_exec) FROM telematic_exec) AS telematic_last",
+        "options": {
+          "queryReplacement": "={{ [$('Decode JWT + Query').first().json.user_id, $('Decode JWT + Query').first().json.tenant_id, $('Decode JWT + Query').first().json.role, $('Decode JWT + Query').first().json.project_id] }}"
+        }
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [960, 200],
+      "id": "pd-load",
+      "name": "Load All Deliverables",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const row = $input.first()?.json;\nconst sess = $('Decode JWT + Query').first().json;\nif (!row || !row.project) {\n  return [{ json: {\n    data: {\n      project_id: sess.project_id,\n      project: null,\n      iee: null,\n      rcd: null,\n      grants: null,\n      telematic: null\n    },\n    meta: { request_id: sess.request_id, timestamp: new Date().toISOString() }\n  }}];\n}\nreturn [{ json: {\n  data: {\n    project: row.project,\n    iee: {\n      approved: row.iee_approved || null,\n      draft: row.iee_draft || null\n    },\n    rcd: {\n      approved: row.rcd_approved || null,\n      draft: row.rcd_draft || null\n    },\n    grants: row.grants_last || null,\n    telematic: row.telematic_last || null\n  },\n  meta: {\n    request_id: sess.request_id,\n    timestamp: new Date().toISOString()\n  }\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1200, 200],
+      "id": "pd-format",
+      "name": "Format Response"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [{ "name": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }]
+          }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1440, 200],
+      "id": "pd-respond-200",
+      "name": "Respond 200"
+    }
+  ],
+  "connections": {
+    "GET /project-deliverables": { "main": [[{ "node": "Decode JWT + Query", "type": "main", "index": 0 }]] },
+    "Decode JWT + Query": { "main": [[{ "node": "Auth OK?", "type": "main", "index": 0 }]] },
+    "Auth OK?": { "main": [
+      [{ "node": "Respond Error", "type": "main", "index": 0 }],
+      [{ "node": "Load All Deliverables", "type": "main", "index": 0 }]
+    ]},
+    "Load All Deliverables": { "main": [[{ "node": "Format Response", "type": "main", "index": 0 }]] },
+    "Format Response": { "main": [[{ "node": "Respond 200", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {}
+}

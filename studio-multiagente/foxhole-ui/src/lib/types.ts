@@ -155,6 +155,81 @@ export interface ConversationHistoryResponse {
   messages: ConversationMessage[];
 }
 
+// B67 — Deliverables de los 4 agentes pre-launch
+export interface IEEData {
+  iee_id?: string;
+  draft_id?: string;
+  calificacion_global?: 'A' | 'B' | 'C' | 'D' | 'E' | 'F' | 'G' | null;
+  estado_conservacion?: string | null;
+  condiciones_accesibilidad?: string | null;
+  eficiencia_energetica?: string | null;
+  recomendaciones?: Array<{
+    prioridad: string;
+    actuacion: string;
+    coste_estimado_eur?: number;
+    justificacion?: string;
+  }>;
+  draft_content?: Record<string, unknown>;
+  approved_at?: string;
+  created_at?: string;
+}
+
+export interface RCDData {
+  rcd_id?: string;
+  draft_id?: string;
+  tipo_obra?: string;
+  total_toneladas?: number;
+  coste_gestion_eur?: number;
+  alertas_peligrosos?: Array<{
+    tipo: string;
+    severidad: string;
+    descripcion: string;
+  }>;
+  draft_content?: Record<string, unknown>;
+  approved_at?: string;
+  created_at?: string;
+}
+
+export interface GrantsLastExec {
+  exec_id: string;
+  output: {
+    recomendaciones?: Array<{
+      grant_id: string;
+      nombre: string;
+      organismo: string;
+      ahorro_estimado_eur: number;
+      porcentaje_aplicable: number;
+      probabilidad_aprobacion: string;
+      fecha_limite_solicitud?: string;
+    }>;
+    ahorro_total_acumulable_eur?: number;
+    siguiente_accion_recomendada?: string;
+  };
+  metadata?: Record<string, unknown>;
+  finished_at: string;
+}
+
+export interface TelematicLastExec {
+  exec_id: string;
+  input?: { municipio?: string; tipo_tramite?: string };
+  output: {
+    estado: 'listo' | 'incompleto';
+    docs_validados_count?: number;
+    docs_faltantes_count?: number;
+    peso_estimado_mb?: number;
+  };
+  metadata?: Record<string, unknown>;
+  finished_at: string;
+}
+
+export interface ProjectDeliverables {
+  project: { project_id: string; name: string; location_city: string | null } | null;
+  iee: { approved: IEEData | null; draft: IEEData | null };
+  rcd: { approved: RCDData | null; draft: RCDData | null };
+  grants: GrantsLastExec | null;
+  telematic: TelematicLastExec | null;
+}
+
 // B60 — Wizard Nuevo Proyecto (POST /api/v1/projects/create)
 export type ProjectType =
   | 'reforma_integral'

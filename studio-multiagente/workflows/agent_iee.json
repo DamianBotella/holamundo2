@@ -1,0 +1,230 @@
+{
+  "name": "agent_iee",
+  "_description": "Fase B.3 plan Opus: Informe Evaluacion Edificios (Ley 8/2013 + RD 233/2013 Anexo II). Calificacion global A-G + recomendaciones priorizadas. Patron Draft/Commit. Lee executions previas de agent_accessibility y agent_energy_assessor si existen para mejorar normativa_confidence.",
+  "_status": "B65 (Fase B.3).",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "api/v1/agents/iee/generate-draft",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "id": "iee-webhook",
+      "name": "POST /iee/generate-draft",
+      "webhookId": "d6e7f8a9-b0c1-4d2e-9f3a-4b5c6d7e8f90"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const auth = $input.first().json.headers?.authorization || '';\nif (!auth.startsWith('Bearer ')) return [{ json: { _error: 'AUTH_MISSING_TOKEN', _status: 401 } }];\nconst token = auth.slice(7);\ntry {\n  const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'));\n  if (!payload.sub) throw new Error('No sub');\n  if (payload.exp && Date.now()/1000 > payload.exp) throw new Error('JWT expired');\n  if (!payload.tenant_id) throw new Error('No tenant_id');\n  const body = $input.first().json.body || {};\n  const projectId = (body.project_id || '').trim();\n  if (!projectId) return [{ json: { _error: 'VALIDATION_FAILED', _status: 400, _details: 'project_id requerido' } }];\n  return [{ json: {\n    user_id: payload.sub,\n    tenant_id: payload.tenant_id,\n    role: payload.role || 'architect',\n    project_id: projectId,\n    anio_construccion_override: body.anio_construccion ? parseInt(body.anio_construccion, 10) : null,\n    numero_plantas_override: body.numero_plantas ? parseInt(body.numero_plantas, 10) : null,\n    numero_viviendas_override: body.numero_viviendas ? parseInt(body.numero_viviendas, 10) : null,\n    tipologia_override: body.tipologia_edificio || null,\n    tiene_inspeccion: body.tiene_inspeccion === true || body.tiene_inspeccion === 'true',\n    request_id: 'req_' + Math.random().toString(36).slice(2, 10)\n  }}];\n} catch (e) {\n  return [{ json: { _error: 'AUTH_INVALID_TOKEN', _status: 401, _details: e.message } }];\n}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 300],
+      "id": "iee-decode",
+      "name": "Decode JWT + Body"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict", "version": 2 },
+          "conditions": [
+            { "id": "iee-c1", "leftValue": "={{ $json._error }}", "rightValue": "", "operator": { "type": "string", "operation": "exists", "singleValue": true } }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [720, 300],
+      "id": "iee-if-auth",
+      "name": "Auth OK?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details || $json._error } }) }}",
+        "options": { "responseCode": "={{ $json._status || 401 }}" }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [960, 460],
+      "id": "iee-respond-error",
+      "name": "Respond Error"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH ctx AS (SELECT set_session_context($1::uuid, $2::uuid, $3) AS ok)\nSELECT p.id, p.name, p.project_type, p.location_province, p.location_city, p.location_address,\n       p.property_type, p.property_area_m2, p.urgency,\n       p.metadata->>'notes' AS notes,\n       (p.metadata->>'edad_edificio')::int AS edad_edificio_meta,\n       (p.metadata->>'numero_plantas')::int AS numero_plantas_meta,\n       (p.metadata->>'numero_viviendas')::int AS numero_viviendas_meta,\n       p.metadata->>'tipologia_edificio' AS tipologia_meta,\n       (SELECT output FROM agent_executions WHERE project_id = p.id AND agent_name = 'agent_accessibility' AND status = 'completed' ORDER BY finished_at DESC LIMIT 1) AS accesibilidad_output,\n       (SELECT output FROM agent_executions WHERE project_id = p.id AND agent_name = 'agent_energy_assessor' AND status = 'completed' ORDER BY finished_at DESC LIMIT 1) AS energia_output\nFROM projects p, ctx\nWHERE p.id = $4::uuid LIMIT 1",
+        "options": {
+          "queryReplacement": "={{ [$('Decode JWT + Body').first().json.user_id, $('Decode JWT + Body').first().json.tenant_id, $('Decode JWT + Body').first().json.role, $('Decode JWT + Body').first().json.project_id] }}"
+        }
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [960, 200],
+      "id": "iee-load",
+      "name": "Load Project + Neighbors",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const row = $input.first()?.json;\nconst sess = $('Decode JWT + Body').first().json;\nif (!row || !row.id) {\n  return [{ json: { _error: 'PROJECT_NOT_FOUND', _status: 404, _details: 'project_id no existe o sin acceso por RLS' } }];\n}\nconst anioConstruccion = sess.anio_construccion_override || row.edad_edificio_meta;\nif (!anioConstruccion) {\n  return [{ json: { _error: 'NO_ANIO_CONSTRUCCION', _status: 422, _details: 'anio_construccion requerido (en body o en projects.metadata.edad_edificio). El IEE necesita la edad del edificio para evaluar.' } }];\n}\nconst hasNeighbors = !!(row.accesibilidad_output || row.energia_output);\nconst confidenceBase = hasNeighbors ? 0.85 : 0.7;\n\nreturn [{ json: {\n  ...sess,\n  project: {\n    id: row.id,\n    name: row.name,\n    project_type: row.project_type,\n    location_address: row.location_address,\n    location_city: row.location_city,\n    location_province: row.location_province,\n    property_type: row.property_type,\n    property_area_m2: row.property_area_m2 ? parseFloat(row.property_area_m2) : null,\n    notes: row.notes,\n    anio_construccion: anioConstruccion,\n    numero_plantas: sess.numero_plantas_override || row.numero_plantas_meta || 1,\n    numero_viviendas: sess.numero_viviendas_override || row.numero_viviendas_meta || 1,\n    tipologia_edificio: sess.tipologia_override || row.tipologia_meta || row.property_type || 'vivienda_unifamiliar'\n  },\n  agentes_vecinos: {\n    accesibilidad: row.accesibilidad_output || null,\n    energia: row.energia_output || null,\n    has_neighbors: hasNeighbors\n  },\n  normativa_confidence_base: confidenceBase\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1200, 200],
+      "id": "iee-build-context",
+      "name": "Build Context"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict", "version": 2 },
+          "conditions": [
+            { "id": "iee-c2", "leftValue": "={{ $json._error }}", "rightValue": "", "operator": { "type": "string", "operation": "exists", "singleValue": true } }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1440, 200],
+      "id": "iee-if-context",
+      "name": "Context OK?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details } }) }}",
+        "options": { "responseCode": "={{ $json._status || 422 }}" }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1680, 360],
+      "id": "iee-respond-422",
+      "name": "Respond 422"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const ctx = $input.first().json;\nconst project = ctx.project;\nconst v = ctx.agentes_vecinos;\n\nconst accesibilidadText = v.accesibilidad\n  ? `Datos de agent_accessibility (commit previo):\\n${JSON.stringify(v.accesibilidad).slice(0, 800)}`\n  : '(agent_accessibility no se ha ejecutado para este proyecto - inferir basicamente desde tipologia y antiguedad)';\nconst energiaText = v.energia\n  ? `Datos de agent_energy_assessor (commit previo):\\n${JSON.stringify(v.energia).slice(0, 800)}`\n  : '(agent_energy_assessor no se ha ejecutado - estimar letra E o F por defecto en edificios pre-CTE 2006)';\n\nconst antiguedad = new Date().getFullYear() - project.anio_construccion;\n\nconst systemPrompt = `Eres agent_iee, tecnico redactor de Informes de Evaluacion de Edificios (IEE) conforme a la normativa espanola: Ley 8/2013 de rehabilitacion regeneracion y renovacion urbanas, RD 233/2013 (modelo Anexo II), RD 7/2015 Texto Refundido Ley del Suelo y ordenanzas municipales aplicables.\\n\\nREGLAS DE ORO:\\n- DEVUELVE SOLO JSON valido, sin texto fuera del JSON.\\n- Para cada bloque (estado, accesibilidad, energia) si no tienes datos suficientes, marca observaciones con \\\"verificar in situ\\\" en lugar de inventar.\\n- normativa_confidence_base ya viene calculado: ${ctx.normativa_confidence_base} (subelo a 0.9 si los datos vecinos son completos, bajalo a 0.5 si tuviste que inferir mucho).\\n- El arquitecto firma. Tu propones.`;\n\nconst userPrompt = `PROYECTO:\\n- Nombre: ${project.name}\\n- Direccion: ${project.location_address ?? '?'}, ${project.location_city ?? '?'}, ${project.location_province ?? '?'}\\n- Anio construccion: ${project.anio_construccion} (antiguedad: ${antiguedad} anos)\\n- Tipologia: ${project.tipologia_edificio}\\n- Plantas: ${project.numero_plantas}\\n- Viviendas: ${project.numero_viviendas}\\n- Superficie: ${project.property_area_m2 ?? '?'} m2\\n- Notas arquitecto: ${project.notes ? project.notes.slice(0, 300) : '(sin notas)'}\\n\\nDATOS DE AGENTES VECINOS:\\n${accesibilidadText}\\n\\n${energiaText}\\n\\nNORMATIVA APLICABLE:\\n- Ley 8/2013 de rehabilitacion, regeneracion y renovacion urbanas\\n- RD 233/2013 Anexo II (modelo IEE)\\n- RD 7/2015 Texto refundido Ley del Suelo\\n- Ordenanzas municipales de ${project.location_city ?? 'el municipio correspondiente'}\\n\\nTAREAS:\\n1. Evaluar ESTADO DE CONSERVACION: estructura, cubierta, fachadas, instalaciones. Calificacion: favorable / desfavorable.\\n2. Evaluar CONDICIONES BASICAS DE ACCESIBILIDAD: cumple / no cumple + ajustes razonables.\\n3. Evaluar CERTIFICACION ENERGETICA: importar de agent_energy_assessor si hay, o estimar letra A-G razonable.\\n4. Generar CALIFICACION GLOBAL (A-G) ponderada de los 3 bloques.\\n5. Listar RECOMENDACIONES priorizadas: actuaciones urgentes / convenientes con coste estimado.\\n6. Listar DOCUMENTOS A GENERAR (informe principal IEE + anexo fotografico).\\n\\nOUTPUT (JSON estricto):\\n{\\n  \\\"estado_conservacion\\\": {\\n    \\\"estructura\\\": \\\"favorable|desfavorable\\\",\\n    \\\"cubiertas\\\": \\\"favorable|desfavorable\\\",\\n    \\\"fachadas\\\": \\\"favorable|desfavorable\\\",\\n    \\\"instalaciones\\\": \\\"favorable|desfavorable\\\",\\n    \\\"calificacion\\\": \\\"favorable|desfavorable\\\",\\n    \\\"observaciones\\\": \\\"...\\\"\\n  },\\n  \\\"condiciones_accesibilidad\\\": {\\n    \\\"cumple\\\": false,\\n    \\\"ajustes_necesarios\\\": [\\\"...\\\"],\\n    \\\"ajustes_razonables\\\": true,\\n    \\\"observaciones\\\": \\\"...\\\"\\n  },\\n  \\\"eficiencia_energetica\\\": {\\n    \\\"letra\\\": \\\"E\\\",\\n    \\\"kgCO2_m2_anyo\\\": 32.4,\\n    \\\"kWh_m2_anyo\\\": 156,\\n    \\\"observaciones\\\": \\\"...\\\"\\n  },\\n  \\\"calificacion_global\\\": \\\"C\\\",\\n  \\\"recomendaciones\\\": [\\n    { \\\"prioridad\\\": \\\"urgente|conveniente\\\", \\\"actuacion\\\": \\\"...\\\", \\\"coste_estimado_eur\\\": 8500, \\\"justificacion\\\": \\\"...\\\" }\\n  ],\\n  \\\"documentos_a_generar\\\": [\\\"IEE_completo.pdf\\\", \\\"Anexo_fotografico.pdf\\\"],\\n  \\\"normativa_confidence\\\": 0.85,\\n  \\\"citation_source\\\": \\\"Ley 8/2013 art.4 + RD 233/2013 Anexo II + Ordenanza ${project.location_city ?? 'municipal'}\\\"\\n}`;\n\nreturn [{ json: {\n  ...ctx,\n  llm_payload: {\n    model: 'gpt-4o-mini',\n    messages: [\n      { role: 'system', content: systemPrompt },\n      { role: 'user', content: userPrompt }\n    ],\n    temperature: 0.2,\n    max_tokens: 1800,\n    response_format: { type: 'json_object' }\n  }\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1680, 100],
+      "id": "iee-build-prompt",
+      "name": "Build Prompt"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Content-Type", "value": "application/json" }]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.llm_payload) }}",
+        "options": { "timeout": 60000 }
+      },
+      "credentials": { "httpHeaderAuth": { "id": "gE1jXO133xEHS5JJ", "name": "orquestador ArquiAI" } },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1920, 100],
+      "id": "iee-llm",
+      "name": "Call LLM"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const llm = $input.first()?.json;\nconst ctx = $('Build Context').first().json;\nconst project = ctx.project;\nconst raw = llm?.choices?.[0]?.message?.content || '{}';\nlet parsed;\ntry { parsed = JSON.parse(raw); } catch (e) {\n  return [{ json: { _error: 'LLM_INVALID_JSON', _status: 502, _details: e.message } }];\n}\nconst usage = llm?.usage || {};\n\nconst calificacionGlobal = ['A','B','C','D','E','F','G'].includes(parsed.calificacion_global) ? parsed.calificacion_global : null;\n\nconst draftContent = {\n  estado_conservacion: parsed.estado_conservacion || {},\n  condiciones_accesibilidad: parsed.condiciones_accesibilidad || {},\n  eficiencia_energetica: parsed.eficiencia_energetica || {},\n  calificacion_global: calificacionGlobal,\n  recomendaciones: parsed.recomendaciones || [],\n  documentos_a_generar: parsed.documentos_a_generar || ['IEE_completo.pdf'],\n  normativa_confidence: parsed.normativa_confidence ?? ctx.normativa_confidence_base,\n  citation_source: parsed.citation_source || 'Ley 8/2013 + RD 233/2013 Anexo II',\n  agentes_vecinos_disponibles: ctx.agentes_vecinos.has_neighbors\n};\n\nreturn [{ json: {\n  user_id: ctx.user_id,\n  tenant_id: ctx.tenant_id,\n  project_id: project.id,\n  request_id: ctx.request_id,\n  estado_conservacion_text: parsed.estado_conservacion?.calificacion || null,\n  condiciones_accesibilidad_text: parsed.condiciones_accesibilidad?.cumple === true ? 'cumple' : 'no cumple',\n  eficiencia_energetica_text: parsed.eficiencia_energetica?.letra || null,\n  calificacion_global: calificacionGlobal,\n  recomendaciones: parsed.recomendaciones || [],\n  recomendaciones_count: (parsed.recomendaciones || []).length,\n  draft_content: draftContent,\n  model: llm?.model || 'gpt-4o-mini',\n  tokens_in: usage.prompt_tokens || 0,\n  tokens_out: usage.completion_tokens || 0\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2160, 100],
+      "id": "iee-format",
+      "name": "Format Response"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH ctx AS (SELECT set_session_context($1::uuid, $2::uuid, $3) AS ok)\nINSERT INTO iee_reports_draft (\n  project_id, tenant_id, estado_conservacion, condiciones_accesibilidad,\n  eficiencia_energetica, calificacion_global, recomendaciones, draft_content, status\n)\nSELECT $4::uuid, $2::uuid, $5, $6, $7, $8, $9::jsonb, $10::jsonb, 'draft' FROM ctx\nRETURNING id, created_at",
+        "options": {
+          "queryReplacement": "={{ [$json.user_id, $json.tenant_id, $('Decode JWT + Body').first().json.role, $json.project_id, $json.estado_conservacion_text, $json.condiciones_accesibilidad_text, $json.eficiencia_energetica_text, $json.calificacion_global, JSON.stringify($json.recomendaciones), JSON.stringify($json.draft_content)] }}"
+        }
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [2400, 100],
+      "id": "iee-insert-draft",
+      "name": "Insert Draft",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO agent_executions (project_id, agent_name, status, input, output, started_at, finished_at, metadata)\nVALUES ($1::uuid, 'agent_iee', 'completed', $2::jsonb, $3::jsonb, now() - interval '2 seconds', now(), $4::jsonb)",
+        "options": {
+          "queryReplacement": "={{ [\n  $('Format Response').first().json.project_id,\n  JSON.stringify({ project_id: $('Format Response').first().json.project_id }),\n  JSON.stringify({ draft_id: $json.id, calificacion_global: $('Format Response').first().json.calificacion_global, recomendaciones_count: $('Format Response').first().json.recomendaciones_count }),\n  JSON.stringify({ request_id: $('Format Response').first().json.request_id, model: $('Format Response').first().json.model, tokens_in: $('Format Response').first().json.tokens_in, tokens_out: $('Format Response').first().json.tokens_out, eu_ai_act: 'asistencia profesional supervisada por tecnico colegiado', citation_source: 'Ley 8/2013 + RD 233/2013' })\n] }}"
+        }
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [2640, 100],
+      "id": "iee-log-exec",
+      "name": "Log Execution",
+      "alwaysOutputData": true,
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({\n  data: {\n    draft_id: $('Insert Draft').first().json.id,\n    project_id: $('Format Response').first().json.project_id,\n    calificacion_global: $('Format Response').first().json.calificacion_global,\n    estado_conservacion: $('Format Response').first().json.estado_conservacion_text,\n    condiciones_accesibilidad: $('Format Response').first().json.condiciones_accesibilidad_text,\n    eficiencia_energetica: $('Format Response').first().json.eficiencia_energetica_text,\n    recomendaciones_count: $('Format Response').first().json.recomendaciones_count,\n    recomendaciones: $('Format Response').first().json.recomendaciones,\n    next_step: 'Revisar draft y aprobar via POST /api/v1/iee/approve con draft_id'\n  },\n  meta: {\n    request_id: $('Format Response').first().json.request_id,\n    model: $('Format Response').first().json.model,\n    tokens_in: $('Format Response').first().json.tokens_in,\n    tokens_out: $('Format Response').first().json.tokens_out,\n    timestamp: new Date().toISOString()\n  }\n}) }}",
+        "options": {
+          "responseCode": 201,
+          "responseHeaders": {
+            "entries": [{ "name": "Cache-Control", "value": "no-cache" }]
+          }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [2880, 100],
+      "id": "iee-respond-201",
+      "name": "Respond 201"
+    }
+  ],
+  "connections": {
+    "POST /iee/generate-draft": { "main": [[{ "node": "Decode JWT + Body", "type": "main", "index": 0 }]] },
+    "Decode JWT + Body": { "main": [[{ "node": "Auth OK?", "type": "main", "index": 0 }]] },
+    "Auth OK?": { "main": [
+      [{ "node": "Respond Error", "type": "main", "index": 0 }],
+      [{ "node": "Load Project + Neighbors", "type": "main", "index": 0 }]
+    ]},
+    "Load Project + Neighbors": { "main": [[{ "node": "Build Context", "type": "main", "index": 0 }]] },
+    "Build Context": { "main": [[{ "node": "Context OK?", "type": "main", "index": 0 }]] },
+    "Context OK?": { "main": [
+      [{ "node": "Respond 422", "type": "main", "index": 0 }],
+      [{ "node": "Build Prompt", "type": "main", "index": 0 }]
+    ]},
+    "Build Prompt": { "main": [[{ "node": "Call LLM", "type": "main", "index": 0 }]] },
+    "Call LLM": { "main": [[{ "node": "Format Response", "type": "main", "index": 0 }]] },
+    "Format Response": { "main": [[{ "node": "Insert Draft", "type": "main", "index": 0 }]] },
+    "Insert Draft": { "main": [[{ "node": "Log Execution", "type": "main", "index": 0 }]] },
+    "Log Execution": { "main": [[{ "node": "Respond 201", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {}
+}

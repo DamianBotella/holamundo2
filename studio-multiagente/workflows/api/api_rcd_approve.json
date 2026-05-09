@@ -1,0 +1,178 @@
+{
+  "name": "api_rcd_approve",
+  "_description": "POST /api/v1/rcd/approve - mueve un rcd_studies_draft (status='draft') a rcd_studies (status='approved'). Marca el draft como superseded. El tecnico firma aqui.",
+  "_status": "B64 (Fase B.2).",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "api/v1/rcd/approve",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "id": "rcdap-webhook",
+      "name": "POST /rcd/approve",
+      "webhookId": "c5d6e7f8-a9b0-4c1d-8e2f-3a4b5c6d7e89"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const auth = $input.first().json.headers?.authorization || '';\nif (!auth.startsWith('Bearer ')) return [{ json: { _error: 'AUTH_MISSING_TOKEN', _status: 401 } }];\nconst token = auth.slice(7);\ntry {\n  const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'));\n  if (!payload.sub) throw new Error('No sub');\n  if (payload.exp && Date.now()/1000 > payload.exp) throw new Error('JWT expired');\n  if (!payload.tenant_id) throw new Error('No tenant_id');\n  const body = $input.first().json.body || {};\n  const draftId = (body.draft_id || '').trim();\n  if (!draftId) return [{ json: { _error: 'VALIDATION_FAILED', _status: 400, _details: 'draft_id requerido' } }];\n  return [{ json: {\n    user_id: payload.sub,\n    tenant_id: payload.tenant_id,\n    role: payload.role || 'architect',\n    draft_id: draftId,\n    request_id: 'req_' + Math.random().toString(36).slice(2, 10)\n  }}];\n} catch (e) {\n  return [{ json: { _error: 'AUTH_INVALID_TOKEN', _status: 401, _details: e.message } }];\n}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 300],
+      "id": "rcdap-decode",
+      "name": "Decode JWT + Body"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict", "version": 2 },
+          "conditions": [
+            { "id": "rcdap-c1", "leftValue": "={{ $json._error }}", "rightValue": "", "operator": { "type": "string", "operation": "exists", "singleValue": true } }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [720, 300],
+      "id": "rcdap-if-auth",
+      "name": "Auth OK?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details || $json._error } }) }}",
+        "options": { "responseCode": "={{ $json._status || 401 }}" }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [960, 460],
+      "id": "rcdap-respond-error",
+      "name": "Respond Error"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT set_session_context($1::uuid, $2::uuid, $3)",
+        "options": { "queryReplacement": "={{ [$json.user_id, $json.tenant_id, $json.role] }}" }
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [960, 200],
+      "id": "rcdap-set-session",
+      "name": "Set Session Context"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH ctx AS (\n  SELECT set_session_context($2::uuid, $3::uuid, $4) AS ok\n),\nd AS (\n  SELECT s.* FROM rcd_studies_draft s, ctx\n  WHERE s.id = $1::uuid AND s.status = 'draft' LIMIT 1\n),\nins AS (\n  INSERT INTO rcd_studies (\n    project_id, tenant_id, tipo_obra, superficie_m2,\n    estimacion_residuos, total_toneladas,\n    plan_gestion, gestores_autorizados, coste_gestion_eur,\n    alertas_peligrosos, draft_content, status, approved_by, approved_at\n  )\n  SELECT project_id, tenant_id, tipo_obra, superficie_m2,\n         estimacion_residuos, total_toneladas,\n         plan_gestion, gestores_autorizados, coste_gestion_eur,\n         alertas_peligrosos, draft_content, 'approved', $2::uuid, now()\n  FROM d\n  RETURNING id, project_id, total_toneladas, approved_at\n),\nupd AS (\n  UPDATE rcd_studies_draft SET status = 'superseded', approved_by = $2::uuid, approved_at = now()\n  WHERE id = $1::uuid AND status = 'draft'\n  RETURNING id\n)\nSELECT ins.id AS final_id, ins.project_id, ins.total_toneladas, ins.approved_at,\n       (SELECT COUNT(*) FROM upd) AS draft_marked_superseded\nFROM ins",
+        "options": {
+          "queryReplacement": "={{ [$('Decode JWT + Body').first().json.draft_id, $('Decode JWT + Body').first().json.user_id, $('Decode JWT + Body').first().json.tenant_id, $('Decode JWT + Body').first().json.role] }}"
+        }
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1200, 200],
+      "id": "rcdap-commit",
+      "name": "Commit Draft to Final",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const result = $input.first()?.json;\nconst sess = $('Decode JWT + Body').first().json;\nif (!result || !result.final_id) {\n  return [{ json: { _error: 'DRAFT_NOT_FOUND_OR_NOT_DRAFT', _status: 404, _details: 'draft_id no existe, ya esta aprobado/rechazado, o sin acceso por RLS' } }];\n}\nreturn [{ json: {\n  user_id: sess.user_id,\n  tenant_id: sess.tenant_id,\n  request_id: sess.request_id,\n  final_id: result.final_id,\n  project_id: result.project_id,\n  total_toneladas: result.total_toneladas ? parseFloat(result.total_toneladas) : null,\n  approved_at: result.approved_at,\n  draft_marked_superseded: result.draft_marked_superseded\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1440, 200],
+      "id": "rcdap-format",
+      "name": "Format Response"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict", "version": 2 },
+          "conditions": [
+            { "id": "rcdap-c2", "leftValue": "={{ $json._error }}", "rightValue": "", "operator": { "type": "string", "operation": "exists", "singleValue": true } }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1680, 200],
+      "id": "rcdap-if-result",
+      "name": "Has final_id?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details } }) }}",
+        "options": { "responseCode": "={{ $json._status || 404 }}" }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1920, 360],
+      "id": "rcdap-respond-404",
+      "name": "Respond 404"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, status, output_summary)\nVALUES ($1::uuid, 'agent_rcd', 'rcd_approved', 'success', $2)",
+        "options": {
+          "queryReplacement": "={{ [$json.project_id, 'Estudio RCD aprobado: ' + $json.total_toneladas + ' Tn (final_id ' + $json.final_id + ')'] }}"
+        }
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1920, 100],
+      "id": "rcdap-log",
+      "name": "Log Activity",
+      "alwaysOutputData": true,
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({\n  data: {\n    final_id: $('Format Response').first().json.final_id,\n    project_id: $('Format Response').first().json.project_id,\n    total_toneladas: $('Format Response').first().json.total_toneladas,\n    approved_at: $('Format Response').first().json.approved_at,\n    status: 'approved'\n  },\n  meta: {\n    request_id: $('Format Response').first().json.request_id,\n    timestamp: new Date().toISOString()\n  }\n}) }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": { "entries": [{ "name": "Cache-Control", "value": "no-cache" }] }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [2160, 100],
+      "id": "rcdap-respond-200",
+      "name": "Respond 200"
+    }
+  ],
+  "connections": {
+    "POST /rcd/approve": { "main": [[{ "node": "Decode JWT + Body", "type": "main", "index": 0 }]] },
+    "Decode JWT + Body": { "main": [[{ "node": "Auth OK?", "type": "main", "index": 0 }]] },
+    "Auth OK?": { "main": [
+      [{ "node": "Respond Error", "type": "main", "index": 0 }],
+      [{ "node": "Set Session Context", "type": "main", "index": 0 }]
+    ]},
+    "Set Session Context": { "main": [[{ "node": "Commit Draft to Final", "type": "main", "index": 0 }]] },
+    "Commit Draft to Final": { "main": [[{ "node": "Format Response", "type": "main", "index": 0 }]] },
+    "Format Response": { "main": [[{ "node": "Has final_id?", "type": "main", "index": 0 }]] },
+    "Has final_id?": { "main": [
+      [{ "node": "Respond 404", "type": "main", "index": 0 }],
+      [{ "node": "Log Activity", "type": "main", "index": 0 }]
+    ]},
+    "Log Activity": { "main": [[{ "node": "Respond 200", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {}
+}

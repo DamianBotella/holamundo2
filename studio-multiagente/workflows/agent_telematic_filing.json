@@ -1,0 +1,178 @@
+{
+  "name": "agent_telematic_filing",
+  "_description": "Fase B.4 plan Opus: Tramitador Digital. Empaqueta expediente para sede electronica. Lee municipal_templates + entregables (iee_reports, rcd_studies). Devuelve checklist + estructura ZIP. PRINCIPIO INMUTABLE Opus #7: NUNCA presenta - el tecnico firma y sube manualmente.",
+  "_status": "B66 (Fase B.4 - cierre Fase B).",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "api/v1/agents/telematic-filing/prepare",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "id": "tf-webhook",
+      "name": "POST /telematic-filing/prepare",
+      "webhookId": "f8a9b0c1-d2e3-4f4a-9b5c-6d7e8f9a0b12"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const auth = $input.first().json.headers?.authorization || '';\nif (!auth.startsWith('Bearer ')) return [{ json: { _error: 'AUTH_MISSING_TOKEN', _status: 401 } }];\nconst token = auth.slice(7);\ntry {\n  const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'));\n  if (!payload.sub) throw new Error('No sub');\n  if (payload.exp && Date.now()/1000 > payload.exp) throw new Error('JWT expired');\n  if (!payload.tenant_id) throw new Error('No tenant_id');\n  const body = $input.first().json.body || {};\n  const projectId = (body.project_id || '').trim();\n  const tipoTramite = (body.tipo_tramite || '').trim();\n  if (!projectId) return [{ json: { _error: 'VALIDATION_FAILED', _status: 400, _details: 'project_id requerido' } }];\n  const validTramites = ['licencia_obra_menor','licencia_obra_mayor','comunicacion_previa','declaracion_responsable','iee','cambio_uso','primera_ocupacion'];\n  if (!tipoTramite || !validTramites.includes(tipoTramite)) {\n    return [{ json: { _error: 'VALIDATION_FAILED', _status: 400, _details: 'tipo_tramite requerido. Valores: ' + validTramites.join(', ') } }];\n  }\n  return [{ json: {\n    user_id: payload.sub,\n    tenant_id: payload.tenant_id,\n    role: payload.role || 'architect',\n    project_id: projectId,\n    tipo_tramite: tipoTramite,\n    municipio_override: body.municipio || null,\n    request_id: 'req_' + Math.random().toString(36).slice(2, 10)\n  }}];\n} catch (e) {\n  return [{ json: { _error: 'AUTH_INVALID_TOKEN', _status: 401, _details: e.message } }];\n}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 300],
+      "id": "tf-decode",
+      "name": "Decode JWT + Body"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict", "version": 2 },
+          "conditions": [
+            { "id": "tf-c1", "leftValue": "={{ $json._error }}", "rightValue": "", "operator": { "type": "string", "operation": "exists", "singleValue": true } }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [720, 300],
+      "id": "tf-if-auth",
+      "name": "Auth OK?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details || $json._error } }) }}",
+        "options": { "responseCode": "={{ $json._status || 401 }}" }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [960, 460],
+      "id": "tf-respond-error",
+      "name": "Respond Error"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH ctx AS (SELECT set_session_context($1::uuid, $2::uuid, $3) AS ok),\np AS (\n  SELECT projects.id AS project_id, projects.name, projects.project_type, projects.location_city, projects.location_province\n  FROM projects, ctx WHERE projects.id = $4::uuid LIMIT 1\n),\nm AS (\n  SELECT mt.* FROM municipal_templates mt, p\n  WHERE LOWER(mt.municipio) = LOWER(COALESCE($5, p.location_city))\n    AND mt.tipo_tramite = $6\n  LIMIT 1\n),\niee AS (\n  SELECT iee_reports.id AS iee_id, iee_reports.calificacion_global, iee_reports.approved_at\n  FROM iee_reports, p\n  WHERE iee_reports.project_id = p.project_id\n  ORDER BY iee_reports.approved_at DESC LIMIT 1\n),\nrcd AS (\n  SELECT rcd_studies.id AS rcd_id, rcd_studies.total_toneladas, rcd_studies.approved_at\n  FROM rcd_studies, p\n  WHERE rcd_studies.project_id = p.project_id\n  ORDER BY rcd_studies.approved_at DESC LIMIT 1\n)\nSELECT\n  (SELECT project_id FROM p) AS project_id,\n  (SELECT name FROM p) AS project_name,\n  (SELECT project_type FROM p) AS project_type,\n  (SELECT location_city FROM p) AS project_city,\n  (SELECT location_province FROM p) AS project_province,\n  (SELECT row_to_json(m) FROM m) AS municipal_template,\n  (SELECT row_to_json(iee) FROM iee) AS iee_data,\n  (SELECT row_to_json(rcd) FROM rcd) AS rcd_data",
+        "options": {
+          "queryReplacement": "={{ [$('Decode JWT + Body').first().json.user_id, $('Decode JWT + Body').first().json.tenant_id, $('Decode JWT + Body').first().json.role, $('Decode JWT + Body').first().json.project_id, $('Decode JWT + Body').first().json.municipio_override, $('Decode JWT + Body').first().json.tipo_tramite] }}"
+        }
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [960, 200],
+      "id": "tf-load",
+      "name": "Load Project + Template + Deliverables",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const row = $input.first()?.json;\nconst sess = $('Decode JWT + Body').first().json;\nif (!row || !row.project_id) {\n  return [{ json: { _error: 'PROJECT_NOT_FOUND', _status: 404, _details: 'project_id no existe o sin acceso por RLS' } }];\n}\nif (!row.municipal_template) {\n  return [{ json: { _error: 'TEMPLATE_NOT_FOUND', _status: 404, _details: 'No hay plantilla en municipal_templates para municipio=' + (sess.municipio_override || row.project_city) + ' tipo_tramite=' + sess.tipo_tramite + '. Anadirla via INSERT en municipal_templates.' } }];\n}\nconst template = row.municipal_template;\nconst docsRequired = template.documentos_requeridos || [];\n\n// Mapear que entregables tenemos disponibles\nconst available = {\n  agent_iee: !!row.iee_data,\n  agent_rcd: !!row.rcd_data\n};\n\n// Para cada doc requerido, verificar disponibilidad\nconst docsValidados = [];\nconst docsFaltantes = [];\nfor (const doc of docsRequired) {\n  const responsable = doc.agente_responsable || 'manual';\n  const auto_disponible = available[responsable] === true;\n  // 'manual' significa que el arquitecto lo aporta a mano - no podemos validar automaticamente\n  const isManual = responsable === 'manual';\n  if (auto_disponible) {\n    docsValidados.push({\n      nombre: doc.nombre,\n      tipo: doc.tipo,\n      origen: 'automatico',\n      agente: responsable,\n      ref_id: responsable === 'agent_iee' ? row.iee_data.iee_id : (responsable === 'agent_rcd' ? row.rcd_data.rcd_id : null)\n    });\n  } else if (isManual) {\n    docsValidados.push({\n      nombre: doc.nombre,\n      tipo: doc.tipo,\n      origen: 'manual',\n      agente: 'manual',\n      observacion: 'Aportado manualmente por el tecnico. No se puede validar automaticamente.'\n    });\n  } else {\n    if (doc.obligatorio) {\n      docsFaltantes.push({\n        nombre: doc.nombre,\n        tipo: doc.tipo,\n        agente_responsable: responsable,\n        criticidad: 'obligatorio',\n        accion: 'Ejecutar ' + responsable + ' para este proyecto y aprobar su draft antes de empaquetar el expediente.'\n      });\n    } else {\n      docsValidados.push({\n        nombre: doc.nombre,\n        tipo: doc.tipo,\n        origen: 'opcional',\n        agente: responsable,\n        observacion: 'Documento opcional no disponible.'\n      });\n    }\n  }\n}\n\nconst estado = docsFaltantes.length === 0 ? 'listo' : 'incompleto';\n\nreturn [{ json: {\n  ...sess,\n  project: {\n    id: row.project_id,\n    name: row.project_name,\n    type: row.project_type,\n    city: row.project_city,\n    province: row.project_province\n  },\n  template: {\n    id: template.id,\n    municipio: template.municipio,\n    tipo_tramite: template.tipo_tramite,\n    formato_expediente: template.formato_expediente,\n    sede_electronica_url: template.sede_electronica_url,\n    tamano_maximo_mb: template.tamano_maximo_mb,\n    formatos_admitidos: template.formatos_admitidos,\n    requiere_firma_digital: template.requiere_firma_digital,\n    notas: template.notas,\n    citation_source: template.citation_source\n  },\n  estado,\n  documentos_validados: docsValidados,\n  documentos_faltantes: docsFaltantes,\n  iee_data: row.iee_data,\n  rcd_data: row.rcd_data\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1200, 200],
+      "id": "tf-validate",
+      "name": "Validate Deliverables"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict", "version": 2 },
+          "conditions": [
+            { "id": "tf-c2", "leftValue": "={{ $json._error }}", "rightValue": "", "operator": { "type": "string", "operation": "exists", "singleValue": true } }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1440, 200],
+      "id": "tf-if-validate",
+      "name": "Has Template?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details } }) }}",
+        "options": { "responseCode": "={{ $json._status || 404 }}" }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1680, 360],
+      "id": "tf-respond-404",
+      "name": "Respond 404"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const ctx = $input.first().json;\n\n// Estructura ZIP propuesta segun formato_expediente del ayuntamiento\nconst zipStructure = {};\nconst sortedDocs = [...ctx.documentos_validados].sort((a, b) => a.nombre.localeCompare(b.nombre));\nlet idx = 0;\nfor (const doc of sortedDocs) {\n  idx++;\n  const slug = doc.nombre.toLowerCase().replace(/[^a-z0-9]+/g, '_').slice(0, 40);\n  const filename = `${String(idx).padStart(2, '0')}_${slug}.${doc.tipo.toLowerCase().replace('/', '_')}`;\n  zipStructure[filename] = {\n    origen: doc.origen,\n    agente: doc.agente,\n    ref_id: doc.ref_id || null,\n    nombre_legal: doc.nombre\n  };\n}\n\n// Checklist pre-firma para el tecnico\nconst checklistPreFirma = [\n  'Verificar que la documentacion lleva la firma digital del tecnico colegiado',\n  'Confirmar que los planos llevan cajetin del estudio con datos del proyecto',\n  'Comprobar que el presupuesto desglosado coincide con el del contrato firmado',\n  'Validar que las dimensiones (m2, m3) coinciden entre memoria y planos',\n  'Pagar las tasas correspondientes antes de presentar (ICIO + tasas urbanisticas)',\n  ctx.template.requiere_firma_digital ? 'Firmar digitalmente cada PDF con certificado FNMT/Camerfirma vigente' : 'Imprimir y firmar manualmente cada documento',\n  'Subir el ZIP completo a ' + ctx.template.sede_electronica_url\n];\n\nconst pesoEstimadoMb = Object.keys(zipStructure).length * 1.5;  // ~1.5 MB por PDF tipico\n\nreturn [{ json: {\n  user_id: ctx.user_id,\n  tenant_id: ctx.tenant_id,\n  project_id: ctx.project.id,\n  request_id: ctx.request_id,\n  estado: ctx.estado,\n  municipio: ctx.template.municipio,\n  tipo_tramite: ctx.template.tipo_tramite,\n  documentos_validados: ctx.documentos_validados,\n  documentos_faltantes: ctx.documentos_faltantes,\n  zip_structure: zipStructure,\n  zip_filename: `expediente_${ctx.project.id.slice(0, 8)}_${ctx.template.municipio.toLowerCase()}_${ctx.template.tipo_tramite}.zip`,\n  peso_estimado_mb: pesoEstimadoMb,\n  alertas_formato: pesoEstimadoMb > ctx.template.tamano_maximo_mb ? ['Peso estimado (' + pesoEstimadoMb + ' MB) supera el maximo del ayuntamiento (' + ctx.template.tamano_maximo_mb + ' MB). Comprimir o dividir en envios.'] : [],\n  checklist_pre_firma: checklistPreFirma,\n  url_sede_electronica: ctx.template.sede_electronica_url,\n  citation_source: ctx.template.citation_source,\n  notas_municipio: ctx.template.notas,\n  iee_disponible: !!ctx.iee_data,\n  rcd_disponible: !!ctx.rcd_data\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1680, 100],
+      "id": "tf-build-package",
+      "name": "Build Package Manifest"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO agent_executions (project_id, agent_name, status, input, output, started_at, finished_at, metadata)\nVALUES ($1::uuid, 'agent_telematic_filing', 'completed', $2::jsonb, $3::jsonb, now() - interval '1 second', now(), $4::jsonb)",
+        "options": {
+          "queryReplacement": "={{ [\n  $json.project_id,\n  JSON.stringify({ project_id: $json.project_id, municipio: $json.municipio, tipo_tramite: $json.tipo_tramite }),\n  JSON.stringify({ estado: $json.estado, docs_validados_count: $json.documentos_validados.length, docs_faltantes_count: $json.documentos_faltantes.length, peso_estimado_mb: $json.peso_estimado_mb }),\n  JSON.stringify({ request_id: $json.request_id, eu_ai_act: 'asistencia profesional supervisada por tecnico colegiado', principio_inmutable: 'NUNCA auto-presenta a sede electronica - el tecnico firma y sube manualmente', citation_source: $json.citation_source })\n] }}"
+        }
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1920, 100],
+      "id": "tf-log",
+      "name": "Log Execution",
+      "alwaysOutputData": true,
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({\n  data: {\n    project_id: $('Build Package Manifest').first().json.project_id,\n    estado: $('Build Package Manifest').first().json.estado,\n    municipio: $('Build Package Manifest').first().json.municipio,\n    tipo_tramite: $('Build Package Manifest').first().json.tipo_tramite,\n    documentos_validados: $('Build Package Manifest').first().json.documentos_validados,\n    documentos_faltantes: $('Build Package Manifest').first().json.documentos_faltantes,\n    estructura_zip: $('Build Package Manifest').first().json.zip_structure,\n    zip_filename: $('Build Package Manifest').first().json.zip_filename,\n    peso_estimado_mb: $('Build Package Manifest').first().json.peso_estimado_mb,\n    alertas_formato: $('Build Package Manifest').first().json.alertas_formato,\n    checklist_pre_firma: $('Build Package Manifest').first().json.checklist_pre_firma,\n    url_sede_electronica: $('Build Package Manifest').first().json.url_sede_electronica,\n    notas_municipio: $('Build Package Manifest').first().json.notas_municipio,\n    siguiente_accion: $('Build Package Manifest').first().json.estado === 'listo' ? 'El tecnico debe revisar, firmar digitalmente y subir manualmente el ZIP a la sede electronica. ArquitAI nunca auto-presenta.' : 'Faltan ' + $('Build Package Manifest').first().json.documentos_faltantes.length + ' entregables obligatorios. Ejecutar agentes responsables y aprobar drafts antes de empaquetar.'\n  },\n  meta: {\n    request_id: $('Build Package Manifest').first().json.request_id,\n    timestamp: new Date().toISOString(),\n    principio_inmutable: 'ArquitAI NUNCA auto-presenta a sedes electronicas. El tecnico colegiado siempre firma y sube manualmente.'\n  }\n}) }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [{ "name": "Cache-Control", "value": "no-cache" }]
+          }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [2160, 100],
+      "id": "tf-respond-200",
+      "name": "Respond 200"
+    }
+  ],
+  "connections": {
+    "POST /telematic-filing/prepare": { "main": [[{ "node": "Decode JWT + Body", "type": "main", "index": 0 }]] },
+    "Decode JWT + Body": { "main": [[{ "node": "Auth OK?", "type": "main", "index": 0 }]] },
+    "Auth OK?": { "main": [
+      [{ "node": "Respond Error", "type": "main", "index": 0 }],
+      [{ "node": "Load Project + Template + Deliverables", "type": "main", "index": 0 }]
+    ]},
+    "Load Project + Template + Deliverables": { "main": [[{ "node": "Validate Deliverables", "type": "main", "index": 0 }]] },
+    "Validate Deliverables": { "main": [[{ "node": "Has Template?", "type": "main", "index": 0 }]] },
+    "Has Template?": { "main": [
+      [{ "node": "Respond 404", "type": "main", "index": 0 }],
+      [{ "node": "Build Package Manifest", "type": "main", "index": 0 }]
+    ]},
+    "Build Package Manifest": { "main": [[{ "node": "Log Execution", "type": "main", "index": 0 }]] },
+    "Log Execution": { "main": [[{ "node": "Respond 200", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {}
+}

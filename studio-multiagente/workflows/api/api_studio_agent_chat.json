@@ -1,0 +1,249 @@
+{
+  "name": "api_studio_agent_chat",
+  "_description": "POST /api/v1/studio/agent-chat - Chat con agente. B61 (A.4): persistencia BD + carga historico + project_id opcional para contexto.",
+  "_status": "B61 (Fase A.4 plan Opus). Workflow id zjbVC1p7tW5MTJ6g (existente, modificado).",
+  "nodes": [
+    {
+      "id": "ach-001",
+      "name": "POST /studio/agent-chat",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "api/v1/studio/agent-chat",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "webhookId": "81316863-15db-4aba-a004-be855665dd05"
+    },
+    {
+      "id": "ach-decode",
+      "name": "Decode JWT + Body",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 300],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const auth = $input.first().json.headers?.authorization || '';\nif (!auth.startsWith('Bearer ')) return [{ json: { _error: 'AUTH_MISSING_TOKEN', _status: 401 } }];\nconst token = auth.slice(7);\ntry {\n  const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'));\n  if (!payload.sub) throw new Error('No sub');\n  if (payload.exp && Date.now()/1000 > payload.exp) throw new Error('JWT expired');\n  if (!payload.tenant_id) throw new Error('No tenant_id');\n  const body = $input.first().json.body || {};\n  const agentName = (body.agent_name || '').trim();\n  const message = (body.message || '').trim();\n  if (!agentName) return [{ json: { _error: 'VALIDATION_FAILED', _status: 400, _details: 'agent_name requerido' } }];\n  if (!message) return [{ json: { _error: 'VALIDATION_FAILED', _status: 400, _details: 'message requerido' } }];\n  if (message.length > 2000) return [{ json: { _error: 'VALIDATION_FAILED', _status: 400, _details: 'message > 2000 chars' } }];\n  const projectId = body.project_id ? String(body.project_id).trim() : null;\n  return [{ json: {\n    user_id: payload.sub,\n    tenant_id: payload.tenant_id,\n    role: payload.role || 'architect',\n    full_name: payload.full_name || 'arquitecto',\n    agent_name: agentName,\n    message,\n    project_id: projectId,\n    request_id: 'req_' + Math.random().toString(36).slice(2, 10)\n  }}];\n} catch (e) {\n  return [{ json: { _error: 'AUTH_INVALID_TOKEN', _status: 401, _details: e.message } }];\n}"
+      }
+    },
+    {
+      "id": "ach-if-auth",
+      "name": "Auth+Validation OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [720, 300],
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict", "version": 2 },
+          "conditions": [
+            { "id": "ach-c1", "leftValue": "={{ $json._error }}", "rightValue": "", "operator": { "type": "string", "operation": "exists", "singleValue": true } }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "ach-respond-error",
+      "name": "Respond Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [960, 460],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details || $json._error, request_id: 'req_' + Date.now() } }) }}",
+        "options": { "responseCode": "={{ $json._status || 400 }}" }
+      }
+    },
+    {
+      "id": "ach-set-session",
+      "name": "Set Session Context",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [960, 200],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT set_session_context($1::uuid, $2::uuid, $3)",
+        "options": { "queryReplacement": "={{ [$json.user_id, $json.tenant_id, $json.role] }}" }
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } }
+    },
+    {
+      "id": "ach-load-history",
+      "name": "Load History",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1200, 100],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT role, content, created_at FROM agent_conversations\nWHERE agent_name = $1\n  AND ($2::uuid IS NULL OR project_id = $2::uuid)\nORDER BY created_at DESC\nLIMIT 10",
+        "options": { "queryReplacement": "={{ [$('Decode JWT + Body').first().json.agent_name, $('Decode JWT + Body').first().json.project_id] }}"
+        }
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "alwaysOutputData": true
+    },
+    {
+      "id": "ach-load-agent",
+      "name": "Load agent info",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1440, 100],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT agent_name, display_name, category, room_id, description FROM agents_catalog WHERE agent_name = $1 LIMIT 1",
+        "options": { "queryReplacement": "={{ [$('Decode JWT + Body').first().json.agent_name] }}" }
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "alwaysOutputData": true
+    },
+    {
+      "id": "ach-build-prompt",
+      "name": "Build prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1680, 100],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const agent = $input.first()?.json;\nconst sess = $('Decode JWT + Body').first().json;\nif (!agent || !agent.agent_name) {\n  return [{ json: { _error: 'AGENT_NOT_FOUND', _status: 404, _details: 'agente no existe en agents_catalog' } }];\n}\n// Load History devuelve filas DESC; reordenar a cronologico ascendente\nconst histRows = $('Load History').all().map(i => i.json).filter(r => r.role && r.content);\nconst history = histRows.reverse();\n\nconst projectCtx = sess.project_id ? `\\nContexto: proyecto activo id=${sess.project_id}.` : '';\nconst systemPrompt = `Eres ${agent.display_name}, un agente del estudio de arquitectura tecnica ArquitAI.\\nTu rol: ${agent.description || agent.agent_name}.\\nCategoria: ${agent.category}. Habitacion: ${agent.room_id}.${projectCtx}\\n\\nEl arquitecto (${sess.full_name}) te esta hablando directamente desde el panel del estudio.\\nResponde de forma breve y profesional (3-5 frases max). Usa tono colaborativo, primera persona.\\nSi te piden algo fuera de tu rol, recomienda al agente correcto. No inventes datos: si no sabes, di que necesitas mas contexto.`;\n\nconst messages = [{ role: 'system', content: systemPrompt }];\nfor (const h of history) {\n  messages.push({ role: h.role === 'agent' ? 'assistant' : 'user', content: h.content });\n}\nmessages.push({ role: 'user', content: sess.message });\n\nreturn [{ json: {\n  ...sess,\n  agent: {\n    agent_name: agent.agent_name,\n    display_name: agent.display_name,\n    category: agent.category,\n    room_id: agent.room_id,\n    description: agent.description\n  },\n  history_count: history.length,\n  llm_payload: {\n    model: 'gpt-4o-mini',\n    messages,\n    temperature: 0.4,\n    max_tokens: 350\n  }\n}}];"
+      }
+    },
+    {
+      "id": "ach-if-found",
+      "name": "Agent found?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1920, 100],
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict", "version": 2 },
+          "conditions": [
+            { "id": "ach-c2", "leftValue": "={{ $json._error }}", "rightValue": "", "operator": { "type": "string", "operation": "exists", "singleValue": true } }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "ach-respond-404",
+      "name": "Respond 404",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [2160, 260],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details, request_id: 'req_' + Date.now() } }) }}",
+        "options": { "responseCode": "={{ $json._status || 404 }}" }
+      }
+    },
+    {
+      "id": "ach-llm",
+      "name": "Call LLM",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2160, 0],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Content-Type", "value": "application/json" }]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.llm_payload) }}",
+        "options": { "timeout": 30000 }
+      },
+      "credentials": { "httpHeaderAuth": { "id": "gE1jXO133xEHS5JJ", "name": "orquestador ArquiAI" } }
+    },
+    {
+      "id": "ach-format",
+      "name": "Format Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2400, 0],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const llm = $input.first()?.json;\nconst sess = $('Decode JWT + Body').first().json;\nconst built = $('Build prompt').first().json;\nconst agent = built.agent;\nconst content = llm?.choices?.[0]?.message?.content || '(sin respuesta)';\nconst usage = llm?.usage || {};\nreturn [{ json: {\n  user_id: sess.user_id,\n  tenant_id: sess.tenant_id,\n  agent_name: agent.agent_name,\n  display_name: agent.display_name,\n  project_id: sess.project_id,\n  user_message: sess.message,\n  agent_response: content.trim(),\n  request_id: sess.request_id,\n  model: llm?.model || 'gpt-4o-mini',\n  tokens_in: usage.prompt_tokens || 0,\n  tokens_out: usage.completion_tokens || 0,\n  history_count: built.history_count || 0\n}}];"
+      }
+    },
+    {
+      "id": "ach-persist-user",
+      "name": "Persist User Msg",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [2640, 0],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO agent_conversations (tenant_id, project_id, agent_name, user_id, role, content)\nVALUES ($1::uuid, NULLIF($2, '')::uuid, $3, $4::uuid, 'user', $5)",
+        "options": {
+          "queryReplacement": "={{ [$json.tenant_id, $json.project_id || '', $json.agent_name, $json.user_id, $json.user_message] }}"
+        }
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "continueOnFail": true,
+      "alwaysOutputData": true
+    },
+    {
+      "id": "ach-persist-agent",
+      "name": "Persist Agent Msg",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [2880, 0],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO agent_conversations (tenant_id, project_id, agent_name, user_id, role, content, metadata)\nVALUES ($1::uuid, NULLIF($2, '')::uuid, $3, $4::uuid, 'agent', $5, $6::jsonb)",
+        "options": {
+          "queryReplacement": "={{ [$('Format Response').first().json.tenant_id, $('Format Response').first().json.project_id || '', $('Format Response').first().json.agent_name, $('Format Response').first().json.user_id, $('Format Response').first().json.agent_response, JSON.stringify({ model: $('Format Response').first().json.model, tokens_in: $('Format Response').first().json.tokens_in, tokens_out: $('Format Response').first().json.tokens_out, history_count: $('Format Response').first().json.history_count }) ] }}"
+        }
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "continueOnFail": true,
+      "alwaysOutputData": true
+    },
+    {
+      "id": "ach-respond-200",
+      "name": "Respond 200",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [3120, 0],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({\n  data: {\n    agent_name: $('Format Response').first().json.agent_name,\n    display_name: $('Format Response').first().json.display_name,\n    response: $('Format Response').first().json.agent_response,\n    timestamp: new Date().toISOString()\n  },\n  meta: {\n    request_id: $('Format Response').first().json.request_id,\n    model: $('Format Response').first().json.model,\n    tokens_in: $('Format Response').first().json.tokens_in,\n    tokens_out: $('Format Response').first().json.tokens_out,\n    history_count: $('Format Response').first().json.history_count\n  }\n}) }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [{ "name": "Cache-Control", "value": "no-cache" }]
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "POST /studio/agent-chat": { "main": [[{ "node": "Decode JWT + Body", "type": "main", "index": 0 }]] },
+    "Decode JWT + Body": { "main": [[{ "node": "Auth+Validation OK?", "type": "main", "index": 0 }]] },
+    "Auth+Validation OK?": { "main": [
+      [{ "node": "Respond Error", "type": "main", "index": 0 }],
+      [{ "node": "Set Session Context", "type": "main", "index": 0 }]
+    ]},
+    "Set Session Context": { "main": [[{ "node": "Load History", "type": "main", "index": 0 }]] },
+    "Load History": { "main": [[{ "node": "Load agent info", "type": "main", "index": 0 }]] },
+    "Load agent info": { "main": [[{ "node": "Build prompt", "type": "main", "index": 0 }]] },
+    "Build prompt": { "main": [[{ "node": "Agent found?", "type": "main", "index": 0 }]] },
+    "Agent found?": { "main": [
+      [{ "node": "Respond 404", "type": "main", "index": 0 }],
+      [{ "node": "Call LLM", "type": "main", "index": 0 }]
+    ]},
+    "Call LLM": { "main": [[{ "node": "Format Response", "type": "main", "index": 0 }]] },
+    "Format Response": { "main": [[{ "node": "Persist User Msg", "type": "main", "index": 0 }]] },
+    "Persist User Msg": { "main": [[{ "node": "Persist Agent Msg", "type": "main", "index": 0 }]] },
+    "Persist Agent Msg": { "main": [[{ "node": "Respond 200", "type": "main", "index": 0 }]] }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

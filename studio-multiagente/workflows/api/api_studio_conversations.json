@@ -1,0 +1,144 @@
+{
+  "name": "api_studio_conversations",
+  "_description": "GET /api/v1/studio/conversations?agent_name=...&project_id=...&limit=N - Devuelve historial persistido del chat con un agente. Filtrado por tenant (RLS) y opcionalmente por proyecto.",
+  "_status": "B61 (Fase A.4 plan Opus).",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "api/v1/studio/conversations",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "id": "api-conv-webhook",
+      "name": "GET /studio/conversations",
+      "webhookId": "8f3a92c1-2b04-4e7d-a1e3-c52ad4e78f99"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const auth = $input.first().json.headers?.authorization || '';\nif (!auth.startsWith('Bearer ')) {\n  return [{ json: { _error: 'AUTH_MISSING_TOKEN', _status: 401 } }];\n}\nconst token = auth.slice(7);\ntry {\n  const parts = token.split('.');\n  if (parts.length !== 3) throw new Error('JWT malformed');\n  const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));\n  if (!payload.sub) throw new Error('No sub claim');\n  if (payload.exp && Date.now()/1000 > payload.exp) throw new Error('JWT expired');\n  if (!payload.tenant_id) throw new Error('No tenant_id claim');\n\n  const q = $input.first().json.query || {};\n  const agentName = (q.agent_name || '').trim();\n  if (!agentName) {\n    return [{ json: { _error: 'VALIDATION_MISSING_AGENT', _status: 400, _details: 'agent_name query param is required' } }];\n  }\n  const projectId = q.project_id ? String(q.project_id).trim() : null;\n  let limit = parseInt(q.limit, 10);\n  if (!Number.isFinite(limit) || limit <= 0) limit = 20;\n  if (limit > 100) limit = 100;\n\n  return [{ json: {\n    user_id: payload.sub,\n    tenant_id: payload.tenant_id,\n    role: payload.role || 'architect',\n    request_id: 'req_' + Math.random().toString(36).slice(2, 10),\n    agent_name: agentName,\n    project_id: projectId,\n    limit\n  }}];\n} catch (e) {\n  return [{ json: { _error: 'AUTH_INVALID_TOKEN', _status: 401, _details: e.message } }];\n}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 300],
+      "id": "api-conv-decode",
+      "name": "Decode JWT + Query"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "check-auth",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": "",
+              "operator": { "type": "string", "operation": "exists" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [720, 300],
+      "id": "api-conv-if-error",
+      "name": "Auth OK?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details || $json._error } }) }}",
+        "options": { "responseCode": "={{ $json._status || 401 }}" }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [960, 460],
+      "id": "api-conv-respond-error",
+      "name": "Respond Error"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT set_session_context($1::uuid, $2::uuid, $3)",
+        "options": {
+          "queryReplacement": "={{ [$json.user_id, $json.tenant_id, $json.role] }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [960, 200],
+      "id": "api-conv-set-session",
+      "name": "Set Session Context"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, role, content, agent_name, project_id, created_at\nFROM agent_conversations\nWHERE agent_name = $1\n  AND ($2::uuid IS NULL OR project_id = $2::uuid)\nORDER BY created_at DESC\nLIMIT $3::integer",
+        "options": {
+          "queryReplacement": "={{ [$('Decode JWT + Query').first().json.agent_name, $('Decode JWT + Query').first().json.project_id, $('Decode JWT + Query').first().json.limit] }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1200, 200],
+      "id": "api-conv-load",
+      "name": "Load History"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const sess = $('Decode JWT + Query').first().json;\nconst rows = $input.all().map(i => i.json);\n// La query ordena DESC para respetar el LIMIT (mas recientes), pero el frontend\n// quiere mostrar cronologico ascendente.\nconst messages = rows.reverse().map(r => ({\n  id: r.id,\n  role: r.role,\n  text: r.content,\n  agent_name: r.agent_name,\n  project_id: r.project_id,\n  timestamp: r.created_at\n}));\nreturn [{ json: {\n  data: {\n    agent_name: sess.agent_name,\n    project_id: sess.project_id,\n    count: messages.length,\n    messages\n  },\n  meta: {\n    request_id: sess.request_id,\n    timestamp: new Date().toISOString()\n  }\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1440, 200],
+      "id": "api-conv-format",
+      "name": "Format Response"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              { "name": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }
+            ]
+          }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1680, 200],
+      "id": "api-conv-respond-200",
+      "name": "Respond 200"
+    }
+  ],
+  "connections": {
+    "GET /studio/conversations": { "main": [[{ "node": "Decode JWT + Query", "type": "main", "index": 0 }]] },
+    "Decode JWT + Query": { "main": [[{ "node": "Auth OK?", "type": "main", "index": 0 }]] },
+    "Auth OK?": { "main": [
+      [{ "node": "Respond Error", "type": "main", "index": 0 }],
+      [{ "node": "Set Session Context", "type": "main", "index": 0 }]
+    ]},
+    "Set Session Context": { "main": [[{ "node": "Load History", "type": "main", "index": 0 }]] },
+    "Load History": { "main": [[{ "node": "Format Response", "type": "main", "index": 0 }]] },
+    "Format Response": { "main": [[{ "node": "Respond 200", "type": "main", "index": 0 }]] }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

@@ -138,6 +138,23 @@ export interface AgentChatResponse {
   timestamp: string;
 }
 
+// B61 (A.4) — chat persistido en agent_conversations
+export interface ConversationMessage {
+  id: string;
+  role: 'user' | 'agent';
+  text: string;
+  agent_name: string;
+  project_id: string | null;
+  timestamp: string;
+}
+
+export interface ConversationHistoryResponse {
+  agent_name: string;
+  project_id: string | null;
+  count: number;
+  messages: ConversationMessage[];
+}
+
 // B60 — Wizard Nuevo Proyecto (POST /api/v1/projects/create)
 export type ProjectType =
   | 'reforma_integral'

@@ -11,6 +11,7 @@ import type {
   AgentChatResponse,
   CreateProjectPayload,
   CreateProjectResponse,
+  ConversationHistoryResponse,
 } from './types';
 import { mockProfile, mockProjects, mockMetrics, mockAlerts } from './mock-data';
 import { getAccessToken } from './session';
@@ -194,12 +195,36 @@ export const api = {
     return r.data;
   },
 
-  agentChat: async (agentName: string, message: string): Promise<AgentChatResponse> => {
+  agentChat: async (
+    agentName: string,
+    message: string,
+    projectId?: string | null,
+  ): Promise<AgentChatResponse> => {
     const r = await fetchAPI<EnvelopeResponse<AgentChatResponse>>(
       '/studio/agent-chat',
       {
         method: 'POST',
-        body: JSON.stringify({ agent_name: agentName, message }),
+        body: JSON.stringify({
+          agent_name: agentName,
+          message,
+          ...(projectId ? { project_id: projectId } : {}),
+        }),
+      },
+    );
+    return r.data;
+  },
+
+  agentConversation: async (
+    agentName: string,
+    projectId?: string | null,
+    limit = 30,
+  ): Promise<ConversationHistoryResponse> => {
+    const qs = new URLSearchParams({ agent_name: agentName, limit: String(limit) });
+    if (projectId) qs.set('project_id', projectId);
+    const r = await fetchAPI<EnvelopeResponse<ConversationHistoryResponse>>(
+      `/studio/conversations?${qs.toString()}`,
+      {
+        headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' },
       },
     );
     return r.data;

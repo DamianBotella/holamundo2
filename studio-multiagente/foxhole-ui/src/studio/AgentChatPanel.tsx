@@ -40,7 +40,14 @@ export function AgentChatPanel({ agent }: Props) {
 }
 
 function AgentDetailWithChat({ agent }: { agent: StudioAgent }) {
-  const { messages, sendMessage, isSending, error } = useAgentChat(agent.agent_name);
+  const {
+    messages,
+    sendMessage,
+    isSending,
+    isLoadingHistory,
+    error,
+    historyCount,
+  } = useAgentChat(agent.agent_name);
   const [draft, setDraft] = useState('');
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
@@ -49,7 +56,7 @@ function AgentDetailWithChat({ agent }: { agent: StudioAgent }) {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [messages.length, isSending]);
+  }, [messages.length, isSending, isLoadingHistory]);
 
   const onSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -97,13 +104,26 @@ function AgentDetailWithChat({ agent }: { agent: StudioAgent }) {
 
       {/* Chat */}
       <div className="border-t border-foxhole-border pt-2 flex flex-col flex-1 min-h-0">
-        <h3 className="foxhole-stencil text-[10px] mb-1.5 flex-shrink-0">Comunicacion</h3>
+        <div className="flex justify-between items-baseline mb-1.5 flex-shrink-0">
+          <h3 className="foxhole-stencil text-[10px]">Comunicacion</h3>
+          {historyCount > 0 && (
+            <span className="text-[9px] font-mono text-foxhole-muted">
+              {historyCount} mensajes archivados
+            </span>
+          )}
+        </div>
 
         <div
           ref={scrollRef}
           className="flex flex-col gap-1.5 overflow-y-auto flex-1 min-h-0 pr-1 -mr-1"
         >
-          {messages.length === 0 && !isSending && (
+          {isLoadingHistory && messages.length === 0 && (
+            <div className="flex items-center gap-1.5 text-[10px] text-foxhole-muted italic px-1">
+              <Loader2 className="w-3 h-3 animate-spin" />
+              cargando historial...
+            </div>
+          )}
+          {!isLoadingHistory && messages.length === 0 && !isSending && (
             <p className="text-[11px] text-foxhole-muted italic">
               Pregunta a {agent.display_name} sobre su trabajo, decisiones o contexto.
             </p>

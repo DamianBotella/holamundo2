@@ -1,0 +1,289 @@
+{
+  "name": "agent_grants_finder",
+  "_description": "Fase B.1 plan Opus: matching subvenciones publicas para un proyecto. Invocado por main_orchestrator via webhook con project_id. Devuelve top 5 con calculo ahorro, docs requeridos y plazos.",
+  "_status": "B63 (Fase B.1).",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "api/v1/agents/grants-finder/analyze",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "id": "agf-webhook",
+      "name": "POST /grants-finder/analyze",
+      "webhookId": "a3f4b5c6-d7e8-4f90-8a1b-2c3d4e5f6789"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const auth = $input.first().json.headers?.authorization || '';\nif (!auth.startsWith('Bearer ')) return [{ json: { _error: 'AUTH_MISSING_TOKEN', _status: 401 } }];\nconst token = auth.slice(7);\ntry {\n  const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'));\n  if (!payload.sub) throw new Error('No sub');\n  if (payload.exp && Date.now()/1000 > payload.exp) throw new Error('JWT expired');\n  if (!payload.tenant_id) throw new Error('No tenant_id');\n  const body = $input.first().json.body || {};\n  const projectId = (body.project_id || '').trim();\n  if (!projectId) return [{ json: { _error: 'VALIDATION_FAILED', _status: 400, _details: 'project_id requerido' } }];\n  return [{ json: {\n    user_id: payload.sub,\n    tenant_id: payload.tenant_id,\n    role: payload.role || 'architect',\n    project_id: projectId,\n    user_message: body.user_message || null,\n    request_id: 'req_' + Math.random().toString(36).slice(2, 10)\n  }}];\n} catch (e) {\n  return [{ json: { _error: 'AUTH_INVALID_TOKEN', _status: 401, _details: e.message } }];\n}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 300],
+      "id": "agf-decode",
+      "name": "Decode JWT + Body"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict", "version": 2 },
+          "conditions": [
+            { "id": "agf-c1", "leftValue": "={{ $json._error }}", "rightValue": "", "operator": { "type": "string", "operation": "exists", "singleValue": true } }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [720, 300],
+      "id": "agf-if-auth",
+      "name": "Auth OK?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details || $json._error } }) }}",
+        "options": { "responseCode": "={{ $json._status || 401 }}" }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [960, 460],
+      "id": "agf-respond-error",
+      "name": "Respond Error"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT set_session_context($1::uuid, $2::uuid, $3)",
+        "options": { "queryReplacement": "={{ [$json.user_id, $json.tenant_id, $json.role] }}" }
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [960, 200],
+      "id": "agf-set-session",
+      "name": "Set Session Context"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, name, project_type, location_province, location_city,\n       property_type, property_area_m2, budget_target, urgency,\n       metadata->>'notes' AS notes,\n       (metadata->>'edad_edificio')::int AS edad_edificio\nFROM projects WHERE id = $1::uuid LIMIT 1",
+        "options": { "queryReplacement": "={{ [$('Decode JWT + Body').first().json.project_id] }}" }
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1200, 200],
+      "id": "agf-load-project",
+      "name": "Load Project",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const project = $input.first()?.json;\nconst sess = $('Decode JWT + Body').first().json;\nif (!project || !project.id) {\n  return [{ json: { _error: 'PROJECT_NOT_FOUND', _status: 404, _details: 'project_id no existe o sin acceso por RLS' } }];\n}\n// Mapeo project_type -> tipos de subvencion candidatos\nconst typeMap = {\n  reforma_integral: ['rehabilitacion','eficiencia_energetica','accesibilidad'],\n  redistribucion:   ['rehabilitacion','accesibilidad'],\n  cambio_uso:       ['rehabilitacion'],\n  adecuacion:       ['rehabilitacion','accesibilidad','eficiencia_energetica'],\n  apoyo_tecnico:    ['rehabilitacion','accesibilidad'],\n  otro:             ['rehabilitacion','eficiencia_energetica','accesibilidad','obra_nueva']\n};\nconst tiposAplicables = typeMap[project.project_type] || ['rehabilitacion'];\nreturn [{ json: {\n  ...sess,\n  project: {\n    id: project.id,\n    name: project.name,\n    project_type: project.project_type,\n    location_province: project.location_province,\n    location_city: project.location_city,\n    property_type: project.property_type,\n    property_area_m2: project.property_area_m2 ? parseFloat(project.property_area_m2) : null,\n    budget_target: project.budget_target ? parseFloat(project.budget_target) : null,\n    urgency: project.urgency,\n    notes: project.notes,\n    edad_edificio: project.edad_edificio\n  },\n  tipos_aplicables: tiposAplicables\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1440, 200],
+      "id": "agf-build-context",
+      "name": "Build Context"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict", "version": 2 },
+          "conditions": [
+            { "id": "agf-c2", "leftValue": "={{ $json._error }}", "rightValue": "", "operator": { "type": "string", "operation": "exists", "singleValue": true } }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1680, 200],
+      "id": "agf-if-project",
+      "name": "Project OK?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details } }) }}",
+        "options": { "responseCode": "={{ $json._status || 404 }}" }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1920, 360],
+      "id": "agf-respond-404",
+      "name": "Respond 404"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, nombre, organismo, ambito, comunidad_autonoma, tipo,\n       importe_maximo, porcentaje_maximo, fecha_apertura, fecha_cierre,\n       url_convocatoria, requisitos, documentacion_requerida,\n       compatible_con_otras, normativa_confidence, citation_source\nFROM grants_active\nWHERE active = true\n  AND (fecha_cierre IS NULL OR fecha_cierre > now())\n  AND tipo = ANY($1::text[])\n  AND (\n    ambito IN ('estatal','europeo')\n    OR comunidad_autonoma IS NULL\n    OR comunidad_autonoma ILIKE '%' || $2 || '%'\n  )\nORDER BY\n  CASE WHEN ambito = 'estatal' THEN 1 WHEN ambito = 'autonomico' THEN 2 ELSE 3 END,\n  COALESCE(importe_maximo, 0) DESC\nLIMIT 30",
+        "options": {
+          "queryReplacement": "={{ [JSON.stringify($json.tipos_aplicables), $json.project.location_province || ''] }}"
+        }
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1920, 100],
+      "id": "agf-load-grants",
+      "name": "Load Candidate Grants",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT directiva, contexto, prioridad FROM architect_directives\nWHERE activa = true\n  AND categoria IN ('normativa','presupuesto')\nORDER BY prioridad DESC LIMIT 10",
+        "options": {}
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [2160, 100],
+      "id": "agf-load-directives",
+      "name": "Load Directives",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const ctx = $('Build Context').first().json;\nconst project = ctx.project;\nconst grantsRows = $('Load Candidate Grants').all().map(i => i.json).filter(g => g && g.id);\nconst directivesRows = $input.all().map(i => i.json).filter(d => d && d.directiva);\n\nif (grantsRows.length === 0) {\n  return [{ json: {\n    _no_grants: true,\n    user_id: ctx.user_id,\n    tenant_id: ctx.tenant_id,\n    project_id: project.id,\n    request_id: ctx.request_id\n  }}];\n}\n\n// Construir lista compacta de subvenciones para el LLM\nconst grantsList = grantsRows.map(g => ({\n  grant_id: g.id,\n  nombre: g.nombre,\n  organismo: g.organismo,\n  ambito: g.ambito,\n  comunidad_autonoma: g.comunidad_autonoma,\n  tipo: g.tipo,\n  importe_maximo_eur: g.importe_maximo ? parseFloat(g.importe_maximo) : null,\n  porcentaje_maximo: g.porcentaje_maximo ? parseFloat(g.porcentaje_maximo) : null,\n  fecha_cierre: g.fecha_cierre,\n  url: g.url_convocatoria,\n  requisitos: g.requisitos,\n  documentacion_requerida: g.documentacion_requerida,\n  compatible_con_otras: g.compatible_con_otras,\n  normativa_confidence: g.normativa_confidence ? parseFloat(g.normativa_confidence) : null,\n  citation_source: g.citation_source\n}));\n\nconst directivesText = directivesRows.length\n  ? directivesRows.map(d => `- (${d.prioridad}) ${d.directiva}${d.contexto ? ' [' + d.contexto + ']' : ''}`).join('\\n')\n  : '(sin directivas activas en categoria normativa/presupuesto)';\n\nconst systemPrompt = `Eres agent_grants_finder, especialista en subvenciones publicas espanolas para reforma y rehabilitacion residencial.\\n\\nREGLAS DE ORO:\\n- NUNCA inventes una subvencion que no este en la lista que te he dado.\\n- Si una subvencion no encaja claramente, NO la incluyas (mejor 3 buenas que 5 dudosas).\\n- normativa_confidence < 0.7 -> marca la recomendacion como verificar manualmente con el organismo.\\n- El arquitecto firma. Tu propones.\\n- DEVUELVE SOLO JSON valido, sin texto fuera del JSON.`;\n\nconst userPrompt = `CONTEXTO DEL PROYECTO:\\n- Nombre: ${project.name}\\n- Tipo de obra: ${project.project_type}\\n- Superficie: ${project.property_area_m2 ?? '?'} m2\\n- Tipo inmueble: ${project.property_type ?? '?'}\\n- Ubicacion: ${project.location_city ?? '?'}, ${project.location_province ?? '?'}\\n- Presupuesto estimado: ${project.budget_target ?? '?'} EUR\\n- Edad del edificio: ${project.edad_edificio ?? 'desconocida'} anos\\n- Notas arquitecto: ${project.notes ? project.notes.slice(0, 500) : '(sin notas)'}\\n\\nSUBVENCIONES ACTIVAS DISPONIBLES (${grantsList.length}):\\n${JSON.stringify(grantsList, null, 2)}\\n\\nDIRECTIVAS DEL ESTUDIO (categoria normativa/presupuesto):\\n${directivesText}\\n\\nTAREA:\\n1. Identifica el TOP 5 de subvenciones aplicables a este proyecto, ordenadas por importe potencial × probabilidad de obtencion.\\n2. Para cada subvencion, calcula el AHORRO ESTIMADO en EUR aplicando el porcentaje al presupuesto.\\n3. Lista la DOCUMENTACION concreta que el arquitecto debe preparar.\\n4. Marca COMPATIBILIDADES: que subvenciones son acumulables entre si.\\n5. Senala RIESGOS: plazos cortos (<60 dias), requisitos dificiles, etc.\\n\\nOUTPUT (JSON estricto, SOLO el JSON):\\n{\\n  \\\"recomendaciones\\\": [\\n    {\\n      \\\"grant_id\\\": \\\"uuid\\\",\\n      \\\"nombre\\\": \\\"...\\\",\\n      \\\"organismo\\\": \\\"...\\\",\\n      \\\"ahorro_estimado_eur\\\": 12500,\\n      \\\"porcentaje_aplicable\\\": 40,\\n      \\\"fecha_limite_solicitud\\\": \\\"YYYY-MM-DD\\\",\\n      \\\"documentacion_requerida\\\": [\\\"...\\\"],\\n      \\\"compatible_con\\\": [\\\"grant_id_x\\\"],\\n      \\\"riesgos\\\": [\\\"...\\\"],\\n      \\\"probabilidad_aprobacion\\\": \\\"alta|media|baja\\\",\\n      \\\"normativa_confidence\\\": 0.85,\\n      \\\"citation_source\\\": \\\"...\\\",\\n      \\\"verificar_manualmente\\\": false\\n    }\\n  ],\\n  \\\"ahorro_total_acumulable_eur\\\": 18750,\\n  \\\"siguiente_accion_recomendada\\\": \\\"...\\\",\\n  \\\"alertas_plazo_inminente\\\": []\\n}`;\n\nreturn [{ json: {\n  user_id: ctx.user_id,\n  tenant_id: ctx.tenant_id,\n  project_id: project.id,\n  request_id: ctx.request_id,\n  grants_count: grantsList.length,\n  llm_payload: {\n    model: 'gpt-4o-mini',\n    messages: [\n      { role: 'system', content: systemPrompt },\n      { role: 'user', content: userPrompt }\n    ],\n    temperature: 0.2,\n    max_tokens: 1500,\n    response_format: { type: 'json_object' }\n  }\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2400, 100],
+      "id": "agf-build-prompt",
+      "name": "Build Prompt"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict", "version": 2 },
+          "conditions": [
+            { "id": "agf-c3", "leftValue": "={{ $json._no_grants }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true", "singleValue": true } }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [2640, 100],
+      "id": "agf-if-no-grants",
+      "name": "No Grants?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ data: { project_id: $json.project_id, recomendaciones: [], razon: 'No hay subvenciones activas en grants_active que apliquen al tipo/comunidad del proyecto.', ahorro_total_acumulable_eur: 0, alertas_plazo_inminente: [] }, meta: { request_id: $json.request_id, model: 'none', grants_evaluated: 0 } }) }}",
+        "options": { "responseCode": 200, "responseHeaders": { "entries": [{ "name": "Cache-Control", "value": "no-cache" }] } }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [2880, 260],
+      "id": "agf-respond-empty",
+      "name": "Respond 200 Empty"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Content-Type", "value": "application/json" }]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.llm_payload) }}",
+        "options": { "timeout": 60000 }
+      },
+      "credentials": { "httpHeaderAuth": { "id": "gE1jXO133xEHS5JJ", "name": "orquestador ArquiAI" } },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2880, 0],
+      "id": "agf-llm",
+      "name": "Call LLM"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const llm = $input.first()?.json;\nconst built = $('Build Prompt').first().json;\nconst raw = llm?.choices?.[0]?.message?.content || '{}';\nlet parsed;\ntry {\n  parsed = JSON.parse(raw);\n} catch (e) {\n  return [{ json: { _error: 'LLM_INVALID_JSON', _status: 502, _details: e.message, _raw: raw.slice(0, 500), request_id: built.request_id } }];\n}\nconst usage = llm?.usage || {};\nconst recomendaciones = Array.isArray(parsed.recomendaciones) ? parsed.recomendaciones : [];\nreturn [{ json: {\n  user_id: built.user_id,\n  tenant_id: built.tenant_id,\n  project_id: built.project_id,\n  request_id: built.request_id,\n  grants_evaluated: built.grants_count,\n  recommendations_count: recomendaciones.length,\n  ahorro_total: parsed.ahorro_total_acumulable_eur || 0,\n  output: parsed,\n  model: llm?.model || 'gpt-4o-mini',\n  tokens_in: usage.prompt_tokens || 0,\n  tokens_out: usage.completion_tokens || 0\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3120, 0],
+      "id": "agf-format",
+      "name": "Format Response"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO agent_executions (project_id, agent_name, status, input, output, started_at, finished_at, metadata)\nVALUES ($1::uuid, 'agent_grants_finder', 'completed', $2::jsonb, $3::jsonb, now() - interval '1 second', now(), $4::jsonb)",
+        "options": {
+          "queryReplacement": "={{ [\n  $json.project_id,\n  JSON.stringify({ project_id: $json.project_id, grants_evaluated: $json.grants_evaluated }),\n  JSON.stringify($json.output),\n  JSON.stringify({ request_id: $json.request_id, model: $json.model, tokens_in: $json.tokens_in, tokens_out: $json.tokens_out, recommendations_count: $json.recommendations_count, ahorro_total_eur: $json.ahorro_total, eu_ai_act: 'asistencia profesional supervisada por tecnico colegiado' })\n] }}"
+        }
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [3360, 0],
+      "id": "agf-log-execution",
+      "name": "Log Execution",
+      "alwaysOutputData": true,
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({\n  data: {\n    project_id: $('Format Response').first().json.project_id,\n    grants_evaluated: $('Format Response').first().json.grants_evaluated,\n    recommendations_count: $('Format Response').first().json.recommendations_count,\n    ahorro_total_acumulable_eur: $('Format Response').first().json.ahorro_total,\n    ...$('Format Response').first().json.output\n  },\n  meta: {\n    request_id: $('Format Response').first().json.request_id,\n    model: $('Format Response').first().json.model,\n    tokens_in: $('Format Response').first().json.tokens_in,\n    tokens_out: $('Format Response').first().json.tokens_out,\n    timestamp: new Date().toISOString()\n  }\n}) }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [{ "name": "Cache-Control", "value": "no-cache" }]
+          }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [3600, 0],
+      "id": "agf-respond-200",
+      "name": "Respond 200"
+    }
+  ],
+  "connections": {
+    "POST /grants-finder/analyze": { "main": [[{ "node": "Decode JWT + Body", "type": "main", "index": 0 }]] },
+    "Decode JWT + Body": { "main": [[{ "node": "Auth OK?", "type": "main", "index": 0 }]] },
+    "Auth OK?": { "main": [
+      [{ "node": "Respond Error", "type": "main", "index": 0 }],
+      [{ "node": "Set Session Context", "type": "main", "index": 0 }]
+    ]},
+    "Set Session Context": { "main": [[{ "node": "Load Project", "type": "main", "index": 0 }]] },
+    "Load Project": { "main": [[{ "node": "Build Context", "type": "main", "index": 0 }]] },
+    "Build Context": { "main": [[{ "node": "Project OK?", "type": "main", "index": 0 }]] },
+    "Project OK?": { "main": [
+      [{ "node": "Respond 404", "type": "main", "index": 0 }],
+      [{ "node": "Load Candidate Grants", "type": "main", "index": 0 }]
+    ]},
+    "Load Candidate Grants": { "main": [[{ "node": "Load Directives", "type": "main", "index": 0 }]] },
+    "Load Directives": { "main": [[{ "node": "Build Prompt", "type": "main", "index": 0 }]] },
+    "Build Prompt": { "main": [[{ "node": "No Grants?", "type": "main", "index": 0 }]] },
+    "No Grants?": { "main": [
+      [{ "node": "Respond 200 Empty", "type": "main", "index": 0 }],
+      [{ "node": "Call LLM", "type": "main", "index": 0 }]
+    ]},
+    "Call LLM": { "main": [[{ "node": "Format Response", "type": "main", "index": 0 }]] },
+    "Format Response": { "main": [[{ "node": "Log Execution", "type": "main", "index": 0 }]] },
+    "Log Execution": { "main": [[{ "node": "Respond 200", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {}
+}

@@ -209,9 +209,25 @@
       "credentials": { "httpHeaderAuth": { "id": "gE1jXO133xEHS5JJ", "name": "orquestador ArquiAI" } },
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [2880, 0],
+      "position": [3000, 0],
       "id": "agf-llm",
       "name": "Call LLM"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO agent_executions (project_id, agent_name, status, started_at, input, metadata)\nVALUES ($1::uuid, 'agent_grants_finder', 'running', now(), $2::jsonb, $3::jsonb) RETURNING id",
+        "options": {
+          "queryReplacement": "={{ [\n  $('Build Prompt').first().json.project_id,\n  JSON.stringify({ project_id: $('Build Prompt').first().json.project_id, grants_evaluated: $('Build Prompt').first().json.grants_count }),\n  JSON.stringify({ request_id: $('Build Prompt').first().json.request_id, source: 'api_grants_finder_analyze' })\n] }}"
+        }
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [2760, -20],
+      "id": "agf-start-exec",
+      "name": "Start Execution",
+      "alwaysOutputData": true
     },
     {
       "parameters": {
@@ -227,17 +243,17 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "INSERT INTO agent_executions (project_id, agent_name, status, input, output, started_at, finished_at, metadata)\nVALUES ($1::uuid, 'agent_grants_finder', 'completed', $2::jsonb, $3::jsonb, now() - interval '1 second', now(), $4::jsonb)",
+        "query": "UPDATE agent_executions\nSET status = 'completed',\n    finished_at = now(),\n    output = $2::jsonb,\n    metadata = COALESCE(metadata, '{}'::jsonb) || $3::jsonb\nWHERE id = $1::uuid",
         "options": {
-          "queryReplacement": "={{ [\n  $json.project_id,\n  JSON.stringify({ project_id: $json.project_id, grants_evaluated: $json.grants_evaluated }),\n  JSON.stringify($json.output),\n  JSON.stringify({ request_id: $json.request_id, model: $json.model, tokens_in: $json.tokens_in, tokens_out: $json.tokens_out, recommendations_count: $json.recommendations_count, ahorro_total_eur: $json.ahorro_total, eu_ai_act: 'asistencia profesional supervisada por tecnico colegiado' })\n] }}"
+          "queryReplacement": "={{ [\n  $('Start Execution').first().json.id,\n  JSON.stringify($json.output),\n  JSON.stringify({ model: $json.model, tokens_in: $json.tokens_in, tokens_out: $json.tokens_out, recommendations_count: $json.recommendations_count, ahorro_total_eur: $json.ahorro_total, eu_ai_act: 'asistencia profesional supervisada por tecnico colegiado' })\n] }}"
         }
       },
       "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
       "position": [3360, 0],
-      "id": "agf-log-execution",
-      "name": "Log Execution",
+      "id": "agf-finish-exec",
+      "name": "Finish Execution",
       "alwaysOutputData": true,
       "continueOnFail": true
     },
@@ -278,11 +294,12 @@
     "Build Prompt": { "main": [[{ "node": "No Grants?", "type": "main", "index": 0 }]] },
     "No Grants?": { "main": [
       [{ "node": "Respond 200 Empty", "type": "main", "index": 0 }],
-      [{ "node": "Call LLM", "type": "main", "index": 0 }]
+      [{ "node": "Start Execution", "type": "main", "index": 0 }]
     ]},
+    "Start Execution": { "main": [[{ "node": "Call LLM", "type": "main", "index": 0 }]] },
     "Call LLM": { "main": [[{ "node": "Format Response", "type": "main", "index": 0 }]] },
-    "Format Response": { "main": [[{ "node": "Log Execution", "type": "main", "index": 0 }]] },
-    "Log Execution": { "main": [[{ "node": "Respond 200", "type": "main", "index": 0 }]] }
+    "Format Response": { "main": [[{ "node": "Finish Execution", "type": "main", "index": 0 }]] },
+    "Finish Execution": { "main": [[{ "node": "Respond 200", "type": "main", "index": 0 }]] }
   },
   "settings": { "executionOrder": "v1" },
   "pinData": {}

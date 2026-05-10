@@ -70,6 +70,22 @@
       "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } }
     },
     {
+      "id": "ach-start-exec",
+      "name": "Start Execution",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1080, 100],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO agent_executions (project_id, agent_name, status, started_at, input, metadata)\nVALUES (NULLIF($1, '')::uuid, $2, 'running', now(), $3::jsonb, $4::jsonb) RETURNING id",
+        "options": {
+          "queryReplacement": "={{ [\n  $('Decode JWT + Body').first().json.project_id || '',\n  $('Decode JWT + Body').first().json.agent_name,\n  JSON.stringify({ source: 'studio_chat', message_preview: ($('Decode JWT + Body').first().json.message || '').slice(0, 120) }),\n  JSON.stringify({ request_id: $('Decode JWT + Body').first().json.request_id, source: 'api_studio_agent_chat' })\n] }}"
+        }
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "alwaysOutputData": true
+    },
+    {
       "id": "ach-load-history",
       "name": "Load History",
       "type": "n8n-nodes-base.postgres",
@@ -205,11 +221,28 @@
       "alwaysOutputData": true
     },
     {
+      "id": "ach-finish-exec",
+      "name": "Finish Execution",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [3060, 0],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE agent_executions\nSET status = 'completed',\n    finished_at = now(),\n    output = $2::jsonb,\n    metadata = COALESCE(metadata, '{}'::jsonb) || $3::jsonb\nWHERE id = $1::uuid",
+        "options": {
+          "queryReplacement": "={{ [\n  $('Start Execution').first().json.id,\n  JSON.stringify({ response_preview: ($('Format Response').first().json.agent_response || '').slice(0, 200), tokens_in: $('Format Response').first().json.tokens_in, tokens_out: $('Format Response').first().json.tokens_out }),\n  JSON.stringify({ model: $('Format Response').first().json.model, eu_ai_act: 'asistencia profesional supervisada por tecnico colegiado' })\n] }}"
+        }
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "alwaysOutputData": true,
+      "continueOnFail": true
+    },
+    {
       "id": "ach-respond-200",
       "name": "Respond 200",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
-      "position": [3120, 0],
+      "position": [3300, 0],
       "parameters": {
         "respondWith": "json",
         "responseBody": "={{ JSON.stringify({\n  data: {\n    agent_name: $('Format Response').first().json.agent_name,\n    display_name: $('Format Response').first().json.display_name,\n    response: $('Format Response').first().json.agent_response,\n    timestamp: new Date().toISOString()\n  },\n  meta: {\n    request_id: $('Format Response').first().json.request_id,\n    model: $('Format Response').first().json.model,\n    tokens_in: $('Format Response').first().json.tokens_in,\n    tokens_out: $('Format Response').first().json.tokens_out,\n    history_count: $('Format Response').first().json.history_count\n  }\n}) }}",
@@ -229,7 +262,8 @@
       [{ "node": "Respond Error", "type": "main", "index": 0 }],
       [{ "node": "Set Session Context", "type": "main", "index": 0 }]
     ]},
-    "Set Session Context": { "main": [[{ "node": "Load History", "type": "main", "index": 0 }]] },
+    "Set Session Context": { "main": [[{ "node": "Start Execution", "type": "main", "index": 0 }]] },
+    "Start Execution": { "main": [[{ "node": "Load History", "type": "main", "index": 0 }]] },
     "Load History": { "main": [[{ "node": "Load agent info", "type": "main", "index": 0 }]] },
     "Load agent info": { "main": [[{ "node": "Build prompt", "type": "main", "index": 0 }]] },
     "Build prompt": { "main": [[{ "node": "Agent found?", "type": "main", "index": 0 }]] },
@@ -240,7 +274,8 @@
     "Call LLM": { "main": [[{ "node": "Format Response", "type": "main", "index": 0 }]] },
     "Format Response": { "main": [[{ "node": "Persist User Msg", "type": "main", "index": 0 }]] },
     "Persist User Msg": { "main": [[{ "node": "Persist Agent Msg", "type": "main", "index": 0 }]] },
-    "Persist Agent Msg": { "main": [[{ "node": "Respond 200", "type": "main", "index": 0 }]] }
+    "Persist Agent Msg": { "main": [[{ "node": "Finish Execution", "type": "main", "index": 0 }]] },
+    "Finish Execution": { "main": [[{ "node": "Respond 200", "type": "main", "index": 0 }]] }
   },
   "settings": {
     "executionOrder": "v1"

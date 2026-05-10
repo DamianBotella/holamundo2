@@ -151,9 +151,25 @@
       "credentials": { "httpHeaderAuth": { "id": "gE1jXO133xEHS5JJ", "name": "orquestador ArquiAI" } },
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [2160, 100],
+      "position": [2280, 100],
       "id": "rcd-llm",
       "name": "Call LLM"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO agent_executions (project_id, agent_name, status, started_at, input, metadata)\nVALUES ($1::uuid, 'agent_rcd', 'running', now(), $2::jsonb, $3::jsonb) RETURNING id",
+        "options": {
+          "queryReplacement": "={{ [\n  $('Build Context + Calculate').first().json.project.id,\n  JSON.stringify({ project_id: $('Build Context + Calculate').first().json.project.id, tipo_obra: $('Build Context + Calculate').first().json.tipo_obra, superficie_m2: $('Build Context + Calculate').first().json.project.superficie_m2 }),\n  JSON.stringify({ request_id: $('Build Context + Calculate').first().json.request_id, source: 'api_rcd_generate_draft' })\n] }}"
+        }
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [2040, 0],
+      "id": "rcd-start-exec",
+      "name": "Start Execution",
+      "alwaysOutputData": true
     },
     {
       "parameters": {
@@ -185,17 +201,17 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "INSERT INTO agent_executions (project_id, agent_name, status, input, output, started_at, finished_at, metadata)\nVALUES ($1::uuid, 'agent_rcd', 'completed', $2::jsonb, $3::jsonb, now() - interval '2 seconds', now(), $4::jsonb)",
+        "query": "UPDATE agent_executions\nSET status = 'completed',\n    finished_at = now(),\n    output = $2::jsonb,\n    metadata = COALESCE(metadata, '{}'::jsonb) || $3::jsonb\nWHERE id = $1::uuid",
         "options": {
-          "queryReplacement": "={{ [\n  $('Format Response').first().json.project_id,\n  JSON.stringify({ project_id: $('Format Response').first().json.project_id, tipo_obra: $('Format Response').first().json.tipo_obra, superficie_m2: $('Format Response').first().json.superficie_m2 }),\n  JSON.stringify({ draft_id: $json.id, total_toneladas: $('Format Response').first().json.total_toneladas, alertas_peligrosos_count: $('Format Response').first().json.alertas_peligrosos.length, coste_gestion_eur: $('Format Response').first().json.coste_gestion_estimado_eur }),\n  JSON.stringify({ request_id: $('Format Response').first().json.request_id, model: $('Format Response').first().json.model, tokens_in: $('Format Response').first().json.tokens_in, tokens_out: $('Format Response').first().json.tokens_out, eu_ai_act: 'asistencia profesional supervisada por tecnico colegiado', citation_source: 'RD 105/2008' })\n] }}"
+          "queryReplacement": "={{ [\n  $('Start Execution').first().json.id,\n  JSON.stringify({ draft_id: $('Insert Draft').first().json.id, total_toneladas: $('Format Response').first().json.total_toneladas, alertas_peligrosos_count: $('Format Response').first().json.alertas_peligrosos.length, coste_gestion_eur: $('Format Response').first().json.coste_gestion_estimado_eur }),\n  JSON.stringify({ model: $('Format Response').first().json.model, tokens_in: $('Format Response').first().json.tokens_in, tokens_out: $('Format Response').first().json.tokens_out, eu_ai_act: 'asistencia profesional supervisada por tecnico colegiado', citation_source: 'RD 105/2008' })\n] }}"
         }
       },
       "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
       "position": [2880, 100],
-      "id": "rcd-log-exec",
-      "name": "Log Execution",
+      "id": "rcd-finish-exec",
+      "name": "Finish Execution",
       "alwaysOutputData": true,
       "continueOnFail": true
     },
@@ -231,11 +247,12 @@
       [{ "node": "Respond 422", "type": "main", "index": 0 }],
       [{ "node": "Build Prompt", "type": "main", "index": 0 }]
     ]},
-    "Build Prompt": { "main": [[{ "node": "Call LLM", "type": "main", "index": 0 }]] },
+    "Build Prompt": { "main": [[{ "node": "Start Execution", "type": "main", "index": 0 }]] },
+    "Start Execution": { "main": [[{ "node": "Call LLM", "type": "main", "index": 0 }]] },
     "Call LLM": { "main": [[{ "node": "Format Response", "type": "main", "index": 0 }]] },
     "Format Response": { "main": [[{ "node": "Insert Draft", "type": "main", "index": 0 }]] },
-    "Insert Draft": { "main": [[{ "node": "Log Execution", "type": "main", "index": 0 }]] },
-    "Log Execution": { "main": [[{ "node": "Respond 201", "type": "main", "index": 0 }]] }
+    "Insert Draft": { "main": [[{ "node": "Finish Execution", "type": "main", "index": 0 }]] },
+    "Finish Execution": { "main": [[{ "node": "Respond 201", "type": "main", "index": 0 }]] }
   },
   "settings": { "executionOrder": "v1" },
   "pinData": {}

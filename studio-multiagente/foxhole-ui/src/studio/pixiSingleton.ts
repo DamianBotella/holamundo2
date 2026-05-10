@@ -8,9 +8,11 @@
 
 import { Application, Container } from 'pixi.js';
 import { preloadSprites } from './spriteRegistry';
+import { preloadFurniture } from './furnitureRegistry';
 
 interface Layers {
   rooms: Container;
+  furniture: Container;
   agents: Container;
   fx: Container;
 }
@@ -52,23 +54,26 @@ export async function acquireStudio(opts: InitOptions): Promise<StudioPixi> {
     });
     app.canvas.style.display = 'block';
 
-    // Pre-cargar sprites de agentes (Kenney Tier 1+2 + generic) en paralelo
-    await preloadSprites();
+    // Pre-cargar sprites de agentes y muebles en paralelo
+    await Promise.all([preloadSprites(), preloadFurniture()]);
 
     const world = new Container();
     app.stage.addChild(world);
 
     const roomsLayer = new Container();
+    const furnitureLayer = new Container();
+    furnitureLayer.sortableChildren = true;
     const agentsLayer = new Container();
     const fxLayer = new Container();
     world.addChild(roomsLayer);
+    world.addChild(furnitureLayer);
     world.addChild(agentsLayer);
     world.addChild(fxLayer);
 
     studio = {
       app,
       world,
-      layers: { rooms: roomsLayer, agents: agentsLayer, fx: fxLayer },
+      layers: { rooms: roomsLayer, furniture: furnitureLayer, agents: agentsLayer, fx: fxLayer },
     };
     return studio;
   })();

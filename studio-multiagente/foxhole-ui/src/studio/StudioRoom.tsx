@@ -1,15 +1,13 @@
-import { Container, Graphics, Matrix, Text, TextStyle } from 'pixi.js';
+import { Container, Graphics, Text, TextStyle } from 'pixi.js';
 import type { StudioRoom } from '@/lib/types';
 import { PALETTE } from './palette';
 import { rectToIsoQuad, worldToIso } from './iso';
-import { getFurnitureTexture } from './furnitureRegistry';
-import { ROOM_FLOOR_TILE } from './data/roomFloors';
+import { ROOM_VISUAL_IDENTITY } from './data/roomVisualIdentity';
 
-// Escala de la textura del suelo. La textura PixelLab es 64x64 con tablas
-// gruesas; aplicarla 1:1 hace que las tablas sean tan grandes como un
-// personaje (48x64). Con 0.0875 las tablas miden ~5-6px, finas, perfectas
-// para que parezca tarima real con muchas tablas por sala.
-const FLOOR_TEXTURE_SCALE = 0.0875;
+// PASO 2 doc: suelo limpio (sin textura de tarima — los muebles densos +
+// las paredes son lo que dan ambiente). El color viene de ROOM_VISUAL_IDENTITY
+// (paleta coordinada con las paredes de cada sala). Fallback a room.floor_color
+// de la BD si la sala no esta en ROOM_VISUAL_IDENTITY.
 
 /**
  * Dibuja una habitacion en proyeccion isometrica 2:1 (sec 1.1 del spec).
@@ -25,30 +23,26 @@ export function drawRoom(parent: Container, room: StudioRoom): Container {
   const node = new Container();
   node.label = `room:${room.room_id}`;
 
-  const fillColor = parseHex(room.floor_color, parseHex(PALETTE.bgPaper));
+  // Color del suelo: prioridad ROOM_VISUAL_IDENTITY (B72-rediseno paleta
+  // coordinada paredes+suelo) -> room.floor_color de BD -> palette default.
+  const identity = ROOM_VISUAL_IDENTITY[room.room_id];
+  const fillColor = identity?.floorColor
+    ?? parseHex(room.floor_color, parseHex(PALETTE.bgPaper));
+  const fillAlpha = identity?.floorAlpha ?? 1;
   const borderColor = parseHex(PALETTE.borderStrong);
   const borderSubtle = parseHex(PALETTE.borderSubtle);
 
   const { x, y, w, h } = room.bounding_box;
   const [tl, tr, br, bl] = rectToIsoQuad(x, y, w, h);
 
-  // Suelo: si hay tile de tarima cargado para este room, lo usamos como
-  // textura del polígono (Pixi 8 fill({texture}) repite la textura como
-  // pattern automaticamente). Si no, fallback al color plano de la BD.
-  const floorTileId = ROOM_FLOOR_TILE[room.room_id];
-  const floorTexture = floorTileId ? getFurnitureTexture(floorTileId) : null;
-
+  // Suelo: rombo plano con color de la identidad visual de la sala.
+  // Sin textura de tarima (PASO 2 doc) — el suelo limpio realza muebles
+  // y paredes en lugar de competir con ellos.
   const floor = new Graphics();
-  floor.poly([tl.x, tl.y, tr.x, tr.y, br.x, br.y, bl.x, bl.y]);
-  if (floorTexture) {
-    // Escalamos la textura para que las tablas sean proporcionadas a los
-    // personajes (sin esto cada tabla mide como una persona).
-    const matrix = new Matrix().scale(FLOOR_TEXTURE_SCALE, FLOOR_TEXTURE_SCALE);
-    floor.fill({ texture: floorTexture, matrix });
-  } else {
-    floor.fill({ color: fillColor });
-  }
-  floor.stroke({ color: borderColor, width: 2 });
+  floor
+    .poly([tl.x, tl.y, tr.x, tr.y, br.x, br.y, bl.x, bl.y])
+    .fill({ color: fillColor, alpha: fillAlpha })
+    .stroke({ color: borderColor, width: 2 });
   node.addChild(floor);
 
   // Borde interior (rombo mas pequeno) — emula sensacion de papel/baldosa con margen

@@ -11,10 +11,11 @@ import { preloadSprites } from './spriteRegistry';
 import { preloadFurniture } from './furnitureRegistry';
 
 interface Layers {
-  rooms: Container;
-  furniture: Container;
-  agents: Container;
-  fx: Container;
+  rooms: Container;       // suelo (rombo iso) — zIndex implicito 0
+  furniture: Container;   // mobiliario — zIndex 10-30 (interno)
+  walls: Container;       // paredes traseras — zIndex 45 (B72-rediseno)
+  agents: Container;      // personajes — zIndex 50
+  fx: Container;          // burbujas, badges, fx — zIndex 60+
 }
 
 interface StudioPixi {
@@ -64,17 +65,26 @@ export async function acquireStudio(opts: InitOptions): Promise<StudioPixi> {
     const roomsLayer = new Container();
     const furnitureLayer = new Container();
     furnitureLayer.sortableChildren = true;
+    const wallsLayer = new Container();
     const agentsLayer = new Container();
     const fxLayer = new Container();
-    world.addChild(roomsLayer);
-    world.addChild(furnitureLayer);
-    world.addChild(agentsLayer);
-    world.addChild(fxLayer);
+    // Orden de adicion = orden de pintado (z bajo -> alto)
+    world.addChild(roomsLayer);      // suelo (mas atras)
+    world.addChild(furnitureLayer);  // muebles
+    world.addChild(wallsLayer);      // paredes (delante de muebles del fondo)
+    world.addChild(agentsLayer);     // personajes (delante de paredes)
+    world.addChild(fxLayer);         // burbujas/badges (mas adelante)
 
     studio = {
       app,
       world,
-      layers: { rooms: roomsLayer, furniture: furnitureLayer, agents: agentsLayer, fx: fxLayer },
+      layers: {
+        rooms: roomsLayer,
+        furniture: furnitureLayer,
+        walls: wallsLayer,
+        agents: agentsLayer,
+        fx: fxLayer,
+      },
     };
     return studio;
   })();

@@ -8,6 +8,8 @@ import { acquireStudio, releaseStudio, getStudio } from './pixiSingleton';
 import { drawRoom } from './StudioRoom';
 import { drawAgent } from './StudioAgent';
 import { drawFurnitureForRoom } from './StudioFurniture';
+import { drawWallsForRoom } from './drawRoomWalls';
+import { detectMeetingAgents, getAgentWorldPosition } from './agentPosition';
 import {
   WORLD_W,
   WORLD_H,
@@ -158,10 +160,27 @@ export function StudioCanvas({
     for (const r of rooms) drawFurnitureForRoom(furnLayer, r);
   }, [pixiReady, rooms]);
 
-  // 3) Render agents (z-orden iso por (worldX + worldY) — fondo primero).
-  // B72 Paso 2 (movimiento por estado) revertido temporalmente — ver agentTargets.ts
-  // y data/agentPositions.ts: estan listos para integrar en B72b cuando
-  // diagnostiquemos el bug de pantalla negra del refactor con dev server delante.
+  // 2c) Render paredes traseras NW + NE de cada sala (B72-rediseno cutaway).
+  // Dan la sensacion de habitacion real en lugar de rombo plano. Capa propia
+  // entre furniture y agents para que muebles del fondo queden ocultos por
+  // la pared y agentes/muebles del frente queden delante.
+  useEffect(() => {
+    if (!pixiReady) return;
+    const studio = getStudio();
+    if (!studio || rooms.length === 0) return;
+    const wallsLayer = studio.layers.walls;
+    if (!wallsLayer) return;
+    wallsLayer.removeChildren();
+    for (const r of rooms) drawWallsForRoom(wallsLayer, r);
+  }, [pixiReady, rooms]);
+
+  // 3) Render agents en posicion segun ESTADO (B72-rediseno PASO 4):
+  //   working           -> su mesa (default_position)
+  //   waiting_approval  -> su mesa (orb amarillo pulsante indica espera)
+  //   idle              -> seat en terraza-cafe (asignado por indice estable)
+  //   failed            -> pos en corredor de urgencias
+  //   working+meeting   -> seat alrededor mesa de reuniones (si comparten proyecto)
+  // Sin animacion todavia: el agente se renderiza en destino directamente.
   useEffect(() => {
     if (!pixiReady) return;
     const studio = getStudio();
@@ -170,14 +189,19 @@ export function StudioCanvas({
     for (const r of rooms) roomMap.set(r.room_id, r);
     studio.layers.agents.removeChildren();
 
-    const placed = agents
-      .map((a) => {
-        const room = roomMap.get(a.room_id);
-        if (!room) return null;
-        const wx = room.bounding_box.x + a.default_position.x;
-        const wy = room.bounding_box.y + a.default_position.y;
-        const iso = worldToIso(wx, wy);
-        return { a, wx, wy, iso, z: isoZIndexFromWorld(wx, wy) };
+    const { meetingNames } = detectMeetingAgents(agents);
+
+    // Indice estable por nombre alfabetico para asignar seats deterministicamente
+    const sortedAgents = [...agents].sort((a, b) =>
+      a.agent_name.localeCompare(b.agent_name),
+    );
+
+    const placed = sortedAgents
+      .map((a, i) => {
+        const pos = getAgentWorldPosition(a, i, roomMap, meetingNames);
+        if (!pos) return null;
+        const iso = worldToIso(pos.x, pos.y);
+        return { a, wx: pos.x, wy: pos.y, iso, z: isoZIndexFromWorld(pos.x, pos.y) };
       })
       .filter((p): p is NonNullable<typeof p> => p !== null)
       .sort((p, q) => p.z - q.z);

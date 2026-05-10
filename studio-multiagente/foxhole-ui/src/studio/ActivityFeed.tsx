@@ -3,7 +3,7 @@ import { Radio, Users } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import type { StudioAgent } from '@/lib/types';
 import { useActivityFeed } from './hooks/useActivityFeed';
-import { detectMeetingAgents } from './agentTargets';
+import { detectMeetingAgents } from './agentPosition';
 
 const STATUS_COLOR: Record<string, string> = {
   success: 'text-foxhole-state-working',

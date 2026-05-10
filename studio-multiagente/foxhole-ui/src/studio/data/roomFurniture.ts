@@ -1,277 +1,231 @@
 /**
- * Layout de mobiliario por habitacion (B72 — La Oficina Viva).
+ * Layout de mobiliario por habitacion (B72-rediseno + 074 reorganizacion).
  *
  * Las coordenadas (x, y) son RELATIVAS al bounding_box de la room (igual
- * convencion que agents_catalog.default_position en migracion 056). El
+ * convencion que agents_catalog.default_position en migracion 074). El
  * componente StudioFurniture suma room.bounding_box.x + item.x al renderizar.
  *
- * Cada room mide 320x200 (excepto urgency_corridor que mide 960x160). Las
- * posiciones x van de 0..w, y de 0..h. Origen en la esquina superior-izquierda
- * del rombo (en world coords ortogonales antes de proyectar a iso).
+ * Cada room mide 320x200 (excepto urgency_corridor que mide 960x160).
  *
- * zIndex: orden de pintado dentro de la layer de mobiliario.
- *   - 0-5  -> elementos en suelo (alfombras)
- *   - 6-10 -> mobiliario bajo (sillas, mesas)
- *   - 11-15-> mobiliario alto (estanterias, cabinets)
- *   - 16-20-> elementos en pared (cuadros, relojes, alarmas)
+ * REGLA CLAVE B72d2: muebles NO pueden estar en (x,y) cercana a la
+ * default_position de ningun agente de la sala (mig 074), o solapan
+ * visualmente. Para ello respetamos zonas:
  *
- * B72d: cada sala tiene 10-15 elementos distribuidos para sentirse habitada
- * (densidad referencia imagen DEVSOFT). Evitamos solapar con default_position
- * de los agentes (~x=80-220, y=80-150 segun sala).
+ *   ZONA AGENTES   x:60-260, y:90-170  (donde estan los personajes)
+ *   ZONA NORTE     y:0-60              (pared norte: cuadros, reloj, plantas tall)
+ *   ZONA OESTE     x:0-50              (esquina izq: plantas, papeles, libros)
+ *   ZONA ESTE      x:270-320           (esquina der: plantas, lamparas, papeles)
+ *   ZONA CENTRAL   x:140-180, y:60-90  (centro-norte para mueble principal opcional)
+ *   ZONA SUR-EXT   y:170-200           (frente abierto: alfombras, papeles bajos)
+ *
+ * zIndex: 0-5 alfombras suelo / 6-10 mobiliario bajo / 11-15 mobiliario alto /
+ *         16-20 elementos pared.
  */
 
 export interface FurnitureItem {
-  id: string;       // furniture_id correspondiente al PNG
-  x: number;        // offset horizontal dentro de la room
-  y: number;        // offset vertical dentro de la room
-  zIndex: number;   // z-order dentro de la layer furniture
+  id: string;
+  x: number;
+  y: number;
+  zIndex: number;
 }
 
 export const ROOM_FURNITURE: Record<string, FurnitureItem[]> = {
   // ===========================================================
-  // RECEPCION (320x200) - entrada del estudio
-  // Agentes aqui: Recepcionista (80,100), Asesor de Cliente (220,100)
+  // RECEPCION (320x200) - 3 agentes en (80,110) (240,110) (160,160)
   // ===========================================================
   reception: [
-    // Suelo: alfombra de bienvenida
-    { id: 'furniture_carpet_rect_persian',     x: 160, y: 165, zIndex:  2 },
-    // Mostrador y atencion
-    { id: 'furniture_reception_desk',          x: 160, y:  90, zIndex: 10 },
-    { id: 'furniture_reception_chair',         x:  60, y: 130, zIndex:  6 },
-    { id: 'furniture_books_stacked_horizontal',x: 170, y:  85, zIndex: 12 }, // sobre mostrador
-    // Sala de espera (zona derecha)
-    { id: 'furniture_lounge_sofa',             x: 270, y: 130, zIndex:  8 },
-    { id: 'furniture_small_plant',             x: 290, y:  90, zIndex:  8 },
-    // Plantas decorativas
-    { id: 'furniture_reception_plant',         x:  40, y:  60, zIndex:  8 },
-    { id: 'furniture_corner_plant_tall',       x: 290, y:  40, zIndex: 15 },
-    // Pared
-    { id: 'furniture_wall_artframe_blueprint', x: 100, y:  20, zIndex: 18 },
-    { id: 'furniture_painting_landscape',      x: 220, y:  20, zIndex: 18 },
-    { id: 'furniture_office_clock',            x: 160, y:  15, zIndex: 18 },
+    // Pared norte
+    { id: 'furniture_office_clock',           x: 160, y:  15, zIndex: 18 },
+    { id: 'furniture_wall_artframe_blueprint',x:  90, y:  20, zIndex: 18 },
+    { id: 'furniture_painting_landscape',     x: 230, y:  20, zIndex: 18 },
+    // Esquinas
+    { id: 'furniture_corner_plant_tall',      x:  30, y:  50, zIndex: 15 },
+    { id: 'furniture_reception_plant',        x: 290, y:  50, zIndex:  8 },
+    // Sur-ext: alfombra de bienvenida (delante de los agentes)
+    { id: 'furniture_carpet_rect_persian',    x: 160, y: 190, zIndex:  2 },
   ],
 
   // ===========================================================
-  // MESA DE DIBUJO (drawing_room, 320x200) - donde se dibujan planos
-  // Agentes aqui: Delineante (80,100), Dibujante Tecnico (220,100)
+  // MESA DE DIBUJO (320x200) - 3 agentes en (80,110) (240,110) (160,160)
   // ===========================================================
   drawing_room: [
-    // Suelo
-    { id: 'furniture_carpet_round_warm',       x: 160, y: 110, zIndex:  2 },
-    // Mesa principal con todo lo de un drafter
-    { id: 'furniture_drafting_table',          x: 150, y:  90, zIndex: 10 },
-    { id: 'furniture_drafting_lamp',           x: 175, y:  60, zIndex: 14 },
-    { id: 'furniture_pencil_holder',           x: 130, y:  85, zIndex: 12 },
-    { id: 'furniture_books_stacked_horizontal',x: 180, y:  95, zIndex: 12 },
-    // Materiales y elementos auxiliares
-    { id: 'furniture_blueprint_roll',          x:  50, y: 160, zIndex:  5 },
-    { id: 'furniture_blueprint_roll',          x: 270, y: 160, zIndex:  5 },
-    { id: 'furniture_filing_papers_pile',      x:  60, y:  80, zIndex:  6 },
-    // Mesa secundaria (referencia)
-    { id: 'furniture_reading_desk',            x: 270, y:  90, zIndex:  8 },
-    { id: 'furniture_table_lamp_small',        x: 280, y:  70, zIndex: 12 },
-    // Plantas y decoracion
-    { id: 'furniture_small_plant',             x:  40, y:  50, zIndex:  8 },
-    { id: 'furniture_painting_landscape',      x: 160, y:  20, zIndex: 18 },
-    { id: 'furniture_plant_hanging_wall',      x: 280, y:  25, zIndex: 18 },
+    // Pared norte
+    { id: 'furniture_painting_landscape',     x: 160, y:  20, zIndex: 18 },
+    { id: 'furniture_plant_hanging_wall',     x: 270, y:  30, zIndex: 18 },
+    // Centro-norte: mesa de dibujo principal (sin agente encima)
+    { id: 'furniture_drafting_table',         x: 160, y:  60, zIndex: 10 },
+    { id: 'furniture_drafting_lamp',          x: 195, y:  35, zIndex: 14 },
+    { id: 'furniture_blueprint_roll',         x: 130, y:  55, zIndex: 12 },
+    // Esquinas
+    { id: 'furniture_small_plant',            x:  30, y:  50, zIndex:  8 },
+    { id: 'furniture_blueprint_roll',         x: 290, y:  50, zIndex:  8 },
+    // Sur-ext alfombra
+    { id: 'furniture_carpet_round_warm',      x: 160, y: 190, zIndex:  2 },
+    { id: 'furniture_filing_papers_pile',     x:  30, y: 180, zIndex:  6 },
   ],
 
   // ===========================================================
-  // BIBLIOTECA NORMATIVA (320x200) - CTE, normativas, regulaciones
-  // Agentes aqui: Tecnico Normativa (80,100), Actualizador Normativa (220,100)
+  // BIBLIOTECA NORMATIVA (320x200) - 5 agentes
+  // (60,110) (160,90) (260,110) (100,160) (220,160)
   // ===========================================================
   normative_library: [
-    // Suelo
-    { id: 'furniture_carpet_rect_persian',     x: 160, y: 140, zIndex:  2 },
-    // Estanterias (back wall)
-    { id: 'furniture_bookshelf_tall',          x:  50, y:  50, zIndex: 15 },
-    { id: 'furniture_bookshelf_small',         x: 270, y:  60, zIndex: 12 },
-    { id: 'furniture_bookshelf_tall',          x: 270, y: 110, zIndex: 15 },
-    // Mesa de lectura
-    { id: 'furniture_reading_desk',            x: 160, y: 140, zIndex:  8 },
-    { id: 'furniture_table_lamp_small',        x: 175, y: 125, zIndex: 12 },
-    { id: 'furniture_books_stacked_horizontal',x: 145, y: 135, zIndex: 12 },
-    // Libros sueltos (ambiente caotico de biblioteca activa)
-    { id: 'furniture_books_stacked_horizontal',x: 100, y: 170, zIndex:  6 },
-    { id: 'furniture_books_stacked_horizontal',x: 220, y: 170, zIndex:  6 },
-    // Iluminacion y decoracion
-    { id: 'furniture_floor_lamp',              x: 220, y: 130, zIndex: 12 },
-    { id: 'furniture_corner_plant_tall',       x: 290, y:  25, zIndex: 15 },
-    { id: 'furniture_painting_landscape',      x: 160, y:  20, zIndex: 18 },
+    // Pared norte: estanterias y cuadro
+    { id: 'furniture_bookshelf_tall',         x:  30, y:  40, zIndex: 15 },
+    { id: 'furniture_bookshelf_tall',         x: 290, y:  40, zIndex: 15 },
+    { id: 'furniture_painting_landscape',     x: 160, y:  20, zIndex: 18 },
+    { id: 'furniture_corner_plant_tall',      x: 220, y:  40, zIndex: 15 },
+    // Centro-norte
+    { id: 'furniture_bookshelf_small',        x:  90, y:  50, zIndex: 12 },
+    // Sur-ext (alfombra debajo del area de trabajo de los 5)
+    { id: 'furniture_carpet_rect_persian',    x: 160, y: 190, zIndex:  2 },
+    { id: 'furniture_books_stacked_horizontal',x: 160, y: 185, zIndex:  6 },
   ],
 
   // ===========================================================
-  // DESPACHO CONTABLE (accounting_office, 320x200)
-  // Agentes aqui: Contable, Tracker Financiero, Auditor
+  // DESPACHO CONTABLE (320x200) - 4 agentes
+  // (80,110) (240,110) (80,160) (240,160)
   // ===========================================================
   accounting_office: [
-    // Suelo
-    { id: 'furniture_carpet_round_warm',       x: 160, y: 110, zIndex:  2 },
-    // Mesa principal con setup completo de oficinista
-    { id: 'furniture_office_desk',             x: 160, y: 100, zIndex: 10 },
-    { id: 'furniture_monitor_on_desk',         x: 160, y:  85, zIndex: 14 },
-    { id: 'furniture_keyboard_mouse_set',      x: 160, y: 105, zIndex: 12 },
-    { id: 'furniture_coffee_cup',              x: 195, y:  95, zIndex: 12 },
-    { id: 'furniture_pencil_holder',           x: 130, y:  90, zIndex: 12 },
-    { id: 'furniture_desk_chair',              x: 160, y: 145, zIndex:  6 },
-    // Archivos
-    { id: 'furniture_filing_cabinet',          x:  50, y:  80, zIndex: 12 },
-    { id: 'furniture_filing_papers_pile',      x:  50, y: 150, zIndex:  6 },
-    { id: 'furniture_filing_papers_pile',      x: 250, y: 150, zIndex:  6 },
-    // Detalles ambientales
-    { id: 'furniture_recycling_bin',           x: 280, y: 160, zIndex:  6 },
-    { id: 'furniture_small_plant',             x: 290, y:  60, zIndex:  8 },
-    { id: 'furniture_office_clock',            x: 160, y:  15, zIndex: 18 },
-    { id: 'furniture_painting_landscape',      x:  60, y:  20, zIndex: 18 },
+    // Pared norte
+    { id: 'furniture_office_clock',           x: 160, y:  15, zIndex: 18 },
+    { id: 'furniture_painting_landscape',     x:  60, y:  25, zIndex: 18 },
+    { id: 'furniture_wall_artframe_blueprint',x: 260, y:  25, zIndex: 18 },
+    // Esquinas
+    { id: 'furniture_filing_cabinet',         x:  30, y:  60, zIndex: 12 },
+    { id: 'furniture_small_plant',            x: 290, y:  60, zIndex:  8 },
+    // Centro-norte: mesa de oficina con monitor + accesorios
+    { id: 'furniture_office_desk',            x: 160, y:  60, zIndex: 10 },
+    { id: 'furniture_monitor_on_desk',        x: 160, y:  45, zIndex: 14 },
+    { id: 'furniture_pencil_holder',          x: 195, y:  50, zIndex: 12 },
+    { id: 'furniture_coffee_cup',             x: 130, y:  55, zIndex: 12 },
+    // Sur-ext
+    { id: 'furniture_carpet_round_warm',      x: 160, y: 190, zIndex:  2 },
+    { id: 'furniture_recycling_bin',          x:  30, y: 180, zIndex:  6 },
   ],
 
   // ===========================================================
-  // DIRECCION - ORQUESTADOR (main_office, 320x200) - el director
-  // Agente aqui: Director (160,100)
+  // DIRECCION - ORQUESTADOR (320x200) - 2 agentes en (160,100) (160,160)
   // ===========================================================
   main_office: [
-    // Suelo: alfombra grande y elegante
-    { id: 'furniture_carpet_rect_persian',     x: 160, y: 130, zIndex:  2 },
-    // Mesa del director con todo
-    { id: 'furniture_director_desk',           x: 160, y:  80, zIndex: 10 },
-    { id: 'furniture_table_lamp_small',        x: 130, y:  65, zIndex: 14 },
-    { id: 'furniture_pencil_holder',           x: 190, y:  70, zIndex: 12 },
-    { id: 'furniture_books_stacked_horizontal',x: 195, y:  80, zIndex: 12 },
-    // Sillas de visitas
-    { id: 'furniture_meeting_chairs_2',        x: 160, y: 165, zIndex:  6 },
-    // Estanteria de prestigio
-    { id: 'furniture_bookcase_director',       x:  50, y:  50, zIndex: 15 },
-    // Decoracion elegante
-    { id: 'furniture_floor_lamp',              x: 285, y: 130, zIndex: 12 },
-    { id: 'furniture_corner_plant_tall',       x: 290, y:  40, zIndex: 15 },
-    { id: 'furniture_wall_artframe_blueprint', x: 220, y:  20, zIndex: 18 },
-    { id: 'furniture_painting_landscape',      x: 100, y:  20, zIndex: 18 },
-    { id: 'furniture_office_clock',            x: 160, y:  15, zIndex: 18 },
+    // Pared norte (sala de director, decoracion elegante)
+    { id: 'furniture_office_clock',           x: 160, y:  15, zIndex: 18 },
+    { id: 'furniture_painting_landscape',     x:  90, y:  20, zIndex: 18 },
+    { id: 'furniture_wall_artframe_blueprint',x: 230, y:  20, zIndex: 18 },
+    // Esquinas
+    { id: 'furniture_bookcase_director',      x:  30, y:  50, zIndex: 15 },
+    { id: 'furniture_corner_plant_tall',      x: 290, y:  50, zIndex: 15 },
+    // Mesa del director queda al ESTE (a un lado del Director que esta en x=160)
+    { id: 'furniture_director_desk',          x:  80, y:  60, zIndex: 10 },
+    { id: 'furniture_table_lamp_small',       x:  60, y:  45, zIndex: 14 },
+    { id: 'furniture_books_stacked_horizontal',x:100, y:  55, zIndex: 12 },
+    // Sur-ext (alfombra grande)
+    { id: 'furniture_carpet_rect_persian',    x: 160, y: 190, zIndex:  2 },
+    { id: 'furniture_floor_lamp',             x: 290, y: 180, zIndex: 12 },
   ],
 
   // ===========================================================
-  // SALA DE REUNIONES (320x200) - propuestas, contratos, aprobaciones
-  // Agentes aqui: Comercial (80,100), Juridico (220,100), Coordinador (160, 160)
+  // SALA DE REUNIONES (320x200) - 2 agentes en (100,130) (220,130)
+  // Mesa central con sillas alrededor (no chocan porque agentes estan
+  // en x=100,220 y la mesa esta en x=160; las sillas a +/-50 del centro)
   // ===========================================================
   meeting_room: [
-    // Suelo: alfombra circular bajo la mesa
-    { id: 'furniture_carpet_round_warm',       x: 160, y: 110, zIndex:  2 },
-    // Mesa central
-    { id: 'furniture_conference_table',        x: 160, y: 100, zIndex: 10 },
-    // Sillas alrededor
-    { id: 'furniture_conference_chair',        x: 100, y:  75, zIndex:  6 },
-    { id: 'furniture_conference_chair',        x: 220, y:  75, zIndex:  6 },
-    { id: 'furniture_conference_chair',        x: 100, y: 145, zIndex:  6 },
-    { id: 'furniture_conference_chair',        x: 220, y: 145, zIndex:  6 },
-    { id: 'furniture_conference_chair',        x: 160, y:  60, zIndex:  6 },
-    { id: 'furniture_conference_chair',        x: 160, y: 165, zIndex:  6 },
-    // Cosas sobre la mesa (ambiente reunion)
-    { id: 'furniture_coffee_cup',              x: 130, y:  95, zIndex: 12 },
-    { id: 'furniture_coffee_cup',              x: 190, y: 105, zIndex: 12 },
-    { id: 'furniture_pencil_holder',           x: 165, y:  95, zIndex: 12 },
-    // Pared y decoracion
-    { id: 'furniture_whiteboard',              x:  60, y:  30, zIndex: 15 },
-    { id: 'furniture_floor_lamp',              x: 285, y: 130, zIndex: 12 },
-    { id: 'furniture_painting_landscape',      x: 240, y:  25, zIndex: 18 },
-    { id: 'furniture_wall_artframe_blueprint', x: 160, y:  15, zIndex: 18 },
+    // Pared norte
+    { id: 'furniture_whiteboard',             x: 160, y:  20, zIndex: 18 },
+    { id: 'furniture_painting_landscape',     x:  60, y:  25, zIndex: 18 },
+    { id: 'furniture_wall_artframe_blueprint',x: 260, y:  25, zIndex: 18 },
+    // Mesa de reuniones central (entre los 2 agentes)
+    { id: 'furniture_conference_table',       x: 160, y:  90, zIndex: 10 },
+    { id: 'furniture_coffee_cup',             x: 145, y:  85, zIndex: 12 },
+    { id: 'furniture_coffee_cup',             x: 175, y:  90, zIndex: 12 },
+    { id: 'furniture_pencil_holder',          x: 160, y:  80, zIndex: 12 },
+    // Sillas detras (norte) y delante (sur) de la mesa, sin chocar con agentes
+    { id: 'furniture_conference_chair',       x: 130, y:  65, zIndex:  6 },
+    { id: 'furniture_conference_chair',       x: 190, y:  65, zIndex:  6 },
+    { id: 'furniture_conference_chair',       x: 130, y: 175, zIndex:  6 },
+    { id: 'furniture_conference_chair',       x: 190, y: 175, zIndex:  6 },
+    // Esquinas
+    { id: 'furniture_corner_plant_tall',      x:  30, y:  60, zIndex: 15 },
+    { id: 'furniture_floor_lamp',             x: 290, y:  60, zIndex: 12 },
+    // Sur-ext
+    { id: 'furniture_carpet_round_warm',      x: 160, y: 190, zIndex:  2 },
   ],
 
   // ===========================================================
-  // TERRAZA + CAFETERIA (site_terrace, 320x200) - descanso e inspeccion
-  // Agentes aqui: Inspector de Obra (80,100), Inspector Calidad (220,100)
-  // B72b: zona idle ampliada con cafeteria
+  // TERRAZA + INSPECCION (320x200) - 4 agentes
+  // (80,110) (240,110) (80,160) (240,160)
   // ===========================================================
   site_terrace: [
-    // Suelo: alfombra exterior bajo la zona lounge
-    { id: 'furniture_carpet_round_warm',       x: 240, y: 110, zIndex:  2 },
-    // Inspeccion (zona izquierda) - tipo terraza ver obra
-    { id: 'furniture_terrace_table',           x:  90, y: 110, zIndex:  8 },
-    { id: 'furniture_terrace_chair',           x:  50, y: 140, zIndex:  6 },
-    { id: 'furniture_terrace_chair',           x: 130, y: 140, zIndex:  6 },
-    { id: 'furniture_potted_cactus',           x:  40, y:  40, zIndex: 10 },
-    // Cafeteria (zona derecha)
-    { id: 'furniture_coffee_bar',              x: 250, y:  85, zIndex: 10 },
-    { id: 'furniture_coffee_machine',          x: 280, y:  60, zIndex: 14 },
-    { id: 'furniture_bar_stool',               x: 215, y: 130, zIndex:  6 },
-    { id: 'furniture_bar_stool',               x: 250, y: 140, zIndex:  6 },
-    { id: 'furniture_bar_stool',               x: 285, y: 130, zIndex:  6 },
-    // Lounge sofa - los agentes idle "descansan" aqui
-    { id: 'furniture_lounge_sofa',             x: 160, y: 165, zIndex:  8 },
-    { id: 'furniture_books_stacked_horizontal',x: 100, y: 165, zIndex:  9 }, // sobre sofa
-    { id: 'furniture_coffee_cup',              x: 195, y: 160, zIndex:  9 },
-    // Plantas decorativas
-    { id: 'furniture_small_plant',             x: 200, y:  50, zIndex:  8 },
-    { id: 'furniture_corner_plant_tall',       x: 290, y:  20, zIndex: 15 },
+    // Pared norte: vegetacion exterior
+    { id: 'furniture_potted_cactus',          x:  30, y:  30, zIndex: 10 },
+    { id: 'furniture_corner_plant_tall',      x: 290, y:  30, zIndex: 15 },
+    { id: 'furniture_painting_landscape',     x: 160, y:  20, zIndex: 18 },
+    // Centro-norte: cafeteria pequena (sin agente encima)
+    { id: 'furniture_coffee_machine',         x: 160, y:  35, zIndex: 14 },
+    { id: 'furniture_coffee_bar',             x: 160, y:  60, zIndex: 10 },
+    { id: 'furniture_bar_stool',              x: 130, y:  75, zIndex:  6 },
+    { id: 'furniture_bar_stool',              x: 190, y:  75, zIndex:  6 },
+    // Sur-ext: lounge sofa para visualizar zona descanso
+    { id: 'furniture_carpet_round_warm',      x: 160, y: 190, zIndex:  2 },
+    { id: 'furniture_lounge_sofa',            x: 160, y: 195, zIndex:  8 },
+    { id: 'furniture_terrace_table',          x:  30, y: 180, zIndex:  8 },
+    { id: 'furniture_small_plant',            x: 290, y: 180, zIndex:  8 },
   ],
 
   // ===========================================================
-  // TALLER GREMIOS (trades_workshop, 320x200) - coordinacion gremios
-  // Agentes aqui: Jefe de Obra, Jefe de Materiales, Comunicador, etc.
+  // TALLER GREMIOS (320x200) - 6 agentes
+  // (60,100) (160,90) (260,100) (60,160) (160,170) (260,160)
   // ===========================================================
   trades_workshop: [
-    // Suelo
-    { id: 'furniture_carpet_round_warm',       x: 130, y: 110, zIndex:  2 },
-    // Banco de trabajo central
-    { id: 'furniture_workbench',               x: 130, y:  90, zIndex: 10 },
-    { id: 'furniture_table_lamp_small',        x: 110, y:  75, zIndex: 14 },
-    { id: 'furniture_books_stacked_horizontal',x: 150, y:  85, zIndex: 12 },
-    // Pared con herramientas
-    { id: 'furniture_tool_rack',               x: 250, y:  50, zIndex: 12 },
-    // Mesa de planos
-    { id: 'furniture_plans_table',             x: 220, y: 140, zIndex:  8 },
-    { id: 'furniture_filing_papers_pile',      x: 230, y: 165, zIndex:  6 },
-    // Detalles
-    { id: 'furniture_small_plant',             x:  40, y:  50, zIndex:  8 },
-    { id: 'furniture_recycling_bin',           x: 290, y: 165, zIndex:  6 },
-    { id: 'furniture_painting_landscape',      x: 100, y:  20, zIndex: 18 },
-    { id: 'furniture_blueprint_roll',          x:  50, y: 165, zIndex:  5 },
+    // Pared norte
+    { id: 'furniture_tool_rack',              x: 160, y:  20, zIndex: 18 },
+    { id: 'furniture_painting_landscape',     x:  60, y:  20, zIndex: 18 },
+    // Esquinas (los agentes estan en y:90+ asi que pegado a y:30-50 esta libre)
+    { id: 'furniture_blueprint_roll',         x:  30, y:  50, zIndex:  8 },
+    { id: 'furniture_blueprint_roll',         x: 290, y:  50, zIndex:  8 },
+    { id: 'furniture_small_plant',            x:  30, y:  30, zIndex:  8 },
+    // Workbench y plans table en zonas de borde sur (frente abierto)
+    { id: 'furniture_workbench',              x: 100, y: 195, zIndex: 10 },
+    { id: 'furniture_plans_table',            x: 220, y: 195, zIndex:  8 },
+    { id: 'furniture_carpet_round_warm',      x: 160, y: 190, zIndex:  2 },
+    { id: 'furniture_recycling_bin',          x: 290, y: 195, zIndex:  6 },
   ],
 
   // ===========================================================
-  // ARCHIVO (320x200) - memoria del estudio
-  // Agentes aqui: Archivista, Documentalista, Tecnico Energetico, etc.
+  // ARCHIVO (320x200) - 6 agentes
+  // (60,100) (160,90) (260,100) (60,160) (160,170) (260,160)
   // ===========================================================
   archive: [
-    // Suelo
-    { id: 'furniture_carpet_rect_persian',     x: 160, y: 130, zIndex:  2 },
-    // Estanterias dominantes
-    { id: 'furniture_archive_shelf',           x:  60, y:  60, zIndex: 15 },
-    { id: 'furniture_archive_shelf',           x: 260, y:  60, zIndex: 15 },
-    { id: 'furniture_archive_cabinet',         x:  60, y: 140, zIndex: 12 },
-    { id: 'furniture_ladder_shelf',            x:  60, y:  30, zIndex: 18 },
-    // Mesa de trabajo con impresora
-    { id: 'furniture_printer_multifunction',   x: 160, y: 100, zIndex: 12 },
-    { id: 'furniture_filing_papers_pile',      x: 195, y: 100, zIndex:  8 },
-    // Libros y papeles dispersos
-    { id: 'furniture_books_stacked_horizontal',x: 130, y: 150, zIndex:  6 },
-    { id: 'furniture_books_stacked_horizontal',x: 200, y: 150, zIndex:  6 },
-    { id: 'furniture_filing_papers_pile',      x: 250, y: 165, zIndex:  6 },
-    // Detalles
-    { id: 'furniture_floor_lamp',              x: 290, y: 130, zIndex: 12 },
-    { id: 'furniture_small_plant',             x: 280, y: 165, zIndex:  8 },
-    { id: 'furniture_recycling_bin',           x:  40, y: 160, zIndex:  6 },
+    // Pared norte: estanterias y escalera
+    { id: 'furniture_archive_shelf',          x:  60, y:  40, zIndex: 15 },
+    { id: 'furniture_archive_shelf',          x: 260, y:  40, zIndex: 15 },
+    { id: 'furniture_ladder_shelf',           x:  60, y:  20, zIndex: 18 },
+    { id: 'furniture_archive_cabinet',        x: 160, y:  40, zIndex: 12 },
+    // Esquinas
+    { id: 'furniture_small_plant',            x:  30, y:  30, zIndex:  8 },
+    { id: 'furniture_floor_lamp',             x: 290, y:  30, zIndex: 12 },
+    // Sur-ext (frente abierto)
+    { id: 'furniture_carpet_rect_persian',    x: 160, y: 190, zIndex:  2 },
+    { id: 'furniture_printer_multifunction',  x: 100, y: 195, zIndex: 10 },
+    { id: 'furniture_books_stacked_horizontal',x:220, y: 195, zIndex:  6 },
+    { id: 'furniture_recycling_bin',          x: 290, y: 195, zIndex:  6 },
   ],
 
   // ===========================================================
-  // CORREDOR DE URGENCIAS (urgency_corridor, 960x160 - mas ancho)
-  // Agentes failed van aqui (B72e). Tipo pasillo largo con vendings.
+  // CORREDOR DE URGENCIAS (960x160 - mas ancho) - 0 residentes
+  // Decoracion plena: alarma + monitores + plantas + dispensers + vending
   // ===========================================================
   urgency_corridor: [
-    // Alarma central + monitores
-    { id: 'furniture_alarm_light',             x: 480, y:  20, zIndex: 20 },
-    { id: 'furniture_monitor_stand',           x: 240, y:  60, zIndex: 15 },
-    { id: 'furniture_monitor_stand',           x: 720, y:  60, zIndex: 15 },
-    // Vending machines (corredor de cafeteria/snacks de emergencia)
-    { id: 'furniture_vending_machine',         x: 380, y:  70, zIndex: 12 },
-    { id: 'furniture_vending_machine',         x: 580, y:  70, zIndex: 12 },
-    // Dispensadores agua en extremos
-    { id: 'furniture_water_dispenser',         x: 100, y:  90, zIndex: 12 },
-    { id: 'furniture_water_dispenser',         x: 860, y:  90, zIndex: 12 },
-    // Decoracion para no parecer tan austero
-    { id: 'furniture_corner_plant_tall',       x:  50, y:  30, zIndex: 15 },
-    { id: 'furniture_corner_plant_tall',       x: 910, y:  30, zIndex: 15 },
-    { id: 'furniture_painting_landscape',      x: 200, y:  20, zIndex: 18 },
-    { id: 'furniture_painting_landscape',      x: 760, y:  20, zIndex: 18 },
-    { id: 'furniture_recycling_bin',           x: 480, y: 130, zIndex:  6 },
+    { id: 'furniture_alarm_light',            x: 480, y:  20, zIndex: 20 },
+    { id: 'furniture_monitor_stand',          x: 240, y:  60, zIndex: 15 },
+    { id: 'furniture_monitor_stand',          x: 720, y:  60, zIndex: 15 },
+    { id: 'furniture_vending_machine',        x: 380, y:  70, zIndex: 12 },
+    { id: 'furniture_vending_machine',        x: 580, y:  70, zIndex: 12 },
+    { id: 'furniture_water_dispenser',        x: 100, y:  90, zIndex: 12 },
+    { id: 'furniture_water_dispenser',        x: 860, y:  90, zIndex: 12 },
+    { id: 'furniture_corner_plant_tall',      x:  50, y:  30, zIndex: 15 },
+    { id: 'furniture_corner_plant_tall',      x: 910, y:  30, zIndex: 15 },
+    { id: 'furniture_painting_landscape',     x: 200, y:  20, zIndex: 18 },
+    { id: 'furniture_painting_landscape',     x: 760, y:  20, zIndex: 18 },
+    { id: 'furniture_recycling_bin',          x: 480, y: 130, zIndex:  6 },
   ],
 };

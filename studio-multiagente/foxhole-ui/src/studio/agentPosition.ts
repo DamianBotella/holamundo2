@@ -1,26 +1,30 @@
 /**
  * Posicion world ortogonal del agente segun su estado (B72-rediseno PASO 3+4).
  *
- * Mapping de estado a destino:
- *   working           -> su workstation (default_position en su sala) = donde
- *                         "trabaja" en su mesa
- *   waiting_approval  -> mismo que working (visible en su mesa, orb amarillo)
- *   idle              -> seat en terraza-cafe (asignado por indice alfabetico
- *                         de agent_name para que sea estable)
- *   failed            -> pos en corredor de urgencias (asignado por indice)
- *   "meeting" (virtual) -> seat alrededor de la mesa de reuniones (cuando 2+
- *                         agentes comparten project_id)
+ * REGLA CENTRAL: por DEFECTO el agente esta SIEMPRE en su mesa (su sala).
+ * Idle = "esperando trabajo en mi puesto", NO "descanso en la cafeteria".
+ * Solo cambia de sala cuando hay un evento explicito (failed -> urgencias,
+ * meeting con companeros -> sala reuniones).
  *
- * Las coords son world ortogonales absolutas (mismo sistema que
- * room.bounding_box). El canvas las proyecta a iso al renderizar.
+ * Mapping definitivo:
+ *   working sin reunion  -> su mesa (default_position en su sala)
+ *   working en reunion   -> seat alrededor mesa de reuniones (si 2+
+ *                            agentes comparten active_project_ids)
+ *   waiting_approval     -> su mesa (orb amarillo pulsante)
+ *   idle                 -> su mesa (esperando trabajo)
+ *   failed               -> pos en corredor de urgencias (asignado por indice
+ *                            estable para distribuir a lo largo del pasillo)
  *
- * Sin animacion de movimiento todavia: el agente se renderiza en la posicion
- * destino directamente. La interpolacion ticker queda para B72-movimiento.
+ * Sin animacion todavia: el agente se renderiza en la posicion destino
+ * directamente. La interpolacion ticker queda para B72-movimiento.
+ *
+ * IDLE_POSITIONS (terraza-cafe) se reserva para iteracion futura: lugar al
+ * que un agente se desplaza si lleva > X tiempo en idle. Por ahora no se
+ * usa para no apilar a todos los agentes al arrancar la app.
  */
 
 import type { StudioAgent, StudioRoom } from '@/lib/types';
 import {
-  IDLE_POSITIONS,
   MEETING_POSITIONS,
   FAILED_POSITIONS,
   type WorldPosition,
@@ -32,14 +36,9 @@ export function getAgentWorldPosition(
   roomMap: Map<string, StudioRoom>,
   meetingNames: string[],
 ): WorldPosition | null {
-  // FAILED: corredor de urgencias (asignado por indice alfabetico)
+  // FAILED: corredor de urgencias (distribuido por indice estable)
   if (agent.state === 'failed') {
     return FAILED_POSITIONS[agentIndex % FAILED_POSITIONS.length];
-  }
-
-  // IDLE: terraza-cafe (asignado por indice alfabetico)
-  if (agent.state === 'idle') {
-    return IDLE_POSITIONS[agentIndex % IDLE_POSITIONS.length];
   }
 
   // WORKING en reunion: mesa de reuniones (solo si hay reunion activa Y
@@ -49,11 +48,10 @@ export function getAgentWorldPosition(
     if (meetingIdx !== -1) {
       return MEETING_POSITIONS[meetingIdx % MEETING_POSITIONS.length];
     }
-    // sin reunion: a su mesa
-    return getDefaultWorldPosition(agent, roomMap);
   }
 
-  // WAITING_APPROVAL: en su mesa, visible (orb amarillo pulsante indica espera)
+  // working sin reunion / waiting_approval / idle: SIEMPRE a su mesa.
+  // Es el comportamiento por defecto (los agentes "viven" en su sala).
   return getDefaultWorldPosition(agent, roomMap);
 }
 

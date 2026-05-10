@@ -3,11 +3,13 @@ import { api } from '@/lib/api';
 import type { PendingApproval } from '@/lib/types';
 
 export function usePendingApprovals() {
+  // B68: Realtime sobre tabla approvals invalida queryKey al instante.
+  // Polling 60s solo como fallback.
   return useQuery<PendingApproval[]>({
     queryKey: ['studio', 'pendingApprovals'],
     queryFn: api.pendingApprovals,
-    refetchInterval: 5000,
-    staleTime: 2000,
+    refetchInterval: 60 * 1000,
+    staleTime: 30 * 1000,
   });
 }
 

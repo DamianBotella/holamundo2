@@ -26,8 +26,8 @@ export function useStudioAgents() {
   const query = useQuery<StudioAgent[]>({
     queryKey: ['studio', 'agents'],
     queryFn: api.studioAgents,
-    staleTime: 5 * 1000,
-    refetchInterval: 30 * 1000, // fallback si Realtime falla
+    staleTime: 30 * 1000,
+    refetchInterval: 60 * 1000, // fallback si Realtime falla
   });
 
   useEffect(() => {
@@ -36,13 +36,14 @@ export function useStudioAgents() {
     const invalidate = () => {
       queryClient.invalidateQueries({ queryKey: ['studio', 'agents'] });
       queryClient.invalidateQueries({ queryKey: ['studio', 'pendingApprovals'] });
+      queryClient.invalidateQueries({ queryKey: ['studio', 'feed'] });
     };
 
-    // Nota: agent_executions y approvals NO tienen tenant_id directo en columna.
+    // B68: agent_executions y approvals NO tienen tenant_id directo en columna.
     // El filtro por tenant se aplica via RLS sobre project_id -> projects.tenant_id.
-    // Por tanto NO usamos `filter: 'tenant_id=eq...'` en postgres_changes (no
-    // funcionaria). Suscribimos a TODOS los cambios y dejamos que RLS filtre
-    // en el refetch.
+    // Por tanto NO usamos `filter: 'tenant_id=eq...'` en postgres_changes.
+    // Suscribimos a TODOS los cambios y dejamos que RLS filtre en el refetch.
+    // activity_log tambien sirve para refrescar el feed lateral.
     const channel = supabase
       .channel(`studio-state-${tenantId}`)
       .on(
@@ -53,6 +54,11 @@ export function useStudioAgents() {
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'approvals' },
+        invalidate,
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'activity_log' },
         invalidate,
       )
       .subscribe();

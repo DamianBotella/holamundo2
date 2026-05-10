@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import type { ProjectDeliverables } from '@/lib/types';
+import { useProjectDeliverablesRealtime } from '@/studio/hooks/useProjectDeliverablesRealtime';
 
 interface Props {
   projectId: string;
@@ -33,10 +34,15 @@ export function ProjectDeliverablesPanel({ projectId }: Props) {
   const queryClient = useQueryClient();
   const queryKey = ['project-deliverables', projectId];
 
+  // Suscripcion Realtime: invalida queryKey al instante cuando cambian
+  // rcd_*, iee_*, agent_executions del proyecto.
+  useProjectDeliverablesRealtime(projectId);
+
   const { data, isLoading, refetch } = useQuery<ProjectDeliverables>({
     queryKey,
     queryFn: () => api.projectDeliverables(projectId),
-    staleTime: 0,
+    staleTime: 30 * 1000,
+    refetchInterval: 60 * 1000, // fallback si Realtime se cae
     refetchOnMount: 'always',
   });
 
@@ -166,6 +172,7 @@ function RCDCard({
   const approved = data?.approved ?? null;
   const draft = data?.draft ?? null;
   const showing = approved || draft;
+  const hasPendingDraft = !!draft;
 
   const generate = useMutation({
     mutationFn: () => api.runRCD(projectId),
@@ -183,17 +190,18 @@ function RCDCard({
           <Trash2 className="w-4 h-4 text-foxhole-tan" />
           <h3 className="text-sm font-display font-semibold">Estudio Residuos (RCD)</h3>
         </div>
-        {showing && (
-          <span
-            className={`text-[10px] font-mono uppercase tracking-wider px-1.5 py-0.5 ${
-              approved
-                ? 'text-foxhole-state-working bg-foxhole-state-working/10'
-                : 'text-foxhole-state-waiting bg-foxhole-state-waiting/10'
-            }`}
-          >
-            {approved ? 'aprobado' : 'draft'}
-          </span>
-        )}
+        <div className="flex gap-1">
+          {approved && (
+            <span className="text-[10px] font-mono uppercase tracking-wider px-1.5 py-0.5 text-foxhole-state-working bg-foxhole-state-working/10">
+              aprobado
+            </span>
+          )}
+          {hasPendingDraft && (
+            <span className="text-[10px] font-mono uppercase tracking-wider px-1.5 py-0.5 text-foxhole-state-waiting bg-foxhole-state-waiting/10">
+              draft pend.
+            </span>
+          )}
+        </div>
       </div>
 
       {showing ? (
@@ -230,14 +238,14 @@ function RCDCard({
           {generate.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
           {approved ? 'Re-generar' : draft ? 'Re-generar' : 'Generar'}
         </button>
-        {draft && !approved && (
+        {hasPendingDraft && (
           <button
-            onClick={() => approveDraft.mutate(draft.draft_id!)}
+            onClick={() => approveDraft.mutate(draft!.draft_id!)}
             disabled={approveDraft.isPending}
             className="text-xs flex items-center justify-center gap-1.5 py-1.5 px-3 border border-foxhole-state-working/40 text-foxhole-state-working rounded hover:bg-foxhole-state-working/10"
           >
             {approveDraft.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
-            Aprobar
+            Aprobar draft
           </button>
         )}
       </div>
@@ -261,6 +269,7 @@ function IEECard({
   const approved = data?.approved ?? null;
   const draft = data?.draft ?? null;
   const showing = approved || draft;
+  const hasPendingDraft = !!draft;
   const [anioInput, setAnioInput] = useState('');
 
   const generate = useMutation({
@@ -282,17 +291,18 @@ function IEECard({
           <FileCheck className="w-4 h-4 text-foxhole-tan" />
           <h3 className="text-sm font-display font-semibold">Informe Evaluacion Edificios</h3>
         </div>
-        {showing && (
-          <span
-            className={`text-[10px] font-mono uppercase tracking-wider px-1.5 py-0.5 ${
-              approved
-                ? 'text-foxhole-state-working bg-foxhole-state-working/10'
-                : 'text-foxhole-state-waiting bg-foxhole-state-waiting/10'
-            }`}
-          >
-            {approved ? 'aprobado' : 'draft'}
-          </span>
-        )}
+        <div className="flex gap-1">
+          {approved && (
+            <span className="text-[10px] font-mono uppercase tracking-wider px-1.5 py-0.5 text-foxhole-state-working bg-foxhole-state-working/10">
+              aprobado
+            </span>
+          )}
+          {hasPendingDraft && (
+            <span className="text-[10px] font-mono uppercase tracking-wider px-1.5 py-0.5 text-foxhole-state-waiting bg-foxhole-state-waiting/10">
+              draft pend.
+            </span>
+          )}
+        </div>
       </div>
 
       {showing ? (
@@ -345,14 +355,14 @@ function IEECard({
           {generate.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileCheck className="w-3.5 h-3.5" />}
           {approved ? 'Re-generar' : draft ? 'Re-generar' : 'Generar IEE'}
         </button>
-        {draft && !approved && (
+        {hasPendingDraft && (
           <button
-            onClick={() => approveDraft.mutate(draft.draft_id!)}
+            onClick={() => approveDraft.mutate(draft!.draft_id!)}
             disabled={approveDraft.isPending}
             className="text-xs flex items-center justify-center gap-1.5 py-1.5 px-3 border border-foxhole-state-working/40 text-foxhole-state-working rounded hover:bg-foxhole-state-working/10"
           >
             {approveDraft.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
-            Aprobar
+            Aprobar draft
           </button>
         )}
       </div>

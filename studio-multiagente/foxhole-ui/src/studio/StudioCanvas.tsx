@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { CSSProperties, MouseEvent as ReactMouseEvent, WheelEvent as ReactWheelEvent } from 'react';
+import type { CSSProperties, MouseEvent as ReactMouseEvent } from 'react';
 import type { Container, Graphics, Ticker } from 'pixi.js';
 import { Maximize2, ZoomIn, ZoomOut } from 'lucide-react';
 import type { StudioAgent, StudioRoom } from '@/lib/types';
@@ -8,23 +8,6 @@ import { acquireStudio, releaseStudio, getStudio } from './pixiSingleton';
 import { drawRoom } from './StudioRoom';
 import { drawAgent } from './StudioAgent';
 import { drawFurnitureForRoom } from './StudioFurniture';
-import {
-  detectMeetingAgents,
-  getAgentTargetWorldPosition,
-  getDefaultWorldPosition,
-} from './agentTargets';
-import { AGENT_WALK_SPEED, ARRIVAL_THRESHOLD } from './data/agentPositions';
-
-// Custom properties que adjuntamos a cada Container de agente para animar
-// movimiento con interpolacion en el ticker.
-interface AnimatedAgentNode extends Container {
-  __agentName?: string;
-  __stateKey?: string;        // hash de (state + selected) para redibujar al cambiar
-  __currentWX?: number;       // posicion world actual (animada)
-  __currentWY?: number;
-  __targetWX?: number;        // posicion world destino
-  __targetWY?: number;
-}
 import {
   WORLD_W,
   WORLD_H,
@@ -104,40 +87,11 @@ export function StudioCanvas({
       //   waiting  freq=2pi*1.0 -> parpadeo 1s (1 Hz docu Opus)
       //   failed   freq=0       -> alpha y scale estaticos
       // Selection ring sigue con frecuencia ~0.8 Hz ambar parpadeante.
-      const handler = (t: Ticker) => {
+      const handler = (_t: Ticker) => {
         const layer = studio.layers.agents;
-        const tSec = performance.now() / 1000;
-        const ringAlpha = 0.45 + Math.sin(tSec * 5) * 0.45;
-        // dt en segundos. Pixi v8 ticker: t.deltaMS es ms desde ultimo frame.
-        const dt = t.deltaMS / 1000;
+        const t = performance.now() / 1000;
+        const ringAlpha = 0.45 + Math.sin(t * 5) * 0.45;
         for (const node of layer.children) {
-          // ===== B72 Paso 2: interpolacion world current -> target =====
-          const an = node as AnimatedAgentNode;
-          if (
-            an.__currentWX != null &&
-            an.__currentWY != null &&
-            an.__targetWX != null &&
-            an.__targetWY != null
-          ) {
-            const dx = an.__targetWX - an.__currentWX;
-            const dy = an.__targetWY - an.__currentWY;
-            const dist = Math.hypot(dx, dy);
-            if (dist > ARRIVAL_THRESHOLD) {
-              const step = Math.min(AGENT_WALK_SPEED * dt, dist);
-              an.__currentWX += (dx / dist) * step;
-              an.__currentWY += (dy / dist) * step;
-            } else {
-              an.__currentWX = an.__targetWX;
-              an.__currentWY = an.__targetWY;
-            }
-            // Proyectar a iso y aplicar al nodo
-            const iso = worldToIso(an.__currentWX, an.__currentWY);
-            an.x = iso.x;
-            an.y = iso.y;
-            an.zIndex = isoZIndexFromWorld(an.__currentWX, an.__currentWY);
-          }
-
-          // ===== Pulso de orb + ring (existente) =====
           const orb = (node as Container).children?.find(
             (c) => (c as Graphics).label === 'stateOrb',
           ) as (Graphics & { __pulseFreq?: number; __baseAlpha?: number }) | undefined;
@@ -148,7 +102,7 @@ export function StudioCanvas({
               orb.alpha = base;
               orb.scale.set(1);
             } else {
-              const phase = Math.sin(tSec * freq);
+              const phase = Math.sin(t * freq);
               orb.alpha = base * (0.55 + 0.45 * phase);
               orb.scale.set(1 + 0.22 * phase);
             }
@@ -158,8 +112,6 @@ export function StudioCanvas({
           ) as Graphics | undefined;
           if (ring) ring.alpha = ringAlpha;
         }
-        // Re-sortear z-order para que agentes mas al sur queden delante
-        layer.sortableChildren = true;
       };
       studio.app.ticker.add(handler);
       tickerHandlerRef.current = handler;
@@ -194,99 +146,49 @@ export function StudioCanvas({
 
   // 2b) Render mobiliario por habitacion (B72). Capa propia entre rooms y
   // agents. Fallback a rect placeholder si el PNG aun no esta generado.
+  // Defensivo: si layers.furniture no existe (singleton de version anterior
+  // por HMR), saltamos sin crashear.
   useEffect(() => {
     if (!pixiReady) return;
     const studio = getStudio();
     if (!studio || rooms.length === 0) return;
-    studio.layers.furniture.removeChildren();
-    for (const r of rooms) drawFurnitureForRoom(studio.layers.furniture, r);
+    const furnLayer = studio.layers.furniture;
+    if (!furnLayer) return;
+    furnLayer.removeChildren();
+    for (const r of rooms) drawFurnitureForRoom(furnLayer, r);
   }, [pixiReady, rooms]);
 
-  // 3) Render agents — B72 Paso 2: nodos persistentes que se mueven al
-  // cambiar de estado. El ticker (effect 1) interpola current -> target.
-  //
-  // - Si el agente es nuevo: se crea en su target world position (sin animar).
-  // - Si ya existe y cambio state/selected: redibujar (destroy + create) en
-  //   su current world position, conservando la animacion en curso.
-  // - Si solo cambio el target (transicion idle/working/meeting/failed):
-  //   actualizar __targetWX/Y y dejar que el ticker interpole.
+  // 3) Render agents (z-orden iso por (worldX + worldY) — fondo primero).
+  // B72 Paso 2 (movimiento por estado) revertido temporalmente — ver agentTargets.ts
+  // y data/agentPositions.ts: estan listos para integrar en B72b cuando
+  // diagnostiquemos el bug de pantalla negra del refactor con dev server delante.
   useEffect(() => {
     if (!pixiReady) return;
     const studio = getStudio();
     if (!studio || agents.length === 0 || rooms.length === 0) return;
     const roomMap = new Map<string, StudioRoom>();
     for (const r of rooms) roomMap.set(r.room_id, r);
+    studio.layers.agents.removeChildren();
 
-    const layer = studio.layers.agents;
+    const placed = agents
+      .map((a) => {
+        const room = roomMap.get(a.room_id);
+        if (!room) return null;
+        const wx = room.bounding_box.x + a.default_position.x;
+        const wy = room.bounding_box.y + a.default_position.y;
+        const iso = worldToIso(wx, wy);
+        return { a, wx, wy, iso, z: isoZIndexFromWorld(wx, wy) };
+      })
+      .filter((p): p is NonNullable<typeof p> => p !== null)
+      .sort((p, q) => p.z - q.z);
 
-    // Detectar reuniones (2+ agentes working compartiendo proyecto)
-    const { meetingNames } = detectMeetingAgents(agents);
-
-    // Indice por nombre para asignacion estable de IDLE/MEETING positions
-    const sortedAgents = [...agents].sort((a, b) => a.agent_name.localeCompare(b.agent_name));
-
-    // Map current children por agent_name para reuso/cleanup
-    const existing = new Map<string, AnimatedAgentNode>();
-    for (const c of layer.children) {
-      const n = c as AnimatedAgentNode;
-      if (n.__agentName) existing.set(n.__agentName, n);
-    }
-
-    const seen = new Set<string>();
-
-    for (let i = 0; i < sortedAgents.length; i++) {
-      const a = sortedAgents[i];
-      seen.add(a.agent_name);
-
-      const target =
-        getAgentTargetWorldPosition(a, i, roomMap, meetingNames) ??
-        getDefaultWorldPosition(a, roomMap);
-      if (!target) continue;
-
-      const stateKey = `${a.state}|${selectedAgentName === a.agent_name ? '1' : '0'}`;
-
-      const prev = existing.get(a.agent_name);
-      let node: AnimatedAgentNode;
-
-      if (prev && prev.__stateKey === stateKey) {
-        // Mismo state: solo actualizar target. El ticker animara.
-        node = prev;
-      } else {
-        // Nuevo o cambio de state: redibujar. Posicion inicial = current si
-        // existia, o target si es agente nuevo.
-        const currentWX = prev?.__currentWX ?? target.x;
-        const currentWY = prev?.__currentWY ?? target.y;
-        const initialIso = worldToIso(currentWX, currentWY);
-
-        if (prev) {
-          layer.removeChild(prev);
-          prev.destroy({ children: true });
-        }
-
-        const created = drawAgent(layer, {
-          agent: a,
-          position: { x: initialIso.x, y: initialIso.y },
-          isSelected: selectedAgentName === a.agent_name,
-          onSelect: onSelectAgent,
-        }) as AnimatedAgentNode;
-
-        created.__currentWX = currentWX;
-        created.__currentWY = currentWY;
-        node = created;
-      }
-
-      node.__agentName = a.agent_name;
-      node.__stateKey = stateKey;
-      node.__targetWX = target.x;
-      node.__targetWY = target.y;
-    }
-
-    // Eliminar nodos de agentes que ya no estan (filtros, swap de tenant, etc.)
-    for (const [name, n] of existing) {
-      if (!seen.has(name)) {
-        layer.removeChild(n);
-        n.destroy({ children: true });
-      }
+    for (const { a, iso } of placed) {
+      drawAgent(studio.layers.agents, {
+        agent: a,
+        position: { x: iso.x, y: iso.y },
+        isSelected: selectedAgentName === a.agent_name,
+        onSelect: onSelectAgent,
+      });
     }
   }, [pixiReady, rooms, agents, selectedAgentName, onSelectAgent]);
 
@@ -325,25 +227,35 @@ export function StudioCanvas({
     return () => obs.disconnect();
   }, [pixiReady]);
 
-  // Handlers de pan/zoom (sobre el div host)
-  const onWheel = (e: ReactWheelEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    const delta = -e.deltaY * 0.0015;
-    const factor = Math.exp(delta);
-    const newZoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, zoom * factor));
-    if (newZoom === zoom) return;
-    const rect = containerRef.current?.getBoundingClientRect();
-    if (!rect) {
+  // Handlers de pan/zoom (sobre el div host).
+  // Wheel: React 18+ adjunta onWheel como passive listener por defecto, lo
+  // que prohibe e.preventDefault() (warning ruidoso en console). Lo
+  // adjuntamos manualmente con { passive: false } via useEffect mas abajo.
+  // Usamos un ref para que el handler tenga acceso a zoom/pan actuales.
+  const wheelStateRef = useRef({ zoom, pan });
+  wheelStateRef.current = { zoom, pan };
+
+  useEffect(() => {
+    const host = containerRef.current;
+    if (!host) return;
+    const handleWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const { zoom: z, pan: p } = wheelStateRef.current;
+      const delta = -e.deltaY * 0.0015;
+      const factor = Math.exp(delta);
+      const newZoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z * factor));
+      if (newZoom === z) return;
+      const rect = host.getBoundingClientRect();
+      const cx = e.clientX - rect.left;
+      const cy = e.clientY - rect.top;
+      const wx = (cx - p.x) / z;
+      const wy = (cy - p.y) / z;
       setZoom(newZoom);
-      return;
-    }
-    const cx = e.clientX - rect.left;
-    const cy = e.clientY - rect.top;
-    const wx = (cx - pan.x) / zoom;
-    const wy = (cy - pan.y) / zoom;
-    setZoom(newZoom);
-    setPan({ x: cx - wx * newZoom, y: cy - wy * newZoom });
-  };
+      setPan({ x: cx - wx * newZoom, y: cy - wy * newZoom });
+    };
+    host.addEventListener('wheel', handleWheel, { passive: false });
+    return () => host.removeEventListener('wheel', handleWheel);
+  }, []);
 
   const onMouseDown = (e: ReactMouseEvent<HTMLDivElement>) => {
     if (e.button !== 1 && !(e.button === 0 && e.shiftKey)) return;
@@ -402,7 +314,6 @@ export function StudioCanvas({
         ref={containerRef}
         className="overflow-hidden relative select-none flex-1"
         style={{ background: PALETTE.bgCanvas, ...cursorStyle }}
-        onWheel={onWheel}
         onMouseDown={onMouseDown}
         onMouseMove={onMouseMove}
         onMouseUp={onMouseUp}

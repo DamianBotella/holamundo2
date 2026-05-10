@@ -1,7 +1,8 @@
 import { useMemo } from 'react';
 import { Radio, Users } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
+import type { StudioAgent } from '@/lib/types';
 import { useActivityFeed } from './hooks/useActivityFeed';
-import { useStudioAgents } from './hooks/useStudioAgents';
 import { detectMeetingAgents } from './agentTargets';
 
 const STATUS_COLOR: Record<string, string> = {
@@ -31,7 +32,14 @@ function formatRelative(iso: string): string {
  */
 export function ActivityFeed() {
   const { data: events = [], isLoading } = useActivityFeed(30);
-  const { data: agents = [] } = useStudioAgents();
+  // Suscribimos a la cache de ['studio', 'agents'] sin disparar fetch ni Realtime.
+  // useStudioAgents (en StudioPage) ya carga + suscribe Realtime; nosotros solo
+  // leemos reactivamente. Llamar useStudioAgents aqui crashea por
+  // "cannot add postgres_changes callbacks after subscribe()" (canal duplicado).
+  const { data: agents = [] } = useQuery<StudioAgent[]>({
+    queryKey: ['studio', 'agents'],
+    enabled: false,
+  });
 
   // Map agent_name -> display_name humano para mostrar en el feed.
   const displayMap = useMemo(() => {

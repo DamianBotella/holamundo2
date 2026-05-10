@@ -54,7 +54,8 @@ export async function acquireStudio(opts: InitOptions): Promise<StudioPixi> {
     });
     app.canvas.style.display = 'block';
 
-    // Pre-cargar sprites de agentes y muebles en paralelo
+    // Pre-cargar sprites de agentes y muebles en paralelo. Si alguna textura
+    // falla individualmente, el registry la salta (try/catch interno).
     await Promise.all([preloadSprites(), preloadFurniture()]);
 
     const world = new Container();

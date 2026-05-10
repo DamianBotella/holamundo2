@@ -2,6 +2,8 @@ import { Container, Graphics, Text, TextStyle } from 'pixi.js';
 import type { StudioRoom } from '@/lib/types';
 import { PALETTE } from './palette';
 import { rectToIsoQuad, worldToIso } from './iso';
+import { getFurnitureTexture } from './furnitureRegistry';
+import { ROOM_FLOOR_TILE } from './data/roomFloors';
 
 /**
  * Dibuja una habitacion en proyeccion isometrica 2:1 (sec 1.1 del spec).
@@ -24,12 +26,20 @@ export function drawRoom(parent: Container, room: StudioRoom): Container {
   const { x, y, w, h } = room.bounding_box;
   const [tl, tr, br, bl] = rectToIsoQuad(x, y, w, h);
 
-  // Suelo (rombo)
+  // Suelo: si hay tile de tarima cargado para este room, lo usamos como
+  // textura del polígono (Pixi 8 fill({texture}) repite la textura como
+  // pattern automaticamente). Si no, fallback al color plano de la BD.
+  const floorTileId = ROOM_FLOOR_TILE[room.room_id];
+  const floorTexture = floorTileId ? getFurnitureTexture(floorTileId) : null;
+
   const floor = new Graphics();
-  floor
-    .poly([tl.x, tl.y, tr.x, tr.y, br.x, br.y, bl.x, bl.y])
-    .fill({ color: fillColor })
-    .stroke({ color: borderColor, width: 2 });
+  floor.poly([tl.x, tl.y, tr.x, tr.y, br.x, br.y, bl.x, bl.y]);
+  if (floorTexture) {
+    floor.fill({ texture: floorTexture });
+  } else {
+    floor.fill({ color: fillColor });
+  }
+  floor.stroke({ color: borderColor, width: 2 });
   node.addChild(floor);
 
   // Borde interior (rombo mas pequeno) — emula sensacion de papel/baldosa con margen

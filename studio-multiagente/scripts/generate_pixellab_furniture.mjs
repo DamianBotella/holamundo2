@@ -102,16 +102,51 @@ const FURNITURE = [
   ['furniture_coffee_bar',                  'small wooden cafe bar counter with light oak surface and front panel, civilian coffee corner'],
   ['furniture_bar_stool',                   'tall wooden bar stool with footrest and circular seat, cafe style civilian'],
   ['furniture_water_dispenser',             'standalone office water cooler dispenser with large blue water jug on top and small cups holder'],
+
+  // ---- B72c: ambientacion completa (suelos + props densos) ----
+
+  // Suelos de tarima parquet — texturas planas top-down (NO isometric).
+  // El frontend las aplica como TilingSprite sobre el rombo iso de cada room.
+  // Estos sprites NO usan el flag isometric (override en generateOne).
+  ['floor_tile_oak_warm',                   'flat top down view of seamless tileable warm oak wood plank floor texture, horizontal wood planks aligned in straight rows, soft warm brown wood grain, repeating pattern, no perspective, no shadows, no objects, just floor texture'],
+  ['floor_tile_oak_dark',                   'flat top down view of seamless tileable dark walnut wood plank floor texture, horizontal wood planks aligned in straight rows, deep brown wood grain, repeating pattern, no perspective, no shadows, no objects, just floor texture'],
+  ['floor_tile_oak_light',                  'flat top down view of seamless tileable light pine wood plank floor texture, horizontal wood planks aligned in straight rows, pale beige wood grain, repeating pattern, no perspective, no shadows, no objects, just floor texture'],
+
+  // Mesas con cosas encima (densidad oficina real)
+  ['furniture_monitor_on_desk',             'standalone computer monitor with stand on small desk, modern flat screen with desktop wallpaper, civilian office'],
+  ['furniture_keyboard_mouse_set',          'small mechanical keyboard and computer mouse pair on a desk surface, civilian office accessories'],
+  ['furniture_coffee_cup',                  'small ceramic coffee cup with saucer and steam, beige and brown, civilian office desk item'],
+  ['furniture_pencil_holder',               'small cylindrical pencil holder cup full of colored pencils and pens, wooden or ceramic, civilian'],
+  ['furniture_table_lamp_small',            'small table desk lamp with green banker glass shade and brass base, classic civilian study lamp'],
+
+  // Lounge / descanso / utilidades
+  ['furniture_lounge_sofa',                 'comfortable two seat office lounge sofa in mustard yellow fabric with wooden legs, civilian rest area'],
+  ['furniture_vending_machine',             'tall office vending machine with glass front showing snacks and drinks, red and white, civilian'],
+  ['furniture_printer_multifunction',       'office multifunction laser printer in light grey with paper tray and small display, civilian'],
+
+  // Decoracion calida (alfombras, cuadros, libros, plantas)
+  ['furniture_carpet_round_warm',           'round area rug with warm beige and rust orange concentric pattern, civilian office decor, top down view'],
+  ['furniture_carpet_rect_persian',         'small rectangular persian style area rug with warm red and gold ornate pattern, civilian decor'],
+  ['furniture_painting_landscape',          'small framed landscape oil painting on wall in dark wood frame, mountain countryside scene, civilian decor'],
+  ['furniture_books_stacked_horizontal',    'small horizontal stack of three thick hardcover books on a surface, mixed warm leather covers, civilian'],
+  ['furniture_plant_hanging_wall',          'small hanging wall planter with pothos vine cascading green leaves, civilian indoor plant decor'],
 ];
 
 async function generateOne(id, rolePrompt) {
-  const description = PROMPT_BASE + rolePrompt;
-  const isSmall = id === 'furniture_alarm_light';
+  const isFloorTile = id.startsWith('floor_tile_');
+  // Para floor tiles NO usamos PROMPT_BASE (que tiene "isometric pixel art
+  // furniture"). Generamos textura plana repetible que el frontend tilea sobre
+  // el rombo iso. Para muebles, prompt habitual.
+  const description = isFloorTile ? rolePrompt : PROMPT_BASE + rolePrompt;
+  // Tamano por tipo: tiles de suelo cuadrados 64x64 para mejor tiling planar;
+  // alarma pequena en 32x32; resto de muebles en 64x64.
+  let size = { width: 64, height: 64 };
+  if (id === 'furniture_alarm_light') size = { width: 32, height: 32 };
   const body = {
     description,
-    image_size: isSmall ? { width: 32, height: 32 } : { width: 64, height: 64 },
-    no_background: true,
-    isometric: true,
+    image_size: size,
+    no_background: !isFloorTile, // los floors tienen fondo (es la propia textura)
+    isometric: !isFloorTile,     // los floors NO son isometricos (top-down plano)
     text_guidance_scale: 9,
   };
   const res = await fetch('https://api.pixellab.ai/v2/create-image-pixflux', {

@@ -1,9 +1,15 @@
-import { Container, Graphics, Text, TextStyle } from 'pixi.js';
+import { Container, Graphics, Matrix, Text, TextStyle } from 'pixi.js';
 import type { StudioRoom } from '@/lib/types';
 import { PALETTE } from './palette';
 import { rectToIsoQuad, worldToIso } from './iso';
 import { getFurnitureTexture } from './furnitureRegistry';
 import { ROOM_FLOOR_TILE } from './data/roomFloors';
+
+// Escala de la textura del suelo. La textura PixelLab es 64x64 con tablas
+// gruesas; aplicarla 1:1 hace que las tablas sean tan grandes como un
+// personaje (48x64). Con 0.0875 las tablas miden ~5-6px, finas, perfectas
+// para que parezca tarima real con muchas tablas por sala.
+const FLOOR_TEXTURE_SCALE = 0.0875;
 
 /**
  * Dibuja una habitacion en proyeccion isometrica 2:1 (sec 1.1 del spec).
@@ -35,7 +41,10 @@ export function drawRoom(parent: Container, room: StudioRoom): Container {
   const floor = new Graphics();
   floor.poly([tl.x, tl.y, tr.x, tr.y, br.x, br.y, bl.x, bl.y]);
   if (floorTexture) {
-    floor.fill({ texture: floorTexture });
+    // Escalamos la textura para que las tablas sean proporcionadas a los
+    // personajes (sin esto cada tabla mide como una persona).
+    const matrix = new Matrix().scale(FLOOR_TEXTURE_SCALE, FLOOR_TEXTURE_SCALE);
+    floor.fill({ texture: floorTexture, matrix });
   } else {
     floor.fill({ color: fillColor });
   }

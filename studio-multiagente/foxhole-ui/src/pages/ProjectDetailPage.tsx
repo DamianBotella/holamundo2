@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { ArrowLeft, AlertTriangle, MapPin, Wallet } from 'lucide-react';
+import { ArrowLeft, AlertTriangle, MapPin, Wallet, Layers } from 'lucide-react';
 import { api } from '@/lib/api';
 import type { ProjectSummary } from '@/lib/types';
 import type { TimelineEvent } from '@/lib/api';
@@ -9,9 +9,10 @@ import { ProjectDeliverablesPanel } from '@/components/ProjectDeliverablesPanel'
 interface Props {
   projectId: string;
   onBack: () => void;
+  onOpenStudio?: () => void;
 }
 
-export function ProjectDetailPage({ projectId, onBack }: Props) {
+export function ProjectDetailPage({ projectId, onBack, onOpenStudio }: Props) {
   const { data: project, isLoading } = useQuery<ProjectSummary | null>({
     queryKey: ['project', projectId],
     queryFn: () => api.projectDetail(projectId) as Promise<ProjectSummary | null>,
@@ -52,6 +53,16 @@ export function ProjectDetailPage({ projectId, onBack }: Props) {
           <ArrowLeft className="w-4 h-4" />
           Mapa global
         </button>
+        {onOpenStudio && (
+          <button
+            onClick={onOpenStudio}
+            className="ml-auto foxhole-btn-primary flex items-center gap-1.5 px-3 py-1.5 text-sm"
+            title="Abrir el Estudio con este proyecto activo"
+          >
+            <Layers className="w-3.5 h-3.5" />
+            Abrir en Estudio
+          </button>
+        )}
       </div>
 
       <div className="foxhole-card p-6">

@@ -36,7 +36,16 @@ export function drawAgent(parent: Container, opts: DrawAgentOptions): Container 
 
   const stateColor = parseHex(colorForState(agent.state));
   const categoryColor = parseHex(colorForCategory(agent.category));
-  const halo = agent.state === 'waiting_approval' || agent.state === 'failed';
+  // B70 X7 Oficina Viva: halo activo en 3 estados (no solo waiting/failed).
+  // Cada estado define su frecuencia angular. El ticker la lee de __pulseFreq:
+  //   working          -> 2pi*0.6 rad/s (suave, "respiracion activa")
+  //   waiting_approval -> 2pi*1.0 rad/s (parpadeo claro segun docu Opus)
+  //   failed           -> 0       (alpha estatica, no pulsa)
+  const haloConfig =
+    agent.state === 'working'           ? { alpha: 0.40, freq: 2 * Math.PI * 0.6 } :
+    agent.state === 'waiting_approval'  ? { alpha: 0.50, freq: 2 * Math.PI * 1.0 } :
+    agent.state === 'failed'            ? { alpha: 0.35, freq: 0 } :
+    null;
   const badgeCount =
     agent.pending_approvals_count > 0
       ? agent.pending_approvals_count
@@ -94,12 +103,14 @@ export function drawAgent(parent: Container, opts: DrawAgentOptions): Container 
   }
 
   // Halo pulsante (etiquetado para que el ticker pueda animarlo)
-  if (halo) {
+  if (haloConfig) {
     const haloG = new Graphics();
-    haloG.circle(0, 0, w * 0.7).fill({ color: stateColor, alpha: 0.18 });
+    haloG.circle(0, 0, w * 0.7).fill({ color: stateColor, alpha: haloConfig.alpha });
     haloG.label = 'halo';
     (haloG as Graphics & { __radius: number }).__radius = w * 0.7;
     (haloG as Graphics & { __color: number }).__color = stateColor;
+    (haloG as Graphics & { __pulseFreq: number }).__pulseFreq = haloConfig.freq;
+    (haloG as Graphics & { __baseAlpha: number }).__baseAlpha = haloConfig.alpha;
     node.addChild(haloG);
   }
 
@@ -246,11 +257,25 @@ function parseHex(css: string, fallback = 0x000000): number {
 }
 
 /**
- * Texto de la burbuja segun estado del agente (sec 5.2 spec, max 3 palabras).
- * En el futuro se puede ampliar con `current_task_summary` desde el endpoint
- * cuando el orquestador exponga la accion concreta.
+ * Texto de la burbuja segun estado del agente.
+ * B70 X7 Oficina Viva: si el agente tiene last_action_text reciente
+ * (ultimas 2h, viene del view ampliado por migration 073), lo formateamos
+ * y lo mostramos en lugar del texto generico. Maximo ~25 chars.
  */
 function taskTextForAgent(agent: StudioAgent): string | null {
+  // Si hay accion reciente concreta, mostrarla (mas informativa que "Trabajando")
+  const action = agent.last_action_text;
+  if (action && (agent.state === 'working' || agent.state === 'waiting_approval')) {
+    const formatted = formatActionLabel(action);
+    if (formatted) {
+      // Anadir contador si hay multiples ejecuciones simultaneas
+      if (agent.state === 'working' && agent.active_count > 1) {
+        return `${formatted} · ${agent.active_count}`;
+      }
+      return formatted;
+    }
+  }
+  // Fallback: texto fijo por estado
   if (agent.state === 'working') {
     return agent.active_count > 1
       ? `Trabajando · ${agent.active_count}`
@@ -265,4 +290,41 @@ function taskTextForAgent(agent: StudioAgent): string | null {
     return 'Error en ejecucion';
   }
   return null;
+}
+
+/**
+ * Formatea el snake_case del campo activity_log.action a algo legible
+ * para la burbuja. Ej:
+ *   'project_created'      -> 'Proyecto creado'
+ *   'briefing_complete'    -> 'Briefing completo'
+ *   'design_option_picked' -> 'Diseno elegido'
+ *   'rcd_approved'         -> 'RCD aprobado'
+ */
+function formatActionLabel(action: string): string | null {
+  if (!action) return null;
+  const trimmed = action.trim().toLowerCase();
+  if (!trimmed) return null;
+
+  // Reemplazos especificos para acronimos y terminos comunes
+  const replacements: Array<[RegExp, string]> = [
+    [/^project_created$/, 'Proyecto creado'],
+    [/^briefing_complete$/, 'Briefing completo'],
+    [/^design_option_picked$/, 'Diseno elegido'],
+    [/^rcd_approved$/, 'RCD aprobado'],
+    [/^iee_approved$/, 'IEE aprobado'],
+    [/^proposal_sent$/, 'Propuesta enviada'],
+    [/^cost_estimate_done$/, 'Coste estimado'],
+    [/^trade_request_created$/, 'Encargo a gremio'],
+    [/^approval_requested$/, 'Pide aprobacion'],
+    [/^approval_granted$/, 'Aprobado'],
+  ];
+  for (const [re, label] of replacements) {
+    if (re.test(trimmed)) return label;
+  }
+
+  // Generico: snake_case -> primera letra mayuscula + espacios. Capar a 25 chars.
+  const generic = trimmed
+    .replace(/_/g, ' ')
+    .replace(/^./, (c) => c.toUpperCase());
+  return generic.length > 25 ? generic.slice(0, 22) + '...' : generic;
 }

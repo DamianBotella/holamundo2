@@ -8,6 +8,8 @@ import {
   PALETTE,
 } from '@/studio';
 import { StudioSidebar } from '@/studio/StudioSidebar';
+import { ProjectSelector } from '@/studio/ProjectSelector';
+import { useActiveProject } from '@/studio/hooks/useActiveProject';
 
 interface Props {
   onBack: () => void;
@@ -23,6 +25,7 @@ const CANVAS_W = TOTAL_W - SIDEBAR_W; // 960
 export function StudioPage({ onBack }: Props) {
   const { data: rooms = [], error: roomsError, isLoading: roomsLoading } = useStudioRooms();
   const { data: agents = [], error: agentsError, isLoading: agentsLoading } = useStudioAgents();
+  const { activeProjectId, setActiveProjectId } = useActiveProject();
 
   const [selectedName, setSelectedName] = useState<string | null>(null);
   const selectedAgent = useMemo<StudioAgent | null>(
@@ -48,6 +51,10 @@ export function StudioPage({ onBack }: Props) {
           Mapa global
         </button>
         <h1 className="foxhole-stencil text-base">Estudio operativo</h1>
+        <ProjectSelector
+          activeProjectId={activeProjectId}
+          onChange={setActiveProjectId}
+        />
         <span className="ml-auto text-[10px] font-mono uppercase tracking-[0.2em] text-foxhole-muted">
           {agents.length} agentes · {rooms.length} habitaciones
         </span>
@@ -85,7 +92,7 @@ export function StudioPage({ onBack }: Props) {
           />
         </div>
         <div style={{ width: SIDEBAR_W, height: TOTAL_H }} className="border-l border-foxhole-border-strong">
-          <StudioSidebar selectedAgent={selectedAgent} />
+          <StudioSidebar selectedAgent={selectedAgent} activeProjectId={activeProjectId} />
         </div>
       </div>
     </div>

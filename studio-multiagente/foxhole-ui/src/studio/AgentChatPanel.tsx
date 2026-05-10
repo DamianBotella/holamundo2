@@ -7,6 +7,10 @@ import { colorForState, STATE_LABEL } from './palette';
 
 interface Props {
   agent: StudioAgent | null;
+  // B70 X7 Oficina Viva: cuando hay proyecto activo seleccionado, el chat
+  // se filtra por (agent_name, project_id) y el LLM recibe contexto del
+  // proyecto. Si projectId es null el chat es global del agente.
+  projectId?: string | null;
 }
 
 /**
@@ -16,7 +20,7 @@ interface Props {
  * que invoca al LLM con un system prompt construido a partir de agents_catalog.
  * Conversacion en memoria por agente (sin persistencia BD todavia).
  */
-export function AgentChatPanel({ agent }: Props) {
+export function AgentChatPanel({ agent, projectId = null }: Props) {
   return (
     <aside className="foxhole-corner p-4 flex flex-col gap-2 overflow-hidden h-full">
       <h2 className="foxhole-stencil text-[11px]">Inspeccion</h2>
@@ -33,13 +37,19 @@ export function AgentChatPanel({ agent }: Props) {
           </div>
         </div>
       ) : (
-        <AgentDetailWithChat agent={agent} />
+        <AgentDetailWithChat agent={agent} projectId={projectId} />
       )}
     </aside>
   );
 }
 
-function AgentDetailWithChat({ agent }: { agent: StudioAgent }) {
+function AgentDetailWithChat({
+  agent,
+  projectId,
+}: {
+  agent: StudioAgent;
+  projectId: string | null;
+}) {
   const {
     messages,
     sendMessage,
@@ -47,7 +57,7 @@ function AgentDetailWithChat({ agent }: { agent: StudioAgent }) {
     isLoadingHistory,
     error,
     historyCount,
-  } = useAgentChat(agent.agent_name);
+  } = useAgentChat(agent.agent_name, projectId);
   const [draft, setDraft] = useState('');
   const scrollRef = useRef<HTMLDivElement | null>(null);
 

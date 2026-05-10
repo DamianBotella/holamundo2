@@ -46,7 +46,19 @@ export function App() {
           />
         )}
         {route.name === 'project' && (
-          <ProjectDetailPage projectId={route.id} onBack={() => setRoute({ name: 'dashboard' })} />
+          <ProjectDetailPage
+            projectId={route.id}
+            onBack={() => setRoute({ name: 'dashboard' })}
+            onOpenStudio={() => {
+              if (typeof window !== 'undefined') {
+                window.localStorage.setItem('arquitai.activeProjectId', route.id);
+                const url = new URL(window.location.href);
+                url.searchParams.set('project', route.id);
+                window.history.replaceState({}, '', url.toString());
+              }
+              setRoute({ name: 'studio' });
+            }}
+          />
         )}
         {route.name === 'studio' && (
           <StudioPage onBack={() => setRoute({ name: 'dashboard' })} />

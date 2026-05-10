@@ -98,6 +98,10 @@ export interface StudioAgent {
   recent_failures: number;
   last_started_at: string | null;
   active_project_ids: string[];
+  // B70 (X7 Oficina Viva): texto de la ultima accion del agente desde activity_log
+  // (migracion 073). Sirve para la burbuja contextual sobre el sprite.
+  last_action_text?: string | null;
+  last_action_at?: string | null;
 }
 
 export interface StudioFeedEvent {

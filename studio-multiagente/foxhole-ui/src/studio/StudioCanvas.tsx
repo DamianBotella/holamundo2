@@ -78,25 +78,33 @@ export function StudioCanvas({
         }
       }
 
-      // Ticker para halos pulsantes y selection ring (B70 X7 Oficina Viva).
-      // Cada halo guarda su __pulseFreq y __baseAlpha en drawAgent. El ticker
-      // multiplica baseAlpha por (0.5 + 0.5*sin(t*freq)) para que pulse:
-      //   working  freq=2pi*0.6 -> "respiracion" cada ~1.6s
-      //   waiting  freq=2pi*1.0 -> parpadeo cada 1s (1 Hz docu Opus)
-      //   failed   freq=0       -> alpha estatica (rojo fijo)
+      // Ticker para orb de estado pulsante y selection ring (B70b).
+      // Cada orb guarda __pulseFreq y __baseAlpha. El ticker:
+      //   - Pulsa alpha:  base * (0.5 + 0.5*sin(t*freq))
+      //   - Pulsa scale:  1.0 + 0.20*sin(t*freq)  (efecto "latido")
+      //   working  freq=2pi*0.6 -> respiracion ~1.6s
+      //   waiting  freq=2pi*1.0 -> parpadeo 1s (1 Hz docu Opus)
+      //   failed   freq=0       -> alpha y scale estaticos
       // Selection ring sigue con frecuencia ~0.8 Hz ambar parpadeante.
       const handler = (_t: Ticker) => {
         const layer = studio.layers.agents;
         const t = performance.now() / 1000;
         const ringAlpha = 0.45 + Math.sin(t * 5) * 0.45;
         for (const node of layer.children) {
-          const halo = (node as Container).children?.find(
-            (c) => (c as Graphics).label === 'halo',
+          const orb = (node as Container).children?.find(
+            (c) => (c as Graphics).label === 'stateOrb',
           ) as (Graphics & { __pulseFreq?: number; __baseAlpha?: number }) | undefined;
-          if (halo) {
-            const freq = halo.__pulseFreq ?? 2 * Math.PI * 0.8;
-            const base = halo.__baseAlpha ?? 0.18;
-            halo.alpha = freq === 0 ? base : base * (0.5 + 0.5 * Math.sin(t * freq));
+          if (orb) {
+            const freq = orb.__pulseFreq ?? 2 * Math.PI * 0.8;
+            const base = orb.__baseAlpha ?? 0.95;
+            if (freq === 0) {
+              orb.alpha = base;
+              orb.scale.set(1);
+            } else {
+              const phase = Math.sin(t * freq);
+              orb.alpha = base * (0.55 + 0.45 * phase);
+              orb.scale.set(1 + 0.22 * phase);
+            }
           }
           const ring = (node as Container).children?.find(
             (c) => (c as Graphics).label === 'selectionRing',

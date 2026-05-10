@@ -36,15 +36,17 @@ export function drawAgent(parent: Container, opts: DrawAgentOptions): Container 
 
   const stateColor = parseHex(colorForState(agent.state));
   const categoryColor = parseHex(colorForCategory(agent.category));
-  // B70 X7 Oficina Viva: halo activo en 3 estados (no solo waiting/failed).
-  // Cada estado define su frecuencia angular. El ticker la lee de __pulseFreq:
-  //   working          -> 2pi*0.6 rad/s (suave, "respiracion activa")
-  //   waiting_approval -> 2pi*1.0 rad/s (parpadeo claro segun docu Opus)
-  //   failed           -> 0       (alpha estatica, no pulsa)
-  const haloConfig =
-    agent.state === 'working'           ? { alpha: 0.40, freq: 2 * Math.PI * 0.6 } :
-    agent.state === 'waiting_approval'  ? { alpha: 0.50, freq: 2 * Math.PI * 1.0 } :
-    agent.state === 'failed'            ? { alpha: 0.35, freq: 0 } :
+  // B70b: Quitamos halo y plinto gris. Indicador de estado = orb sobre la
+  // cabeza (mas limpio visualmente). Cada estado define alpha base y frec
+  // de pulso (rad/s):
+  //   working          -> respiracion suave 0.6 Hz
+  //   waiting_approval -> parpadeo 1 Hz (docu Opus)
+  //   failed           -> rojo fijo
+  //   idle             -> sin orb
+  const orbConfig =
+    agent.state === 'working'           ? { alpha: 0.95, freq: 2 * Math.PI * 0.6 } :
+    agent.state === 'waiting_approval'  ? { alpha: 1.00, freq: 2 * Math.PI * 1.0 } :
+    agent.state === 'failed'            ? { alpha: 0.95, freq: 0 } :
     null;
   const badgeCount =
     agent.pending_approvals_count > 0
@@ -52,6 +54,17 @@ export function drawAgent(parent: Container, opts: DrawAgentOptions): Container 
       : agent.active_count > 0
       ? agent.active_count
       : 0;
+
+  // B70b: posicionamiento horizontal del orb de estado y badge de notif.
+  //   - Si ambos visibles: orb a la izquierda (x=-10), badge a la derecha (x=10)
+  //   - Si solo uno: centrado (x=0)
+  // Comparten la misma Y (encima de la cabeza).
+  const hasOrb = orbConfig !== null;
+  const hasBadge = badgeCount > 0;
+  const both = hasOrb && hasBadge;
+  const orbX = both ? -10 : 0;
+  const badgeX = both ? 10 : 0;
+  const headY = -h / 2 - 8;
 
   const node = new Container();
   node.label = `agent:${agent.agent_name}`;
@@ -61,10 +74,7 @@ export function drawAgent(parent: Container, opts: DrawAgentOptions): Container 
   node.cursor = 'pointer';
   node.on('pointertap', () => onSelect(agent));
 
-  // Sombra eliptica
-  const shadow = new Graphics();
-  shadow.ellipse(0, h / 2 - 2, w * 0.45, 6).fill({ color: 0x000000, alpha: 0.4 });
-  node.addChild(shadow);
+  // B70b: sombra eliptica eliminada (look mas limpio sobre suelos calidos)
 
   // Burbuja de tarea (sec 5.2 spec): texto flotante sobre el personaje
   const taskText = taskTextForAgent(agent);
@@ -102,29 +112,10 @@ export function drawAgent(parent: Container, opts: DrawAgentOptions): Container 
     node.addChild(tmp);
   }
 
-  // Halo pulsante (etiquetado para que el ticker pueda animarlo)
-  if (haloConfig) {
-    const haloG = new Graphics();
-    haloG.circle(0, 0, w * 0.7).fill({ color: stateColor, alpha: haloConfig.alpha });
-    haloG.label = 'halo';
-    (haloG as Graphics & { __radius: number }).__radius = w * 0.7;
-    (haloG as Graphics & { __color: number }).__color = stateColor;
-    (haloG as Graphics & { __pulseFreq: number }).__pulseFreq = haloConfig.freq;
-    (haloG as Graphics & { __baseAlpha: number }).__baseAlpha = haloConfig.alpha;
-    node.addChild(haloG);
-  }
-
-  // Sprite real (Kenney CC0 hoy, PixelLab.ai mañana) o fallback rect placeholder
+  // Sprite real (Kenney CC0 hoy, PixelLab.ai mañana) o fallback rect placeholder.
+  // B70b: sin plinto gris (mas limpio). Solo sombra + sprite + orb de estado.
   const texture = getAgentTexture(agent.sprite_id);
   if (texture) {
-    // Plinto sutil debajo del sprite (hueco entre sombra y figura)
-    const plinto = new Graphics();
-    plinto
-      .roundRect(-w / 2, -h / 2, w, h, 3)
-      .fill({ color: 0x000000, alpha: 0.18 })
-      .stroke({ color: categoryColor, width: isOrch ? 2.5 : 1.5, alpha: 0.85 });
-    node.addChild(plinto);
-
     // Sprite escalado a 48x64 (16x16 -> escalado x3 nearest neighbor para pixel-perfect)
     texture.source.scaleMode = 'nearest';
     const sprite = new Sprite(texture);
@@ -133,10 +124,8 @@ export function drawAgent(parent: Container, opts: DrawAgentOptions): Container 
     sprite.height = h - 10;
     sprite.x = 0;
     sprite.y = 0;
-    // Tint del estado: idle=sin tint (mantiene color original), otros aplican tint
-    if (agent.state !== 'idle') {
-      sprite.tint = stateColor;
-    }
+    // B70b: NO tintamos el sprite por estado. El indicador visual es el
+    // orb sobre la cabeza (mas limpio, no enmascara los detalles del sprite).
     node.addChild(sprite);
   } else {
     // Fallback rect placeholder (cuando el sprite no esta cargado todavia)
@@ -156,6 +145,33 @@ export function drawAgent(parent: Container, opts: DrawAgentOptions): Container 
       .roundRect(-w / 2 + 10, h / 2 - 14, w - 20, 8, 1)
       .fill({ color: 0x000000, alpha: 0.18 });
     node.addChild(body);
+  }
+
+  // B70b: Orb de estado sobre la cabeza (sustituye al halo).
+  // Color del orb mas vivo que el de la paleta general (estilo semaforo):
+  //   working          -> verde brillante 0x22C55E
+  //   waiting_approval -> ambar/naranja 0xF59E0B
+  //   failed           -> rojo brillante 0xEF4444
+  // Se dibuja en (0,0) y se posiciona el Graphics en (0, orbY) para que
+  // el scale anime desde el centro del circulo sin desplazarlo.
+  if (orbConfig) {
+    const orbColor =
+      agent.state === 'working'          ? 0x22c55e :
+      agent.state === 'waiting_approval' ? 0xf59e0b :
+      agent.state === 'failed'           ? 0xef4444 :
+      stateColor;
+    const orb = new Graphics();
+    const orbRadius = isOrch ? 6 : 5;
+    orb
+      .circle(0, 0, orbRadius)
+      .fill({ color: orbColor, alpha: orbConfig.alpha })
+      .stroke({ color: 0x1e1a16, width: 1, alpha: 0.7 });
+    orb.label = 'stateOrb';
+    orb.x = orbX;
+    orb.y = headY;
+    (orb as Graphics & { __pulseFreq: number }).__pulseFreq = orbConfig.freq;
+    (orb as Graphics & { __baseAlpha: number }).__baseAlpha = orbConfig.alpha;
+    node.addChild(orb);
   }
 
   // Decoracion del orquestador
@@ -185,13 +201,16 @@ export function drawAgent(parent: Container, opts: DrawAgentOptions): Container 
     node.addChild(ring);
   }
 
-  // Badge
-  if (badgeCount > 0) {
+  // Badge de notificaciones (aprobaciones pendientes o ejecuciones activas).
+  // B70b: posicionado arriba de la cabeza, junto al orb de estado.
+  if (hasBadge) {
     const badgeBg = new Graphics();
     badgeBg
-      .circle(w / 2 - 2, -h / 2 + 2, 9)
-      .fill({ color: stateColor })
-      .stroke({ color: 0x000000, width: 1, alpha: 0.5 });
+      .circle(0, 0, 9)
+      .fill({ color: 0xffffff })
+      .stroke({ color: 0x000000, width: 1, alpha: 0.6 });
+    badgeBg.x = badgeX;
+    badgeBg.y = headY;
     node.addChild(badgeBg);
 
     const badgeText = new Text({
@@ -204,27 +223,23 @@ export function drawAgent(parent: Container, opts: DrawAgentOptions): Container 
       }),
     });
     badgeText.anchor.set(0.5);
-    badgeText.x = w / 2 - 2;
-    badgeText.y = -h / 2 + 2;
+    badgeText.x = badgeX;
+    badgeText.y = headY;
     node.addChild(badgeText);
   }
 
-  // Label tipo "ficha de campana"
-  const labelPlate = new Graphics();
-  labelPlate
-    .rect(-32, h / 2 + 6, 64, 12)
-    .fill({ color: 0x1e1a16, alpha: 0.7 })
-    .stroke({ color: categoryColor, width: 0.6 });
-  node.addChild(labelPlate);
-
+  // B70b: nombre del agente en negro brillante sin placa de fondo.
+  // El stroke blanco fino mejora la legibilidad si el sprite cae sobre
+  // un suelo mas oscuro (urgency_corridor, taller).
   const nameLabel = new Text({
     text: agent.display_name,
     style: new TextStyle({
       fontFamily: 'Oswald, sans-serif',
-      fontSize: 9,
-      fontWeight: '600',
-      fill: parseHex(PALETTE.bone),
-      letterSpacing: 0.5,
+      fontSize: 10,
+      fontWeight: '700',
+      fill: 0x000000,
+      letterSpacing: 0.6,
+      stroke: { color: 0xffffff, width: 2 },
     }),
   });
   nameLabel.anchor.set(0.5, 0);
@@ -237,7 +252,7 @@ export function drawAgent(parent: Container, opts: DrawAgentOptions): Container 
     style: new TextStyle({
       fontFamily: 'JetBrains Mono, monospace',
       fontSize: 7,
-      fill: parseHex(PALETTE.boneDim),
+      fill: 0x000000,
       letterSpacing: 1,
     }),
   });
@@ -263,25 +278,15 @@ function parseHex(css: string, fallback = 0x000000): number {
  * y lo mostramos en lugar del texto generico. Maximo ~25 chars.
  */
 function taskTextForAgent(agent: StudioAgent): string | null {
-  // Si hay accion reciente concreta, mostrarla (mas informativa que "Trabajando")
-  const action = agent.last_action_text;
-  if (action && (agent.state === 'working' || agent.state === 'waiting_approval')) {
-    const formatted = formatActionLabel(action);
-    if (formatted) {
-      // Anadir contador si hay multiples ejecuciones simultaneas
-      if (agent.state === 'working' && agent.active_count > 1) {
-        return `${formatted} · ${agent.active_count}`;
-      }
-      return formatted;
-    }
-  }
-  // Fallback: texto fijo por estado
-  if (agent.state === 'working') {
-    return agent.active_count > 1
-      ? `Trabajando · ${agent.active_count}`
-      : 'Trabajando';
-  }
+  // B70b: working ya se indica con el orb verde sobre la cabeza, no
+  // necesita burbuja. Solo mostramos texto en waiting (necesita explicar
+  // que esperamos aprobacion) y en failed (necesita decir el error).
   if (agent.state === 'waiting_approval') {
+    const action = agent.last_action_text;
+    if (action) {
+      const formatted = formatActionLabel(action);
+      if (formatted) return formatted;
+    }
     return agent.pending_approvals_count > 1
       ? `Esperando · ${agent.pending_approvals_count}`
       : 'Esperando aprobacion';

@@ -1,0 +1,710 @@
+{
+  "name": "agent_proposal_moodboard",
+  "_description": "Fase D.3 (1/3) - Genera moodboard automatico para una propuesta. Lee design_option seleccionada + material_items aprobados + briefing. LLM construye paleta cromatica + lista de materiales agrupada + style rationale + image_prompt sugerido para mnml.ai. Ademas, si proposals.public_token IS NULL, genera uno (24 chars base64url) con expiracion 60 dias. Update proposals.moodboard_data + public_token.",
+  "_status": "B72-fase-D.3 moodboard automatico",
+  "_n8n_id": "7r3hVOHRaAFreBRy",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "api/v1/agents/proposal/moodboard",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ],
+      "id": "mb-webhook",
+      "name": "POST /proposal/moodboard",
+      "webhookId": "feedface-2222-4abc-9def-cafebabe0002",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const auth = $input.first().json.headers?.authorization || '';\nif (!auth.startsWith('Bearer ')) return [{ json: { _error: 'AUTH_MISSING_TOKEN', _status: 401 } }];\nconst token = auth.slice(7);\ntry {\n  const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'));\n  if (!payload.sub) throw new Error('No sub');\n  if (payload.exp && Date.now()/1000 > payload.exp) throw new Error('JWT expired');\n  if (!payload.tenant_id) throw new Error('No tenant_id');\n  const body = $input.first().json.body || {};\n  const proposalId = (body.proposal_id || '').trim();\n  if (!proposalId) return [{ json: { _error: 'VALIDATION_FAILED', _status: 400, _details: 'proposal_id requerido' } }];\n  return [{ json: {\n    user_id: payload.sub,\n    tenant_id: payload.tenant_id,\n    role: payload.role || 'architect',\n    proposal_id: proposalId,\n    force_regenerate: !!body.force_regenerate,\n    request_id: 'req_' + Math.random().toString(36).slice(2, 10)\n  }}];\n} catch (e) {\n  return [{ json: { _error: 'AUTH_INVALID_TOKEN', _status: 401, _details: e.message } }];\n}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        300
+      ],
+      "id": "mb-decode",
+      "name": "Decode JWT + Validate"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "mb-c1",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        720,
+        300
+      ],
+      "id": "mb-if-auth",
+      "name": "Auth OK?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details || $json._error } }) }}",
+        "options": {
+          "responseCode": "={{ $json._status || 401 }}"
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        960,
+        460
+      ],
+      "id": "mb-respond-error",
+      "name": "Respond Error"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT set_session_context($1::uuid, $2::uuid, $3)",
+        "options": {
+          "queryReplacement": "={{ [$json.user_id, $json.tenant_id, $json.role] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        960,
+        200
+      ],
+      "id": "mb-set-session",
+      "name": "Set Session Context"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT p.id, p.project_id, p.title, p.scope_description, p.total_price, p.status, p.moodboard_data, p.public_token, pr.name AS project_name, pr.project_type, pr.property_area_m2, pr.location_city FROM proposals p JOIN projects pr ON pr.id = p.project_id WHERE p.id = $1::uuid LIMIT 1",
+        "options": {
+          "queryReplacement": "={{ [$('Decode JWT + Validate').first().json.proposal_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1200,
+        200
+      ],
+      "id": "mb-load-proposal",
+      "name": "Load Proposal + Project",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, title, description, intervention_logic, rooms_layout FROM design_options WHERE project_id = $1::uuid AND is_selected = true LIMIT 1",
+        "options": {
+          "queryReplacement": "={{ [$('Load Proposal + Project').first().json.project_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1440,
+        200
+      ],
+      "id": "mb-load-design",
+      "name": "Load Design Option",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, category, name, brand, model_ref, quality_tier, room_area, source_url FROM material_items WHERE project_id = $1::uuid AND status IN ('approved','ordered','suggested') ORDER BY category, quality_tier DESC NULLS LAST LIMIT 30",
+        "options": {
+          "queryReplacement": "={{ [$('Load Proposal + Project').first().json.project_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1680,
+        200
+      ],
+      "id": "mb-load-materials",
+      "name": "Load Material Items",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT summary, client_needs, constraints FROM briefings WHERE project_id = $1::uuid ORDER BY created_at DESC LIMIT 1",
+        "options": {
+          "queryReplacement": "={{ [$('Load Proposal + Project').first().json.project_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1920,
+        200
+      ],
+      "id": "mb-load-briefing",
+      "name": "Load Briefing",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const sess = $('Decode JWT + Validate').first().json;\nconst proposalRows = $('Load Proposal + Project').all().map(i => i.json).filter(p => p && p.id);\nif (proposalRows.length === 0) return [{ json: { _error: 'PROPOSAL_NOT_FOUND', _status: 404, _details: 'proposal_id no existe', request_id: sess.request_id }}];\nconst proposal = proposalRows[0];\n\nif (proposal.moodboard_data && !sess.force_regenerate) {\n  return [{ json: { _skip: true, _existing: proposal.moodboard_data, _public_token: proposal.public_token, _proposal_id: proposal.id, _project_id: proposal.project_id, request_id: sess.request_id }}];\n}\n\nconst designRows = $('Load Design Option').all().map(i => i.json).filter(d => d && d.id);\nconst materialRows = $('Load Material Items').all().map(i => i.json).filter(m => m && m.id);\nconst briefingRows = $input.all().map(i => i.json).filter(b => b && b.summary);\nconst design = designRows[0] || null;\nconst briefing = briefingRows[0] || null;\n\nconst materialsByCategory = {};\nmaterialRows.forEach(function(m) {\n  const cat = m.category || 'otro';\n  if (!materialsByCategory[cat]) materialsByCategory[cat] = [];\n  materialsByCategory[cat].push((m.brand ? m.brand + ' ' : '') + (m.name || '') + (m.quality_tier ? ' (' + m.quality_tier + ')' : '') + (m.room_area ? ' [' + m.room_area + ']' : ''));\n});\nconst materialsText = Object.keys(materialsByCategory).length\n  ? Object.entries(materialsByCategory).map(function(e) { return '- ' + e[0] + ': ' + e[1].slice(0, 5).join('; '); }).join('\\n')\n  : '(sin materiales registrados)';\n\nconst systemPrompt = 'Eres agent_proposal_moodboard. Generas un MOODBOARD VISUAL para una propuesta de reforma. Output JSON estricto:\\n\\n{\\n  \"palette\": [ { \"name\": \"Greige calido\", \"hex\": \"#C9B89D\", \"role\": \"base/pared\" }, ... 4-6 colores ],\\n  \"materials\": [ { \"name\": \"...\", \"category\": \"pavimento|revestimiento|...\", \"finish\": \"mate|brillo|texturizado\", \"role\": \"...\" }, ... 6-12 items ],\\n  \"style_keywords\": [ \"mediterraneo contemporaneo\", \"calidez\", \"luz natural\", ... 4-8 ],\\n  \"design_rationale\": \"3-5 frases para el cliente explicando por que estos materiales encajan con su brief y espacio. Lenguaje no tecnico.\",\\n  \"render_prompt\": \"Texto en INGLES (max 200 chars) para alimentar mnml.ai Interior AI. Describe estilo, paleta principal, materiales clave, ambiente. Ej: photorealistic modern mediterranean kitchen, warm white walls, oak wood floor, brass fittings, soft natural light.\",\\n  \"avoid\": [ \"...\", \"...\" ]\\n}\\n\\nREGLAS:\\n- Los hex de paleta deben ser coherentes entre si (mismo undertone).\\n- materials deben coincidir con los materiales reales listados, no inventes marcas.\\n- design_rationale en espanol, render_prompt en ingles.\\n- avoid: 2-3 cosas a evitar visualmente (ej: \"colores saturados\", \"acabados industriales frios\").';\n\nconst userPrompt = 'PROYECTO: ' + proposal.project_name + ' (' + (proposal.project_type || '?') + ', ' + (proposal.property_area_m2 || '?') + ' m2 en ' + (proposal.location_city || '?') + ')\\n\\n' +\n  'PROPUESTA: ' + proposal.title + ' (total ' + proposal.total_price + ' EUR)\\nALCANCE: ' + (proposal.scope_description || '').slice(0, 600) + '\\n\\n' +\n  'BRIEFING:\\n' + (briefing ? ('  summary: ' + (briefing.summary || '').slice(0, 300) + '\\n  necesidades: ' + (typeof briefing.client_needs === 'object' ? JSON.stringify(briefing.client_needs).slice(0, 300) : (briefing.client_needs || '').slice(0, 300))) : '(sin briefing)') + '\\n\\n' +\n  'OPCION DE DISENO SELECCIONADA:\\n' + (design ? ('  ' + design.title + ' - ' + (design.description || '').slice(0, 400) + '\\n  logica: ' + (design.intervention_logic || '').slice(0, 300)) : '(sin design_option seleccionada - usa briefing)') + '\\n\\n' +\n  'MATERIALES REGISTRADOS POR CATEGORIA:\\n' + materialsText + '\\n\\n' +\n  'TAREA: construye el moodboard JSON. Si no hay materiales registrados, propon materiales tipicos para el estilo que infieras del briefing+design.';\n\nreturn [{ json: {\n  user_id: sess.user_id,\n  tenant_id: sess.tenant_id,\n  proposal_id: proposal.id,\n  project_id: proposal.project_id,\n  has_existing_token: !!proposal.public_token,\n  existing_token: proposal.public_token,\n  request_id: sess.request_id,\n  llm_payload: {\n    model: 'gpt-4o',\n    messages: [\n      { role: 'system', content: systemPrompt },\n      { role: 'user', content: userPrompt }\n    ],\n    temperature: 0.4,\n    max_tokens: 1200,\n    response_format: { type: 'json_object' }\n  }\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2160,
+        200
+      ],
+      "id": "mb-build-prompt",
+      "name": "Build Prompt"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "mb-c2",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2400,
+        200
+      ],
+      "id": "mb-if-prompt",
+      "name": "Build OK?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details } }) }}",
+        "options": {
+          "responseCode": "={{ $json._status || 404 }}"
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        2640,
+        360
+      ],
+      "id": "mb-respond-404",
+      "name": "Respond 404"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "mb-c3",
+              "leftValue": "={{ $json._skip }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2640,
+        100
+      ],
+      "id": "mb-if-skip",
+      "name": "Skip (already exists)?"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO agent_executions (project_id, agent_name, status, started_at, input, metadata) VALUES ($1::uuid, 'agent_proposal_moodboard', 'running', now(), $2::jsonb, $3::jsonb) RETURNING id",
+        "options": {
+          "queryReplacement": "={{ [$json.project_id, JSON.stringify({ proposal_id: $json.proposal_id }), JSON.stringify({ request_id: $json.request_id, source: 'api_proposal_moodboard' })] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2880,
+        0
+      ],
+      "id": "mb-start-exec",
+      "name": "Start Execution",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($('Build Prompt').first().json.llm_payload) }}",
+        "options": {
+          "timeout": 90000
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "gE1jXO133xEHS5JJ",
+          "name": "orquestador ArquiAI"
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3120,
+        0
+      ],
+      "id": "mb-llm",
+      "name": "Call LLM"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const llm = $input.first()?.json;\nconst built = $('Build Prompt').first().json;\nconst raw = llm?.choices?.[0]?.message?.content || '{}';\nlet parsed;\ntry { parsed = JSON.parse(raw); } catch (e) {\n  return [{ json: { _error: 'LLM_INVALID_JSON', _status: 502, _details: e.message, _raw: raw.slice(0, 500), request_id: built.request_id }}];\n}\nconst usage = llm?.usage || {};\n\nconst publicToken = built.has_existing_token\n  ? built.existing_token\n  : (Math.random().toString(36).slice(2) + Date.now().toString(36) + Math.random().toString(36).slice(2)).slice(0, 24);\n\nconst expiresAt = new Date(Date.now() + 60 * 24 * 60 * 60 * 1000).toISOString();\n\nreturn [{ json: {\n  proposal_id: built.proposal_id,\n  project_id: built.project_id,\n  request_id: built.request_id,\n  moodboard: {\n    palette: Array.isArray(parsed.palette) ? parsed.palette.slice(0, 8) : [],\n    materials: Array.isArray(parsed.materials) ? parsed.materials.slice(0, 16) : [],\n    style_keywords: Array.isArray(parsed.style_keywords) ? parsed.style_keywords.slice(0, 10) : [],\n    design_rationale: parsed.design_rationale || null,\n    render_prompt: parsed.render_prompt || null,\n    avoid: Array.isArray(parsed.avoid) ? parsed.avoid.slice(0, 5) : [],\n    generated_at: new Date(Date.now()).toISOString(),\n    model: llm?.model || 'gpt-4o'\n  },\n  public_token: publicToken,\n  public_token_was_generated: !built.has_existing_token,\n  public_token_expires_at: expiresAt,\n  tokens_in: usage.prompt_tokens || 0,\n  tokens_out: usage.completion_tokens || 0,\n  model: llm?.model || 'gpt-4o'\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3360,
+        0
+      ],
+      "id": "mb-format",
+      "name": "Format Moodboard"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE proposals SET moodboard_data = $2::jsonb, public_token = COALESCE(public_token, $3::text), public_token_expires_at = COALESCE(public_token_expires_at, $4::timestamptz), updated_at = now() WHERE id = $1::uuid RETURNING id, public_token, public_token_expires_at",
+        "options": {
+          "queryReplacement": "={{ [$json.proposal_id, JSON.stringify($json.moodboard), $json.public_token, $json.public_token_expires_at] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        3600,
+        0
+      ],
+      "id": "mb-update",
+      "name": "Update Proposal",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE agent_executions SET status = 'completed', finished_at = now(), output = $2::jsonb, metadata = COALESCE(metadata, '{}'::jsonb) || $3::jsonb WHERE id = $1::uuid",
+        "options": {
+          "queryReplacement": "={{ [$('Start Execution').first().json.id, JSON.stringify({ proposal_id: $('Format Moodboard').first().json.proposal_id, public_token_generated: $('Format Moodboard').first().json.public_token_was_generated, palette_count: ($('Format Moodboard').first().json.moodboard.palette || []).length, materials_count: ($('Format Moodboard').first().json.moodboard.materials || []).length }), JSON.stringify({ model: $('Format Moodboard').first().json.model, tokens_in: $('Format Moodboard').first().json.tokens_in, tokens_out: $('Format Moodboard').first().json.tokens_out })] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        3840,
+        0
+      ],
+      "id": "mb-finish",
+      "name": "Finish Execution",
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const skipPath = $('Skip (already exists)?').isExecuted && $('Build Prompt').first().json._skip;\nif (skipPath) {\n  const sk = $('Build Prompt').first().json;\n  return [{ json: { data: { proposal_id: sk._proposal_id, project_id: sk._project_id, moodboard: sk._existing, public_token: sk._public_token, already_existed: true }, meta: { request_id: sk.request_id, source: 'cached' } } }];\n}\nconst f = $('Format Moodboard').first().json;\nconst upd = $('Update Proposal').isExecuted ? ($('Update Proposal').first()?.json || {}) : {};\nreturn [{ json: {\n  data: {\n    proposal_id: f.proposal_id,\n    project_id: f.project_id,\n    moodboard: f.moodboard,\n    public_token: upd.public_token || f.public_token,\n    public_token_expires_at: upd.public_token_expires_at || f.public_token_expires_at,\n    public_token_was_generated: f.public_token_was_generated,\n    already_existed: false\n  },\n  meta: {\n    request_id: f.request_id,\n    model: f.model,\n    tokens_in: f.tokens_in,\n    tokens_out: f.tokens_out\n  }\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4080,
+        0
+      ],
+      "id": "mb-build-body",
+      "name": "Build Final Body"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "responseCode": 201,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Cache-Control",
+                "value": "no-cache"
+              }
+            ]
+          }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        4320,
+        0
+      ],
+      "id": "mb-respond-201",
+      "name": "Respond 201"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ data: { proposal_id: $json._proposal_id, project_id: $json._project_id, moodboard: $json._existing, public_token: $json._public_token, already_existed: true }, meta: { request_id: $json.request_id, source: 'cached' } }) }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Cache-Control",
+                "value": "no-cache"
+              }
+            ]
+          }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        2880,
+        200
+      ],
+      "id": "mb-respond-cached",
+      "name": "Respond Cached"
+    }
+  ],
+  "connections": {
+    "POST /proposal/moodboard": {
+      "main": [
+        [
+          {
+            "node": "Decode JWT + Validate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decode JWT + Validate": {
+      "main": [
+        [
+          {
+            "node": "Auth OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Auth OK?": {
+      "main": [
+        [
+          {
+            "node": "Respond Error",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Set Session Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Session Context": {
+      "main": [
+        [
+          {
+            "node": "Load Proposal + Project",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Proposal + Project": {
+      "main": [
+        [
+          {
+            "node": "Load Design Option",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Design Option": {
+      "main": [
+        [
+          {
+            "node": "Load Material Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Material Items": {
+      "main": [
+        [
+          {
+            "node": "Load Briefing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Briefing": {
+      "main": [
+        [
+          {
+            "node": "Build Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Prompt": {
+      "main": [
+        [
+          {
+            "node": "Build OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build OK?": {
+      "main": [
+        [
+          {
+            "node": "Respond 404",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Skip (already exists)?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Skip (already exists)?": {
+      "main": [
+        [
+          {
+            "node": "Respond Cached",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Start Execution",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Start Execution": {
+      "main": [
+        [
+          {
+            "node": "Call LLM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call LLM": {
+      "main": [
+        [
+          {
+            "node": "Format Moodboard",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Moodboard": {
+      "main": [
+        [
+          {
+            "node": "Update Proposal",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Proposal": {
+      "main": [
+        [
+          {
+            "node": "Finish Execution",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Finish Execution": {
+      "main": [
+        [
+          {
+            "node": "Build Final Body",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Final Body": {
+      "main": [
+        [
+          {
+            "node": "Respond 201",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": {}
+}

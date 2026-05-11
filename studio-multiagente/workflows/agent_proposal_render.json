@@ -1,0 +1,957 @@
+{
+  "name": "agent_proposal_render",
+  "_description": "Fase D.3 (2/3) - Genera render fotorrealista de la propuesta via mnml.ai Interior AI API. Lee proposal.moodboard_data.render_prompt + source_image_url (foto del espacio actual o sketch). POST a https://api.mnmlai.dev/v1/interior, poll GET /v1/status/{id} hasta success o timeout. Persiste render_data en proposals. Asincrono: el poll es interno al workflow con Wait nodes.",
+  "_status": "B72-fase-D.3 render via mnml.ai",
+  "_n8n_id": "3C0IyRkz48VnFdky",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "api/v1/agents/proposal/render",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ],
+      "id": "rd-webhook",
+      "name": "POST /proposal/render",
+      "webhookId": "feedface-3333-4abc-9def-cafebabe0003",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const auth = $input.first().json.headers?.authorization || '';\nif (!auth.startsWith('Bearer ')) return [{ json: { _error: 'AUTH_MISSING_TOKEN', _status: 401 } }];\nconst token = auth.slice(7);\ntry {\n  const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'));\n  if (!payload.sub) throw new Error('No sub');\n  if (payload.exp && Date.now()/1000 > payload.exp) throw new Error('JWT expired');\n  if (!payload.tenant_id) throw new Error('No tenant_id');\n  const body = $input.first().json.body || {};\n  const proposalId = (body.proposal_id || '').trim();\n  if (!proposalId) return [{ json: { _error: 'VALIDATION_FAILED', _status: 400, _details: 'proposal_id requerido' } }];\n  const sourceImageUrl = (body.source_image_url || '').trim();\n  if (!sourceImageUrl) return [{ json: { _error: 'VALIDATION_FAILED', _status: 400, _details: 'source_image_url requerido (URL accesible publicamente de foto/sketch/3dmass)' } }];\n  const validImageTypes = ['3dmass','photo','drawing','wireframe','construction'];\n  const imageType = validImageTypes.includes(body.image_type) ? body.image_type : 'photo';\n  const validStyles = ['realistic','night','sketch','watercolor','none'];\n  const style = validStyles.includes(body.style) ? body.style : 'realistic';\n  const validSpeeds = ['fast','best'];\n  const renderspeed = validSpeeds.includes(body.renderspeed) ? body.renderspeed : 'best';\n  const validScenarios = ['creative','precise'];\n  const scenario = validScenarios.includes(body.scenario) ? body.scenario : 'precise';\n  return [{ json: {\n    user_id: payload.sub,\n    tenant_id: payload.tenant_id,\n    role: payload.role || 'architect',\n    proposal_id: proposalId,\n    source_image_url: sourceImageUrl,\n    image_type: imageType,\n    style: style,\n    renderspeed: renderspeed,\n    scenario: scenario,\n    prompt_override: body.prompt_override || null,\n    request_id: 'req_' + Math.random().toString(36).slice(2, 10)\n  }}];\n} catch (e) {\n  return [{ json: { _error: 'AUTH_INVALID_TOKEN', _status: 401, _details: e.message } }];\n}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        300
+      ],
+      "id": "rd-decode",
+      "name": "Decode JWT + Validate"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "rd-c1",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        720,
+        300
+      ],
+      "id": "rd-if-auth",
+      "name": "Auth OK?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details || $json._error } }) }}",
+        "options": {
+          "responseCode": "={{ $json._status || 401 }}"
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        960,
+        460
+      ],
+      "id": "rd-respond-error",
+      "name": "Respond Error"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT set_session_context($1::uuid, $2::uuid, $3)",
+        "options": {
+          "queryReplacement": "={{ [$json.user_id, $json.tenant_id, $json.role] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        960,
+        200
+      ],
+      "id": "rd-set-session",
+      "name": "Set Session Context"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT p.id, p.project_id, p.title, p.moodboard_data, p.render_data FROM proposals p WHERE p.id = $1::uuid LIMIT 1",
+        "options": {
+          "queryReplacement": "={{ [$('Decode JWT + Validate').first().json.proposal_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1200,
+        200
+      ],
+      "id": "rd-load-proposal",
+      "name": "Load Proposal",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT value FROM system_config WHERE key = 'mnml_api_key' LIMIT 1",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1440,
+        200
+      ],
+      "id": "rd-load-apikey",
+      "name": "Load MNML API Key",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const sess = $('Decode JWT + Validate').first().json;\nconst proposalRows = $('Load Proposal').all().map(i => i.json).filter(p => p && p.id);\nif (proposalRows.length === 0) return [{ json: { _error: 'PROPOSAL_NOT_FOUND', _status: 404, _details: 'proposal_id no existe', request_id: sess.request_id }}];\nconst proposal = proposalRows[0];\nconst apikeyRows = $input.all().map(i => i.json).filter(k => k && k.value);\nif (apikeyRows.length === 0) return [{ json: { _error: 'MNML_API_KEY_NOT_CONFIGURED', _status: 503, _details: 'Falta system_config.mnml_api_key', request_id: sess.request_id }}];\nconst apiKey = apikeyRows[0].value;\nconst mb = proposal.moodboard_data || {};\nconst fallbackPrompt = 'photorealistic interior, warm light, modern, clean lines';\nconst prompt = sess.prompt_override || mb.render_prompt || fallbackPrompt;\nreturn [{ json: {\n  user_id: sess.user_id,\n  tenant_id: sess.tenant_id,\n  proposal_id: proposal.id,\n  project_id: proposal.project_id,\n  source_image_url: sess.source_image_url,\n  image_type: sess.image_type,\n  style: sess.style,\n  renderspeed: sess.renderspeed,\n  scenario: sess.scenario,\n  prompt: prompt.slice(0, 200),\n  mnml_api_key: apiKey,\n  request_id: sess.request_id\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1680,
+        200
+      ],
+      "id": "rd-prep",
+      "name": "Prepare MNML Request"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "rd-c2",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1920,
+        200
+      ],
+      "id": "rd-if-prep",
+      "name": "Prep OK?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details } }) }}",
+        "options": {
+          "responseCode": "={{ $json._status || 404 }}"
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        2160,
+        360
+      ],
+      "id": "rd-respond-prep-fail",
+      "name": "Respond Prep Fail"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO agent_executions (project_id, agent_name, status, started_at, input, metadata) VALUES ($1::uuid, 'agent_proposal_render', 'running', now(), $2::jsonb, $3::jsonb) RETURNING id",
+        "options": {
+          "queryReplacement": "={{ [$json.project_id, JSON.stringify({ proposal_id: $json.proposal_id, source_image_url: $json.source_image_url, image_type: $json.image_type, style: $json.style }), JSON.stringify({ request_id: $json.request_id, source: 'api_proposal_render' })] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2160,
+        100
+      ],
+      "id": "rd-start-exec",
+      "name": "Start Execution",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.mnmlai.dev/v1/interior",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $('Prepare MNML Request').first().json.mnml_api_key }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "image",
+              "value": "={{ $('Prepare MNML Request').first().json.source_image_url }}",
+              "parameterType": "formBinaryData",
+              "inputDataFieldName": "image"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2400,
+        100
+      ],
+      "id": "rd-mnml-submit",
+      "name": "Submit to MNML",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.mnmlai.dev/v1/interior",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $('Prepare MNML Request').first().json.mnml_api_key }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "image_url",
+              "value": "={{ $('Prepare MNML Request').first().json.source_image_url }}"
+            },
+            {
+              "name": "prompt",
+              "value": "={{ $('Prepare MNML Request').first().json.prompt }}"
+            },
+            {
+              "name": "imageType",
+              "value": "={{ $('Prepare MNML Request').first().json.image_type }}"
+            },
+            {
+              "name": "scenario",
+              "value": "={{ $('Prepare MNML Request').first().json.scenario }}"
+            },
+            {
+              "name": "styles",
+              "value": "={{ $('Prepare MNML Request').first().json.style }}"
+            },
+            {
+              "name": "renderspeed",
+              "value": "={{ $('Prepare MNML Request').first().json.renderspeed }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2400,
+        200
+      ],
+      "id": "rd-mnml-submit-url",
+      "name": "Submit MNML (URL form)",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const resp = $input.first()?.json || {};\nconst prep = $('Prepare MNML Request').first().json;\nconst id = resp.id || resp.requestId || resp.request_id || null;\nif (!id) {\n  return [{ json: { _error: 'MNML_SUBMIT_FAILED', _status: 502, _details: 'MNML no devolvio id: ' + JSON.stringify(resp).slice(0, 400), request_id: prep.request_id }}];\n}\nreturn [{ json: {\n  proposal_id: prep.proposal_id,\n  project_id: prep.project_id,\n  request_id: prep.request_id,\n  mnml_id: id,\n  mnml_api_key: prep.mnml_api_key,\n  mnml_initial_status: resp.status || 'submitted',\n  prompt: prep.prompt,\n  source_image_url: prep.source_image_url,\n  style: prep.style,\n  image_type: prep.image_type,\n  poll_count: 0\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2640,
+        200
+      ],
+      "id": "rd-parse-submit",
+      "name": "Parse Submit"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "rd-c3",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2880,
+        200
+      ],
+      "id": "rd-if-submit",
+      "name": "Submit OK?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details } }) }}",
+        "options": {
+          "responseCode": "={{ $json._status || 502 }}"
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        3120,
+        360
+      ],
+      "id": "rd-respond-submit-fail",
+      "name": "Respond Submit Fail"
+    },
+    {
+      "parameters": {
+        "amount": 8,
+        "unit": "seconds"
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        3120,
+        200
+      ],
+      "id": "rd-wait",
+      "name": "Wait Poll"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.mnmlai.dev/v1/status/{{ $('Parse Submit').first().json.mnml_id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $('Parse Submit').first().json.mnml_api_key }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3360,
+        200
+      ],
+      "id": "rd-poll",
+      "name": "Poll Status",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const r = $input.first()?.json || {};\nconst parsed = $('Parse Submit').first().json;\nconst status = (r.status || r.state || '').toLowerCase();\nconst doneStatuses = ['success','succeeded','completed','done','finished'];\nconst failStatuses = ['failed','error','rejected'];\nconst possibleUrlFields = ['output_url','image_url','result_url','url','render_url','imageUrl','outputUrl','output','image'];\nlet imageUrl = null;\nfor (const f of possibleUrlFields) {\n  if (typeof r[f] === 'string' && r[f].startsWith('http')) { imageUrl = r[f]; break; }\n}\nif (!imageUrl && Array.isArray(r.images) && r.images.length) {\n  const it = r.images[0];\n  imageUrl = typeof it === 'string' ? it : (it?.url || it?.image_url || null);\n}\nif (!imageUrl && Array.isArray(r.outputs) && r.outputs.length) {\n  const it = r.outputs[0];\n  imageUrl = typeof it === 'string' ? it : (it?.url || it?.image_url || null);\n}\nconst isDone = doneStatuses.includes(status) && !!imageUrl;\nconst isFail = failStatuses.includes(status);\nreturn [{ json: {\n  ...parsed,\n  poll_count: (parsed.poll_count || 0) + 1,\n  mnml_status: status || 'pending',\n  image_url: imageUrl,\n  is_done: isDone,\n  is_failed: isFail,\n  raw_keys: Object.keys(r).slice(0, 12),\n  raw_excerpt: JSON.stringify(r).slice(0, 600)\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3600,
+        200
+      ],
+      "id": "rd-eval-poll",
+      "name": "Eval Poll"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "rd-c4a",
+              "leftValue": "={{ $json.is_done }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3840,
+        200
+      ],
+      "id": "rd-if-done",
+      "name": "Done?"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "rd-c4b",
+              "leftValue": "={{ $json.is_failed }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "rd-c4c",
+              "leftValue": "={{ $json.poll_count }}",
+              "rightValue": 20,
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              }
+            }
+          ],
+          "combinator": "or"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        4080,
+        400
+      ],
+      "id": "rd-if-fail-or-timeout",
+      "name": "Failed or Timeout?"
+    },
+    {
+      "parameters": {
+        "amount": 8,
+        "unit": "seconds"
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        4320,
+        500
+      ],
+      "id": "rd-wait2",
+      "name": "Wait Again"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "return [{ json: $input.first().json }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4560,
+        500
+      ],
+      "id": "rd-loopback",
+      "name": "Loop -> Poll Status"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE proposals SET render_data = $2::jsonb, updated_at = now() WHERE id = $1::uuid RETURNING id",
+        "options": {
+          "queryReplacement": "={{ [$json.proposal_id, JSON.stringify({ mnml_id: $json.mnml_id, image_url: $json.image_url, prompt: $json.prompt, source_image_url: $json.source_image_url, style: $json.style, image_type: $json.image_type, poll_count: $json.poll_count, generated_at: new Date(Date.now()).toISOString() })] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        4080,
+        100
+      ],
+      "id": "rd-save-render",
+      "name": "Save Render",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE agent_executions SET status = 'completed', finished_at = now(), output = $2::jsonb WHERE id = $1::uuid",
+        "options": {
+          "queryReplacement": "={{ [$('Start Execution').first().json.id, JSON.stringify({ mnml_id: $('Eval Poll').first().json.mnml_id, image_url: $('Eval Poll').first().json.image_url, poll_count: $('Eval Poll').first().json.poll_count, mnml_status: $('Eval Poll').first().json.mnml_status })] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        4320,
+        100
+      ],
+      "id": "rd-finish",
+      "name": "Finish Execution",
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ data: { proposal_id: $('Eval Poll').first().json.proposal_id, project_id: $('Eval Poll').first().json.project_id, render: { mnml_id: $('Eval Poll').first().json.mnml_id, image_url: $('Eval Poll').first().json.image_url, prompt: $('Eval Poll').first().json.prompt, style: $('Eval Poll').first().json.style, image_type: $('Eval Poll').first().json.image_type, poll_count: $('Eval Poll').first().json.poll_count, mnml_status: $('Eval Poll').first().json.mnml_status } }, meta: { request_id: $('Eval Poll').first().json.request_id, provider: 'mnml.ai' } }) }}",
+        "options": {
+          "responseCode": 201
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        4560,
+        100
+      ],
+      "id": "rd-respond-ok",
+      "name": "Respond 201"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE agent_executions SET status = 'failed', finished_at = now(), output = $2::jsonb WHERE id = $1::uuid",
+        "options": {
+          "queryReplacement": "={{ [$('Start Execution').first().json.id, JSON.stringify({ reason: $('Eval Poll').first().json.is_failed ? 'mnml_failed' : 'timeout_polls', mnml_id: $('Eval Poll').first().json.mnml_id, mnml_status: $('Eval Poll').first().json.mnml_status, poll_count: $('Eval Poll').first().json.poll_count, raw_excerpt: $('Eval Poll').first().json.raw_excerpt })] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        4320,
+        400
+      ],
+      "id": "rd-finish-fail",
+      "name": "Mark Failed",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: 'RENDER_NOT_READY', message: 'MNML no completo el render dentro del timeout o devolvio error', mnml_id: $('Eval Poll').first().json.mnml_id, mnml_status: $('Eval Poll').first().json.mnml_status, poll_count: $('Eval Poll').first().json.poll_count, raw_excerpt: $('Eval Poll').first().json.raw_excerpt } }) }}",
+        "options": {
+          "responseCode": 504
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        4560,
+        400
+      ],
+      "id": "rd-respond-fail",
+      "name": "Respond Render Fail"
+    }
+  ],
+  "connections": {
+    "POST /proposal/render": {
+      "main": [
+        [
+          {
+            "node": "Decode JWT + Validate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decode JWT + Validate": {
+      "main": [
+        [
+          {
+            "node": "Auth OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Auth OK?": {
+      "main": [
+        [
+          {
+            "node": "Respond Error",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Set Session Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Session Context": {
+      "main": [
+        [
+          {
+            "node": "Load Proposal",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Proposal": {
+      "main": [
+        [
+          {
+            "node": "Load MNML API Key",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load MNML API Key": {
+      "main": [
+        [
+          {
+            "node": "Prepare MNML Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare MNML Request": {
+      "main": [
+        [
+          {
+            "node": "Prep OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prep OK?": {
+      "main": [
+        [
+          {
+            "node": "Respond Prep Fail",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Start Execution",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Start Execution": {
+      "main": [
+        [
+          {
+            "node": "Submit MNML (URL form)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Submit MNML (URL form)": {
+      "main": [
+        [
+          {
+            "node": "Parse Submit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Submit": {
+      "main": [
+        [
+          {
+            "node": "Submit OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Submit OK?": {
+      "main": [
+        [
+          {
+            "node": "Respond Submit Fail",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Wait Poll",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait Poll": {
+      "main": [
+        [
+          {
+            "node": "Poll Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Poll Status": {
+      "main": [
+        [
+          {
+            "node": "Eval Poll",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Eval Poll": {
+      "main": [
+        [
+          {
+            "node": "Done?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Done?": {
+      "main": [
+        [
+          {
+            "node": "Save Render",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Failed or Timeout?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Render": {
+      "main": [
+        [
+          {
+            "node": "Finish Execution",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Finish Execution": {
+      "main": [
+        [
+          {
+            "node": "Respond 201",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Failed or Timeout?": {
+      "main": [
+        [
+          {
+            "node": "Mark Failed",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Wait Again",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait Again": {
+      "main": [
+        [
+          {
+            "node": "Loop -> Poll Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop -> Poll Status": {
+      "main": [
+        [
+          {
+            "node": "Poll Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Failed": {
+      "main": [
+        [
+          {
+            "node": "Respond Render Fail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": {}
+}

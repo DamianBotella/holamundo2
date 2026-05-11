@@ -1,0 +1,397 @@
+{
+  "name": "api_proposal_public_accept",
+  "_description": "Fase D.3 (3b/3) - Endpoint PUBLICO (sin JWT) que registra la decision del cliente sobre una propuesta (accepted | rejected | revision_requested). Token = autorizacion. Es idempotente: si la propuesta ya tenia accepted_at, devuelve 409. Persiste rastro en proposal_acceptances (inmutable) + actualiza proposals.status/accepted_at/accepted_via/accepted_metadata.",
+  "_status": "B72-fase-D.3 aceptacion online",
+  "_n8n_id": "OtVoFzIWYwBNWJLX",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "api/v1/proposals/public/accept",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ],
+      "id": "pa-webhook",
+      "name": "POST /proposals/public/accept",
+      "webhookId": "feedface-5555-4abc-9def-cafebabe0005",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const body = $input.first().json.body || {};\nconst headers = $input.first().json.headers || {};\nconst token = (body.token || '').trim();\nif (!token || token.length < 12 || token.length > 64) {\n  return [{ json: { _error: 'TOKEN_INVALID', _status: 400, _details: 'token requerido en body (12-64 chars)' }}];\n}\nconst validDecisions = ['accepted','rejected','revision_requested'];\nconst decision = (body.decision || '').trim();\nif (!validDecisions.includes(decision)) {\n  return [{ json: { _error: 'DECISION_INVALID', _status: 400, _details: 'decision debe ser accepted | rejected | revision_requested' }}];\n}\nconst signerName = (body.signer_name || '').trim();\nif (decision === 'accepted' && !signerName) {\n  return [{ json: { _error: 'SIGNER_REQUIRED', _status: 400, _details: 'signer_name requerido al aceptar (firma del cliente)' }}];\n}\nconst signerEmail = (body.signer_email || '').trim() || null;\nconst comments = (body.comments || '').trim().slice(0, 2000) || null;\nconst ip = (headers['x-forwarded-for'] || headers['x-real-ip'] || '').toString().split(',')[0].trim() || null;\nconst userAgent = (headers['user-agent'] || '').toString().slice(0, 500) || null;\nreturn [{ json: {\n  token,\n  decision,\n  signer_name: signerName || null,\n  signer_email: signerEmail,\n  comments,\n  ip_address: ip,\n  user_agent: userAgent,\n  request_id: 'req_' + Math.random().toString(36).slice(2, 10)\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        300
+      ],
+      "id": "pa-validate",
+      "name": "Validate Body"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "pa-c1",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        720,
+        300
+      ],
+      "id": "pa-if-valid",
+      "name": "Valid?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details } }) }}",
+        "options": {
+          "responseCode": "={{ $json._status || 400 }}"
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        960,
+        460
+      ],
+      "id": "pa-respond-bad",
+      "name": "Respond Bad Body"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT p.id, p.project_id, p.status, p.accepted_at, p.public_token_expires_at, pr.tenant_id, pr.name AS project_name FROM proposals p JOIN projects pr ON pr.id = p.project_id WHERE p.public_token = $1::text LIMIT 1",
+        "options": {
+          "queryReplacement": "={{ [$json.token] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        960,
+        200
+      ],
+      "id": "pa-load",
+      "name": "Load Proposal by Token",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const rows = $input.all().map(i => i.json).filter(r => r && r.id);\nconst sess = $('Validate Body').first().json;\nif (rows.length === 0) {\n  return [{ json: { _error: 'PROPOSAL_NOT_FOUND', _status: 404, _details: 'Token desconocido', request_id: sess.request_id }}];\n}\nconst p = rows[0];\nconst now = Date.now();\nconst exp = p.public_token_expires_at ? new Date(p.public_token_expires_at).getTime() : null;\nif (exp && now > exp) {\n  return [{ json: { _error: 'TOKEN_EXPIRED', _status: 410, _details: 'El enlace ha expirado', expired_at: p.public_token_expires_at, request_id: sess.request_id }}];\n}\nif (p.accepted_at) {\n  return [{ json: { _error: 'ALREADY_DECIDED', _status: 409, _details: 'La propuesta ya tiene una decision registrada el ' + p.accepted_at, accepted_at: p.accepted_at, accepted_via: 'public_link', request_id: sess.request_id }}];\n}\nreturn [{ json: {\n  proposal_id: p.id,\n  project_id: p.project_id,\n  tenant_id: p.tenant_id,\n  current_status: p.status,\n  decision: sess.decision,\n  signer_name: sess.signer_name,\n  signer_email: sess.signer_email,\n  comments: sess.comments,\n  ip_address: sess.ip_address,\n  user_agent: sess.user_agent,\n  request_id: sess.request_id\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        200
+      ],
+      "id": "pa-check",
+      "name": "Check Decidable"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "pa-c2",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1440,
+        200
+      ],
+      "id": "pa-if-check",
+      "name": "Decidable?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details, accepted_at: $json.accepted_at || null, accepted_via: $json.accepted_via || null, expired_at: $json.expired_at || null } }) }}",
+        "options": {
+          "responseCode": "={{ $json._status || 409 }}"
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1680,
+        360
+      ],
+      "id": "pa-respond-conflict",
+      "name": "Respond Conflict"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO proposal_acceptances (proposal_id, tenant_id, decision, signer_name, signer_email, comments, ip_address, user_agent, metadata) VALUES ($1::uuid, $2::uuid, $3::text, $4::text, $5::text, $6::text, $7::text, $8::text, $9::jsonb) RETURNING id, decided_at",
+        "options": {
+          "queryReplacement": "={{ [$json.proposal_id, $json.tenant_id, $json.decision, $json.signer_name, $json.signer_email, $json.comments, $json.ip_address, $json.user_agent, JSON.stringify({ request_id: $json.request_id, channel: 'public_link' })] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1680,
+        100
+      ],
+      "id": "pa-insert",
+      "name": "Insert Acceptance",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE proposals SET status = CASE $2::text WHEN 'accepted' THEN 'accepted' WHEN 'rejected' THEN 'rejected' WHEN 'revision_requested' THEN 'revision_requested' ELSE status END, accepted_at = now(), accepted_via = 'public_link', accepted_metadata = $3::jsonb, client_response_at = now(), updated_at = now() WHERE id = $1::uuid RETURNING id, status, accepted_at",
+        "options": {
+          "queryReplacement": "={{ [$('Check Decidable').first().json.proposal_id, $('Check Decidable').first().json.decision, JSON.stringify({ signer_name: $('Check Decidable').first().json.signer_name, signer_email: $('Check Decidable').first().json.signer_email, ip_address: $('Check Decidable').first().json.ip_address, user_agent: $('Check Decidable').first().json.user_agent, acceptance_id: $('Insert Acceptance').first().json.id, request_id: $('Check Decidable').first().json.request_id })] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1920,
+        100
+      ],
+      "id": "pa-update",
+      "name": "Update Proposal Status",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, status, details) VALUES ($1::uuid, 'api_proposal_public_accept', $2::text, $3::text, $4::jsonb)",
+        "options": {
+          "queryReplacement": "={{ [$('Check Decidable').first().json.project_id, 'proposal_' + $('Check Decidable').first().json.decision, $('Check Decidable').first().json.decision === 'accepted' ? 'success' : 'warning', JSON.stringify({ proposal_id: $('Check Decidable').first().json.proposal_id, decision: $('Check Decidable').first().json.decision, signer_name: $('Check Decidable').first().json.signer_name, channel: 'public_link', request_id: $('Check Decidable').first().json.request_id })] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2160,
+        100
+      ],
+      "id": "pa-log",
+      "name": "Log Activity",
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ data: { proposal_id: $('Check Decidable').first().json.proposal_id, project_id: $('Check Decidable').first().json.project_id, decision: $('Check Decidable').first().json.decision, acceptance_id: $('Insert Acceptance').first().json.id, decided_at: $('Insert Acceptance').first().json.decided_at, new_status: ($('Update Proposal Status').first() ? $('Update Proposal Status').first().json.status : null) }, meta: { request_id: $('Check Decidable').first().json.request_id, channel: 'public_link' } }) }}",
+        "options": {
+          "responseCode": 201,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Cache-Control",
+                "value": "no-cache"
+              }
+            ]
+          }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        2400,
+        100
+      ],
+      "id": "pa-respond-ok",
+      "name": "Respond 201"
+    }
+  ],
+  "connections": {
+    "POST /proposals/public/accept": {
+      "main": [
+        [
+          {
+            "node": "Validate Body",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Body": {
+      "main": [
+        [
+          {
+            "node": "Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid?": {
+      "main": [
+        [
+          {
+            "node": "Respond Bad Body",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Load Proposal by Token",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Proposal by Token": {
+      "main": [
+        [
+          {
+            "node": "Check Decidable",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Decidable": {
+      "main": [
+        [
+          {
+            "node": "Decidable?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decidable?": {
+      "main": [
+        [
+          {
+            "node": "Respond Conflict",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Insert Acceptance",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Acceptance": {
+      "main": [
+        [
+          {
+            "node": "Update Proposal Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Proposal Status": {
+      "main": [
+        [
+          {
+            "node": "Log Activity",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Activity": {
+      "main": [
+        [
+          {
+            "node": "Respond 201",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": {}
+}

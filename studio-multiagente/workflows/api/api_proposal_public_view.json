@@ -1,0 +1,295 @@
+{
+  "name": "api_proposal_public_view",
+  "_description": "Fase D.3 (3a/3) - Endpoint PUBLICO (sin JWT) que sirve una propuesta a un cliente por su public_token. Devuelve datos no sensibles: titulo, scope, breakdown, total, moodboard, render_url, status, expiracion. NO requiere sesion. La unica autorizacion es poseer el token (24 chars random).",
+  "_status": "B72-fase-D.3 vista publica de propuesta",
+  "_n8n_id": "zCGPAolJN3HL19Qi",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "api/v1/proposals/public",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ],
+      "id": "pv-webhook",
+      "name": "GET /proposals/public",
+      "webhookId": "feedface-4444-4abc-9def-cafebabe0004",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const q = $input.first().json.query || {};\nconst token = (q.token || '').trim();\nif (!token || token.length < 12 || token.length > 64) {\n  return [{ json: { _error: 'TOKEN_INVALID', _status: 400, _details: 'Se requiere ?token=... (12-64 chars)' } }];\n}\nreturn [{ json: { token, request_id: 'req_' + Math.random().toString(36).slice(2, 10) } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        300
+      ],
+      "id": "pv-validate",
+      "name": "Validate Token"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "pv-c1",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        720,
+        300
+      ],
+      "id": "pv-if-valid",
+      "name": "Valid?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details } }) }}",
+        "options": {
+          "responseCode": "={{ $json._status || 400 }}"
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        960,
+        460
+      ],
+      "id": "pv-respond-bad",
+      "name": "Respond Bad Token"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT p.id, p.project_id, p.version, p.title, p.executive_summary, p.scope_description, p.phases, p.total_price, p.price_breakdown, p.exclusions, p.inclusions, p.payment_conditions, p.validity_days, p.estimated_duration, p.warnings, p.optional_items, p.status, p.moodboard_data, p.render_data, p.public_token_expires_at, p.accepted_at, p.accepted_via, pr.name AS project_name, pr.project_type, pr.location_city, pr.property_area_m2 FROM proposals p JOIN projects pr ON pr.id = p.project_id WHERE p.public_token = $1::text LIMIT 1",
+        "options": {
+          "queryReplacement": "={{ [$json.token] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        960,
+        200
+      ],
+      "id": "pv-load",
+      "name": "Load Proposal by Token",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const rows = $input.all().map(i => i.json).filter(r => r && r.id);\nconst sess = $('Validate Token').first().json;\nif (rows.length === 0) {\n  return [{ json: { _error: 'PROPOSAL_NOT_FOUND', _status: 404, _details: 'Token desconocido o expirado', request_id: sess.request_id }}];\n}\nconst p = rows[0];\nconst now = Date.now();\nconst exp = p.public_token_expires_at ? new Date(p.public_token_expires_at).getTime() : null;\nif (exp && now > exp) {\n  return [{ json: { _error: 'TOKEN_EXPIRED', _status: 410, _details: 'El enlace ha expirado', expired_at: p.public_token_expires_at, request_id: sess.request_id }}];\n}\nreturn [{ json: {\n  data: {\n    proposal: {\n      id: p.id,\n      version: p.version,\n      title: p.title,\n      executive_summary: p.executive_summary,\n      scope_description: p.scope_description,\n      phases: p.phases || [],\n      total_price: p.total_price,\n      price_breakdown: p.price_breakdown || [],\n      inclusions: p.inclusions || [],\n      exclusions: p.exclusions || [],\n      optional_items: p.optional_items || [],\n      payment_conditions: p.payment_conditions,\n      validity_days: p.validity_days,\n      estimated_duration: p.estimated_duration,\n      warnings: p.warnings || [],\n      status: p.status\n    },\n    project: {\n      name: p.project_name,\n      project_type: p.project_type,\n      location_city: p.location_city,\n      property_area_m2: p.property_area_m2\n    },\n    moodboard: p.moodboard_data || null,\n    render: p.render_data || null,\n    acceptance: {\n      accepted_at: p.accepted_at,\n      accepted_via: p.accepted_via,\n      is_decided: !!p.accepted_at,\n      can_decide: !p.accepted_at\n    },\n    public_token_expires_at: p.public_token_expires_at\n  },\n  meta: { request_id: sess.request_id }\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        200
+      ],
+      "id": "pv-build",
+      "name": "Build Response"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "pv-c2",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1440,
+        200
+      ],
+      "id": "pv-if-build",
+      "name": "Build OK?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details, expired_at: $json.expired_at || null } }) }}",
+        "options": {
+          "responseCode": "={{ $json._status || 404 }}"
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1680,
+        360
+      ],
+      "id": "pv-respond-not-found",
+      "name": "Respond Not Found"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Cache-Control",
+                "value": "no-cache, private"
+              },
+              {
+                "name": "X-Robots-Tag",
+                "value": "noindex, nofollow"
+              }
+            ]
+          }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1680,
+        100
+      ],
+      "id": "pv-respond-ok",
+      "name": "Respond 200"
+    }
+  ],
+  "connections": {
+    "GET /proposals/public": {
+      "main": [
+        [
+          {
+            "node": "Validate Token",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Token": {
+      "main": [
+        [
+          {
+            "node": "Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid?": {
+      "main": [
+        [
+          {
+            "node": "Respond Bad Token",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Load Proposal by Token",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Proposal by Token": {
+      "main": [
+        [
+          {
+            "node": "Build Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Response": {
+      "main": [
+        [
+          {
+            "node": "Build OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build OK?": {
+      "main": [
+        [
+          {
+            "node": "Respond Not Found",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 200",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": {}
+}

@@ -1,0 +1,415 @@
+{
+  "name": "webhook_stripe",
+  "_description": "Fase G - Recibe eventos Stripe. Verifica firma HMAC SHA256 con Stripe-Signature header + stripe_webhook_secret. Idempotente (chequea stripe_events_log antes de procesar). Actualiza tenant_subscriptions segun event.type: customer.subscription.created/updated/deleted, invoice.payment_succeeded/failed, customer.subscription.trial_will_end. Devuelve 200 rapidamente (Stripe reintenta si tarda >30s o no es 2xx).",
+  "_status": "B72-fase-G stripe webhook",
+  "_n8n_id": "eBHpiboasXzLzFDV",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "stripe",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": true
+        }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ],
+      "id": "sw-webhook",
+      "name": "POST /stripe (raw)",
+      "webhookId": "feedface-bbbb-4abc-9def-cafebabe000b",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT value FROM system_config WHERE key = 'stripe_webhook_secret' LIMIT 1",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        480,
+        300
+      ],
+      "id": "sw-secret",
+      "name": "Load Webhook Secret",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Pure JS HMAC SHA256 (require crypto is disallowed in n8n task runners)\nfunction sha256(ascii) {\n  function rightRotate(value, amount) { return (value>>>amount) | (value<<(32-amount)); }\n  var maxWord = Math.pow(2, 32);\n  var lengthProperty = 'length';\n  var i, j;\n  var result = '';\n  var words = [];\n  var asciiBitLength = ascii[lengthProperty]*8;\n  var hash = sha256.h = sha256.h || [];\n  var k = sha256.k = sha256.k || [];\n  var primeCounter = k[lengthProperty];\n  var isComposite = {};\n  for (var candidate = 2; primeCounter < 64; candidate++) {\n    if (!isComposite[candidate]) {\n      for (i = 0; i < 313; i += candidate) { isComposite[i] = candidate; }\n      hash[primeCounter] = (Math.pow(candidate, .5)*maxWord)|0;\n      k[primeCounter++] = (Math.pow(candidate, 1/3)*maxWord)|0;\n    }\n  }\n  ascii += '\\x80';\n  while (ascii[lengthProperty]%64 - 56) ascii += '\\x00';\n  for (i = 0; i < ascii[lengthProperty]; i++) {\n    j = ascii.charCodeAt(i);\n    if (j>>8) return;\n    words[i>>2] |= j << ((3 - i)%4)*8;\n  }\n  words[words[lengthProperty]] = ((asciiBitLength/maxWord)|0);\n  words[words[lengthProperty]] = (asciiBitLength);\n  for (j = 0; j < words[lengthProperty];) {\n    var w = words.slice(j, j += 16);\n    var oldHash = hash;\n    hash = hash.slice(0, 8);\n    for (i = 0; i < 64; i++) {\n      var w15 = w[i - 15], w2 = w[i - 2];\n      var a = hash[0], e = hash[4];\n      var temp1 = hash[7] + (rightRotate(e, 6) ^ rightRotate(e, 11) ^ rightRotate(e, 25)) + ((e&hash[5])^((~e)&hash[6])) + k[i] + (w[i] = (i < 16) ? w[i] : (w[i - 16] + (rightRotate(w15, 7) ^ rightRotate(w15, 18) ^ (w15>>>3)) + w[i - 7] + (rightRotate(w2, 17) ^ rightRotate(w2, 19) ^ (w2>>>10)))|0);\n      var temp2 = (rightRotate(a, 2) ^ rightRotate(a, 13) ^ rightRotate(a, 22)) + ((a&hash[1])^(a&hash[2])^(hash[1]&hash[2]));\n      hash = [(temp1 + temp2)|0].concat(hash);\n      hash[4] = (hash[4] + temp1)|0;\n    }\n    for (i = 0; i < 8; i++) { hash[i] = (hash[i] + oldHash[i])|0; }\n  }\n  for (i = 0; i < 8; i++) {\n    for (j = 3; j + 1; j--) {\n      var b = (hash[i]>>(j*8))&255;\n      result += ((b < 16) ? 0 : '') + b.toString(16);\n    }\n  }\n  return result;\n}\nfunction hmacSha256(key, message) {\n  var blockSize = 64;\n  if (key.length > blockSize) key = Buffer.from(sha256(key), 'hex').toString('binary');\n  var keyBytes = Buffer.from(key, 'binary');\n  var padded = Buffer.alloc(blockSize);\n  keyBytes.copy(padded);\n  var oPad = Buffer.alloc(blockSize), iPad = Buffer.alloc(blockSize);\n  for (var i = 0; i < blockSize; i++) { oPad[i] = padded[i] ^ 0x5c; iPad[i] = padded[i] ^ 0x36; }\n  var inner = sha256(iPad.toString('binary') + (typeof message === 'string' ? message : message.toString('binary')));\n  return sha256(oPad.toString('binary') + Buffer.from(inner, 'hex').toString('binary'));\n}\nfunction timingSafeEqualHex(a, b) {\n  if (a.length !== b.length) return false;\n  var diff = 0;\n  for (var i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);\n  return diff === 0;\n}\nconst input = $('POST /stripe (raw)').first().json;\nconst headers = input.headers || {};\nconst sigHeader = headers['stripe-signature'] || headers['Stripe-Signature'] || '';\nif (!sigHeader) return [{ json: { _error: 'NO_SIGNATURE', _status: 400, _details: 'Falta Stripe-Signature header'}}];\n\nconst secretRows = $input.all().map(i => i.json).filter(r => r && r.value);\nif (secretRows.length === 0) return [{ json: { _error: 'WEBHOOK_SECRET_NOT_CONFIGURED', _status: 503, _details: 'system_config.stripe_webhook_secret no existe' }}];\nconst secret = secretRows[0].value;\nif (secret.startsWith('whsec_REPLACE')) return [{ json: { _error: 'WEBHOOK_SECRET_NOT_CONFIGURED', _status: 503, _details: 'webhook_secret aun con placeholder' }}];\n\n// Parse Stripe-Signature: t=...,v1=...\nconst parts = Object.fromEntries(sigHeader.split(',').map(p => { const [k,v] = p.split('='); return [k.trim(), v.trim()]; }));\nconst timestamp = parts.t;\nconst v1 = parts.v1;\nif (!timestamp || !v1) return [{ json: { _error: 'INVALID_SIGNATURE_FORMAT', _status: 400, _details: 'Stripe-Signature mal formado' }}];\n\n// rawBody capture en n8n: cuando options.rawBody=true, $input.first().json.body es el objeto parseado pero tambien expone rawBody como string si esta disponible. Probar varios accesos.\nlet rawBody = input.rawBody || input.body_raw || null;\nif (typeof rawBody === 'object' && rawBody !== null) {\n  // En n8n a veces el rawBody viene como buffer hex; intentar reconstruir\n  rawBody = JSON.stringify(input.body);\n}\nif (!rawBody && input.body) {\n  // Fallback: serializar el body. Esto puede no coincidir EXACTAMENTE con el original si Stripe envio orden distinto.\n  rawBody = JSON.stringify(input.body);\n}\nif (!rawBody) return [{ json: { _error: 'NO_RAW_BODY', _status: 500, _details: 'No se pudo recuperar el cuerpo crudo del webhook'}}];\n\n// Verifica HMAC SHA256\nconst signedPayload = timestamp + '.' + (typeof rawBody === 'string' ? rawBody : rawBody.toString('utf8'));\nconst expected = hmacSha256(secret, signedPayload);\nconst valid = timingSafeEqualHex(expected, v1.toLowerCase());\nif (!valid) {\n  // Tolerancia: si rawBody fue reconstruido (no original), intentar de nuevo con el body como objeto sin reformatear (esto NUNCA coincidira tras un JSON.stringify - solo es mejor effort)\n  return [{ json: { _error: 'INVALID_SIGNATURE', _status: 400, _details: 'HMAC SHA256 no coincide. Verificar que options.rawBody=true conserve el cuerpo original.' }}];\n}\n\n// Tolerancia de tiempo: rechazar si timestamp > 5 min de diferencia\nconst now = Math.floor(Date.now()/1000);\nif (Math.abs(now - parseInt(timestamp, 10)) > 300) {\n  return [{ json: { _error: 'TIMESTAMP_OUT_OF_TOLERANCE', _status: 400, _details: 'Timestamp Stripe-Signature mas de 5 min de diferencia (posible replay)' }}];\n}\n\nconst event = input.body || {};\nreturn [{ json: {\n  event_id: event.id,\n  event_type: event.type,\n  livemode: !!event.livemode,\n  api_version: event.api_version,\n  data_object: event.data?.object || {},\n  raw_event: event,\n  request_id: 'req_' + Math.random().toString(36).slice(2, 10)\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        300
+      ],
+      "id": "sw-verify",
+      "name": "Verify Signature"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "sw-c1",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        960,
+        300
+      ],
+      "id": "sw-if-sig",
+      "name": "Signature OK?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details } }) }}",
+        "options": {
+          "responseCode": "={{ $json._status || 400 }}"
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1200,
+        460
+      ],
+      "id": "sw-respond-bad",
+      "name": "Respond Invalid Sig"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO stripe_events_log (event_id, event_type, livemode, status, raw_event) VALUES ($1::text, $2::text, $3::boolean, 'processed', $4::jsonb) ON CONFLICT (event_id) DO NOTHING RETURNING id",
+        "options": {
+          "queryReplacement": "={{ [$json.event_id, $json.event_type, $json.livemode, JSON.stringify($json.raw_event)] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1200,
+        200
+      ],
+      "id": "sw-log",
+      "name": "Log Event (idempotent)",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const event = $('Verify Signature').first().json;\nconst logRows = $input.all().map(i => i.json).filter(r => r && r.id);\nconst isDuplicate = logRows.length === 0;\nif (isDuplicate) {\n  return [{ json: { _skip: true, _duplicate: true, event_id: event.event_id, event_type: event.event_type }}];\n}\nreturn [{ json: event }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1440,
+        200
+      ],
+      "id": "sw-dup-check",
+      "name": "Duplicate Check"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "sw-c2",
+              "leftValue": "={{ $json._skip }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1680,
+        200
+      ],
+      "id": "sw-if-dup",
+      "name": "Duplicate?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ received: true, status: 'duplicate', event_id: $json.event_id }) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1920,
+        360
+      ],
+      "id": "sw-respond-dup",
+      "name": "Respond Dup 200"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const event = $input.first().json;\nconst obj = event.data_object || {};\nconst type = event.event_type;\n\n// Extrae tenant_id desde metadata o client_reference_id\nconst tenantId = obj.metadata?.tenant_id || obj.subscription_data?.metadata?.tenant_id || (event.raw_event?.data?.object?.metadata?.tenant_id) || null;\nconst tierSlug = obj.metadata?.tier_slug || (event.raw_event?.data?.object?.metadata?.tier_slug) || null;\nconst customerId = obj.customer || (typeof obj === 'object' && obj.id?.startsWith('cus_') ? obj.id : null);\nconst subscriptionId = obj.id?.startsWith('sub_') ? obj.id : obj.subscription || null;\n\n// Periodo + status del subscription object si llega\nlet periodStart = null, periodEnd = null, status = null, trialEnd = null, cancelAtPeriodEnd = null, canceledAt = null, endedAt = null;\nif (obj.current_period_start) periodStart = new Date(obj.current_period_start * 1000).toISOString();\nif (obj.current_period_end)   periodEnd   = new Date(obj.current_period_end * 1000).toISOString();\nif (obj.status) status = obj.status;\nif (obj.trial_end) trialEnd = new Date(obj.trial_end * 1000).toISOString();\nif (typeof obj.cancel_at_period_end === 'boolean') cancelAtPeriodEnd = obj.cancel_at_period_end;\nif (obj.canceled_at) canceledAt = new Date(obj.canceled_at * 1000).toISOString();\nif (obj.ended_at) endedAt = new Date(obj.ended_at * 1000).toISOString();\n\n// Decision de accion segun type\nlet action = 'log_only';\nif (type === 'customer.subscription.created') action = 'upsert_subscription';\nelse if (type === 'customer.subscription.updated') action = 'upsert_subscription';\nelse if (type === 'customer.subscription.deleted') action = 'mark_canceled';\nelse if (type === 'invoice.payment_succeeded') action = 'mark_paid';\nelse if (type === 'invoice.payment_failed') action = 'mark_past_due';\nelse if (type === 'customer.subscription.trial_will_end') action = 'log_only';\nelse if (type === 'checkout.session.completed') {\n  // En checkout.session.completed el customer ya esta creado pero la subscription puede estar en otro evento\n  action = 'upsert_subscription';\n}\n\nreturn [{ json: {\n  event_id: event.event_id,\n  event_type: type,\n  action,\n  tenant_id: tenantId,\n  tier_slug: tierSlug,\n  customer_id: customerId,\n  subscription_id: subscriptionId,\n  status,\n  period_start: periodStart,\n  period_end: periodEnd,\n  trial_end: trialEnd,\n  cancel_at_period_end: cancelAtPeriodEnd,\n  canceled_at: canceledAt,\n  ended_at: endedAt,\n  next_payment_amount: obj.amount_due ? (obj.amount_due / 100) : null,\n  payment_method_last4: obj.payment_method_details?.card?.last4 || null,\n  request_id: event.request_id\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1920,
+        100
+      ],
+      "id": "sw-route",
+      "name": "Route Event"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH p AS (SELECT id FROM subscription_plans WHERE tier_slug = COALESCE($2::text, 'pro') LIMIT 1) INSERT INTO tenant_subscriptions (tenant_id, plan_id, status, stripe_customer_id, stripe_subscription_id, current_period_start, current_period_end, trial_ends_at, cancel_at_period_end) SELECT $1::uuid, p.id, COALESCE($3::text, 'active'), $4::text, $5::text, $6::timestamptz, $7::timestamptz, $8::timestamptz, COALESCE($9::boolean, false) FROM p ON CONFLICT (tenant_id) DO UPDATE SET status = EXCLUDED.status, stripe_customer_id = COALESCE(EXCLUDED.stripe_customer_id, tenant_subscriptions.stripe_customer_id), stripe_subscription_id = COALESCE(EXCLUDED.stripe_subscription_id, tenant_subscriptions.stripe_subscription_id), current_period_start = EXCLUDED.current_period_start, current_period_end = EXCLUDED.current_period_end, trial_ends_at = EXCLUDED.trial_ends_at, cancel_at_period_end = EXCLUDED.cancel_at_period_end, updated_at = now() RETURNING id, status",
+        "options": {
+          "queryReplacement": "={{ [$json.tenant_id, $json.tier_slug, $json.status, $json.customer_id, $json.subscription_id, $json.period_start, $json.period_end, $json.trial_end, $json.cancel_at_period_end] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2160,
+        100
+      ],
+      "id": "sw-upsert",
+      "name": "Upsert Subscription",
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE stripe_events_log SET affected_tenant = $2::uuid WHERE event_id = $1::text",
+        "options": {
+          "queryReplacement": "={{ [$('Route Event').first().json.event_id, $('Route Event').first().json.tenant_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2400,
+        100
+      ],
+      "id": "sw-link",
+      "name": "Link Tenant to Event",
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ received: true, event_id: $('Route Event').first().json.event_id, event_type: $('Route Event').first().json.event_type, action: $('Route Event').first().json.action, tenant_id: $('Route Event').first().json.tenant_id }) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        2640,
+        100
+      ],
+      "id": "sw-respond-ok",
+      "name": "Respond 200"
+    }
+  ],
+  "connections": {
+    "POST /stripe (raw)": {
+      "main": [
+        [
+          {
+            "node": "Load Webhook Secret",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Webhook Secret": {
+      "main": [
+        [
+          {
+            "node": "Verify Signature",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify Signature": {
+      "main": [
+        [
+          {
+            "node": "Signature OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Signature OK?": {
+      "main": [
+        [
+          {
+            "node": "Respond Invalid Sig",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Event (idempotent)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Event (idempotent)": {
+      "main": [
+        [
+          {
+            "node": "Duplicate Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Duplicate Check": {
+      "main": [
+        [
+          {
+            "node": "Duplicate?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Duplicate?": {
+      "main": [
+        [
+          {
+            "node": "Respond Dup 200",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Route Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route Event": {
+      "main": [
+        [
+          {
+            "node": "Upsert Subscription",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert Subscription": {
+      "main": [
+        [
+          {
+            "node": "Link Tenant to Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Link Tenant to Event": {
+      "main": [
+        [
+          {
+            "node": "Respond 200",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": {}
+}

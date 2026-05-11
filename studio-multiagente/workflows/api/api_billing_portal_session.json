@@ -1,0 +1,451 @@
+{
+  "name": "api_billing_portal_session",
+  "_description": "Fase G - POST crea una Stripe Customer Portal session para que el tenant gestione su suscripcion (cambiar tier, actualizar tarjeta, descargar facturas, cancelar). Devuelve { url } para redirigir. Requiere stripe_customer_id ya existente. Si no hay subscripcion, devuelve 412 SUBSCRIPTION_REQUIRED.",
+  "_status": "B72-fase-G stripe customer portal",
+  "_n8n_id": "CnnZmAywzVUE5jD5",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "api/v1/billing/portal",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ],
+      "id": "po-webhook",
+      "name": "POST /billing/portal",
+      "webhookId": "feedface-aaaa-4abc-9def-cafebabe000a",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const auth = $input.first().json.headers?.authorization || '';\nif (!auth.startsWith('Bearer ')) return [{ json: { _error: 'AUTH_MISSING_TOKEN', _status: 401 } }];\nconst token = auth.slice(7);\ntry {\n  const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'));\n  if (!payload.sub) throw new Error('No sub');\n  if (payload.exp && Date.now()/1000 > payload.exp) throw new Error('JWT expired');\n  if (!payload.tenant_id) throw new Error('No tenant_id');\n  if (payload.role && payload.role !== 'architect' && payload.role !== 'super_admin' && payload.role !== 'owner') {\n    return [{ json: { _error: 'FORBIDDEN_ROLE', _status: 403, _details: 'Solo architect/owner acceden al Customer Portal' } }];\n  }\n  return [{ json: { user_id: payload.sub, tenant_id: payload.tenant_id, role: payload.role || 'architect', request_id: 'req_' + Math.random().toString(36).slice(2, 10) }}];\n} catch (e) {\n  return [{ json: { _error: 'AUTH_INVALID_TOKEN', _status: 401, _details: e.message } }];\n}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        300
+      ],
+      "id": "po-decode",
+      "name": "Decode JWT"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "po-c1",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        720,
+        300
+      ],
+      "id": "po-if-auth",
+      "name": "Auth OK?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details || $json._error } }) }}",
+        "options": {
+          "responseCode": "={{ $json._status || 401 }}"
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        960,
+        460
+      ],
+      "id": "po-respond-err",
+      "name": "Respond Auth Error"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT set_session_context($1::uuid, $2::uuid, $3)",
+        "options": {
+          "queryReplacement": "={{ [$json.user_id, $json.tenant_id, $json.role] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        960,
+        200
+      ],
+      "id": "po-session",
+      "name": "Set Session"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT stripe_customer_id, status FROM tenant_subscriptions WHERE tenant_id = $1::uuid LIMIT 1",
+        "options": {
+          "queryReplacement": "={{ [$('Decode JWT').first().json.tenant_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1200,
+        200
+      ],
+      "id": "po-load",
+      "name": "Load Customer ID",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT key, value FROM system_config WHERE key IN ('stripe_secret_key','billing_portal_return_url')",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1440,
+        200
+      ],
+      "id": "po-config",
+      "name": "Load Stripe Config",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const sess = $('Decode JWT').first().json;\nconst subRows = $('Load Customer ID').all().map(i => i.json).filter(r => r && (r.stripe_customer_id !== undefined));\nif (subRows.length === 0) {\n  return [{ json: { _error: 'NO_SUBSCRIPTION', _status: 412, _details: 'No hay tenant_subscriptions. Crear via POST /billing/checkout primero.', request_id: sess.request_id }}];\n}\nconst sub = subRows[0];\nif (!sub.stripe_customer_id) {\n  return [{ json: { _error: 'NO_STRIPE_CUSTOMER', _status: 412, _details: 'tenant_subscriptions sin stripe_customer_id (subscripcion aun no completada con Stripe). Esperar webhook customer.subscription.created.', request_id: sess.request_id }}];\n}\nconst configRows = $input.all().map(i => i.json).filter(c => c && c.key);\nconst cfg = Object.fromEntries(configRows.map(r => [r.key, r.value]));\nif (!cfg.stripe_secret_key || cfg.stripe_secret_key.startsWith('sk_test_REPLACE') || cfg.stripe_secret_key.startsWith('sk_live_REPLACE')) {\n  return [{ json: { _error: 'STRIPE_NOT_CONFIGURED', _status: 503, _details: 'system_config.stripe_secret_key sin configurar', request_id: sess.request_id }}];\n}\nconst returnUrl = cfg.billing_portal_return_url || 'https://arquitai.studio/settings';\nreturn [{ json: { stripe_customer_id: sub.stripe_customer_id, stripe_secret_key: cfg.stripe_secret_key, return_url: returnUrl, request_id: sess.request_id, tenant_id: sess.tenant_id }}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1680,
+        200
+      ],
+      "id": "po-prep",
+      "name": "Prepare Portal"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "po-c2",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1920,
+        200
+      ],
+      "id": "po-if-prep",
+      "name": "Prep OK?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details } }) }}",
+        "options": {
+          "responseCode": "={{ $json._status || 412 }}"
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        2160,
+        360
+      ],
+      "id": "po-respond-pf",
+      "name": "Respond Prep Fail"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const p = $input.first().json;\nconst form = new URLSearchParams();\nform.append('customer', p.stripe_customer_id);\nform.append('return_url', p.return_url);\nlet resp, raw;\ntry {\n  resp = await fetch('https://api.stripe.com/v1/billing_portal/sessions', {\n    method: 'POST',\n    headers: {\n      'Authorization': 'Bearer ' + p.stripe_secret_key,\n      'Content-Type': 'application/x-www-form-urlencoded',\n      'Stripe-Version': '2024-06-20'\n    },\n    body: form.toString()\n  });\n  raw = await resp.text();\n} catch (e) {\n  return [{ json: { _error: 'STRIPE_NETWORK_ERROR', _status: 502, _details: e.message, request_id: p.request_id }}];\n}\nlet parsed;\ntry { parsed = JSON.parse(raw); } catch (e) {\n  return [{ json: { _error: 'STRIPE_INVALID_JSON', _status: 502, _details: raw.slice(0, 400), request_id: p.request_id }}];\n}\nif (!resp.ok) {\n  return [{ json: { _error: 'STRIPE_ERROR', _status: resp.status, _details: parsed?.error?.message || JSON.stringify(parsed).slice(0, 400), _stripe_code: parsed?.error?.code, request_id: p.request_id }}];\n}\nreturn [{ json: { url: parsed.url, return_url: parsed.return_url, created: parsed.created, request_id: p.request_id }}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2160,
+        100
+      ],
+      "id": "po-stripe",
+      "name": "Call Stripe Portal API"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "po-c3",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2400,
+        100
+      ],
+      "id": "po-if-stripe",
+      "name": "Stripe OK?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details, stripe_code: $json._stripe_code } }) }}",
+        "options": {
+          "responseCode": "={{ $json._status || 502 }}"
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        2640,
+        260
+      ],
+      "id": "po-respond-sf",
+      "name": "Respond Stripe Fail"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ data: { portal_url: $json.url, return_url: $json.return_url }, meta: { request_id: $json.request_id, provider: 'stripe' } }) }}",
+        "options": {
+          "responseCode": 201,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Cache-Control",
+                "value": "no-cache"
+              }
+            ]
+          }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        2640,
+        100
+      ],
+      "id": "po-respond-ok",
+      "name": "Respond 201"
+    }
+  ],
+  "connections": {
+    "POST /billing/portal": {
+      "main": [
+        [
+          {
+            "node": "Decode JWT",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decode JWT": {
+      "main": [
+        [
+          {
+            "node": "Auth OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Auth OK?": {
+      "main": [
+        [
+          {
+            "node": "Respond Auth Error",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Set Session",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Session": {
+      "main": [
+        [
+          {
+            "node": "Load Customer ID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Customer ID": {
+      "main": [
+        [
+          {
+            "node": "Load Stripe Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Stripe Config": {
+      "main": [
+        [
+          {
+            "node": "Prepare Portal",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Portal": {
+      "main": [
+        [
+          {
+            "node": "Prep OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prep OK?": {
+      "main": [
+        [
+          {
+            "node": "Respond Prep Fail",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Call Stripe Portal API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call Stripe Portal API": {
+      "main": [
+        [
+          {
+            "node": "Stripe OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Stripe OK?": {
+      "main": [
+        [
+          {
+            "node": "Respond Stripe Fail",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 201",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": {}
+}

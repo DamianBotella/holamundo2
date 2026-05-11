@@ -1,0 +1,290 @@
+{
+  "name": "api_billing_subscription_status",
+  "_description": "Fase G - GET estado de subscripcion del tenant: tier actual, status (trialing/active/past_due/...), trial_ends_at, usage del mes, limits del plan, features disponibles. Lo consume el frontend para mostrar banner trial, bloquear features fuera de plan, mostrar usage gauge.",
+  "_status": "B72-fase-G billing status",
+  "_n8n_id": "gFlcNWjWbIASn52h",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "api/v1/billing/subscription",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ],
+      "id": "bs-webhook",
+      "name": "GET /billing/subscription",
+      "webhookId": "feedface-8888-4abc-9def-cafebabe0008",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const auth = $input.first().json.headers?.authorization || '';\nif (!auth.startsWith('Bearer ')) return [{ json: { _error: 'AUTH_MISSING_TOKEN', _status: 401 } }];\nconst token = auth.slice(7);\ntry {\n  const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'));\n  if (!payload.sub) throw new Error('No sub');\n  if (payload.exp && Date.now()/1000 > payload.exp) throw new Error('JWT expired');\n  if (!payload.tenant_id) throw new Error('No tenant_id');\n  return [{ json: { user_id: payload.sub, tenant_id: payload.tenant_id, role: payload.role || 'architect', request_id: 'req_' + Math.random().toString(36).slice(2, 10) }}];\n} catch (e) {\n  return [{ json: { _error: 'AUTH_INVALID_TOKEN', _status: 401, _details: e.message } }];\n}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        300
+      ],
+      "id": "bs-decode",
+      "name": "Decode JWT"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "bs-c1",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        720,
+        300
+      ],
+      "id": "bs-if-auth",
+      "name": "Auth OK?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details || $json._error } }) }}",
+        "options": {
+          "responseCode": "={{ $json._status || 401 }}"
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        960,
+        460
+      ],
+      "id": "bs-respond-err",
+      "name": "Respond Auth Error"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT set_session_context($1::uuid, $2::uuid, $3)",
+        "options": {
+          "queryReplacement": "={{ [$json.user_id, $json.tenant_id, $json.role] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        960,
+        200
+      ],
+      "id": "bs-session",
+      "name": "Set Session"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT get_tenant_billing_state($1::uuid) AS state",
+        "options": {
+          "queryReplacement": "={{ [$('Decode JWT').first().json.tenant_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1200,
+        200
+      ],
+      "id": "bs-load",
+      "name": "Load Billing State",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT tier_slug, name, price_eur_monthly, features, limits, trial_days, sort_order FROM subscription_plans WHERE is_active = true ORDER BY sort_order",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1440,
+        200
+      ],
+      "id": "bs-plans",
+      "name": "Load All Plans",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const stateRows = $('Load Billing State').all().map(i => i.json).filter(r => r && r.state);\nconst state = stateRows[0]?.state || { has_subscription: false };\nconst plans = $input.all().map(i => i.json).filter(p => p && p.tier_slug);\nconst sess = $('Decode JWT').first().json;\nreturn [{ json: {\n  data: {\n    subscription: state,\n    available_plans: plans.map(p => ({\n      tier: p.tier_slug,\n      name: p.name,\n      price_eur_monthly: parseFloat(p.price_eur_monthly),\n      features: p.features || [],\n      limits: p.limits || {},\n      trial_days: p.trial_days,\n      is_current: state.tier === p.tier_slug\n    }))\n  },\n  meta: { request_id: sess.request_id }\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1680,
+        200
+      ],
+      "id": "bs-build",
+      "name": "Build Response"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Cache-Control",
+                "value": "private, max-age=30"
+              }
+            ]
+          }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1920,
+        200
+      ],
+      "id": "bs-respond-ok",
+      "name": "Respond 200"
+    }
+  ],
+  "connections": {
+    "GET /billing/subscription": {
+      "main": [
+        [
+          {
+            "node": "Decode JWT",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decode JWT": {
+      "main": [
+        [
+          {
+            "node": "Auth OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Auth OK?": {
+      "main": [
+        [
+          {
+            "node": "Respond Auth Error",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Set Session",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Session": {
+      "main": [
+        [
+          {
+            "node": "Load Billing State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Billing State": {
+      "main": [
+        [
+          {
+            "node": "Load All Plans",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load All Plans": {
+      "main": [
+        [
+          {
+            "node": "Build Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Response": {
+      "main": [
+        [
+          {
+            "node": "Respond 200",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": {}
+}

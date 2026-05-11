@@ -1,7 +1,7 @@
 {
   "name": "agent_client_concierge",
-  "_description": "Chatbot del cliente con escalado al arquitecto. Recibe mensaje del cliente, responde lo que pueda y escala consultas tecnicas/decisiones.",
-  "_status": "B72-fase-C AUX",
+  "_description": "agent_client_concierge (sync from n8n live)",
+  "_status": "B72-fase-C-debug (sync from live)",
   "nodes": [
     {
       "parameters": {
@@ -159,7 +159,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT role, message, created_at FROM client_conversations WHERE project_id = $1::uuid ORDER BY created_at DESC LIMIT 10",
+        "query": "SELECT role, content AS message, created_at FROM agent_conversations WHERE project_id = $1::uuid AND agent_name = 'agent_client_concierge' ORDER BY created_at DESC LIMIT 10",
         "options": {
           "queryReplacement": "={{ [$('Decode JWT + Body').first().json.project_id] }}"
         }
@@ -183,7 +183,7 @@
     {
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const sess = $('Decode JWT + Body').first().json;\nconst projectRows = $('Load Project').all().map(i => i.json).filter(p => p && p.id);\nif (projectRows.length === 0) return [{ json: { _error: 'PROJECT_NOT_FOUND', _status: 404, _details: 'project_id no existe', request_id: sess.request_id }}];\nconst project = projectRows[0];\nconst rows_0 = $('Load Briefing').all().map(it => it.json).filter(r => r);\\nconst rows_1 = $('Load Conversation').all().map(it => it.json).filter(r => r);\n\nconst briefing = rows_0[0] || null;\nconst recentMsgs = rows_1.reverse();\nconst userMessage = (sess.body?.message || '').trim();\nif (!userMessage) return [{ json: { _error: 'NO_MESSAGE', _status: 400, _details: 'falta body.message', request_id: sess.request_id }}];\nconst systemPrompt = `Eres el Asesor de Cliente de un estudio de arquitectura. Hablas con el CLIENTE del proyecto (no con el arquitecto). Tu rol:\\n- Responder dudas generales del cliente sobre su proyecto (estado, fechas, decisiones tomadas).\\n- NUNCA tomar decisiones tecnicas, legales o economicas — eso es del arquitecto.\\n- Escalar (escalate=true) cuando el cliente pida cambios al briefing/contrato/presupuesto, o cuando pregunte algo tecnico.\\n- Tono cercano, profesional, en espanol.\\n- DEVUELVE SOLO JSON: { \"reply\": \"...\", \"escalate\": bool, \"escalate_reason\": \"...\" }`;\nconst userPrompt = `PROYECTO: ${project.name}\\nBRIEFING: ${briefing?.summary?.slice(0,300) ?? '(sin briefing)'}\\n\\nULTIMOS 10 MENSAJES:\\n${recentMsgs.map(m => '- ['+m.role+']: '+m.message.slice(0,200)).join('\\\\n')}\\n\\nMENSAJE DEL CLIENTE: ${userMessage}\\n\\nResponde y decide si escalar.`;\n\nreturn [{ json: { user_id: sess.user_id, tenant_id: sess.tenant_id, project_id: project.id, request_id: sess.request_id, body: sess.body, user_message: $json.body?.message || null, llm_payload: { model: 'gpt-4o', messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }], temperature: 0.2, max_tokens: 2000, response_format: { type: 'json_object' }}}}];"
+        "jsCode": "const sess = $('Decode JWT + Body').first().json;\nconst projectRows = $('Load Project').all().map(i => i.json).filter(p => p && p.id);\nif (projectRows.length === 0) return [{ json: { _error: 'PROJECT_NOT_FOUND', _status: 404, _details: 'project_id no existe', request_id: sess.request_id }}];\nconst project = projectRows[0];\nconst rows_0 = $('Load Briefing').all().map(it => it.json).filter(r => r);\nconst rows_1 = $('Load Conversation').all().map(it => it.json).filter(r => r);\n\nconst briefing = rows_0[0] || null;\nconst recentMsgs = rows_1.reverse();\nconst userMessage = (sess.body?.message || '').trim();\nif (!userMessage) return [{ json: { _error: 'NO_MESSAGE', _status: 400, _details: 'falta body.message', request_id: sess.request_id }}];\nconst systemPrompt = `Eres el Asesor de Cliente de un estudio de arquitectura. Hablas con el CLIENTE del proyecto (no con el arquitecto). Tu rol:\n- Responder dudas generales del cliente sobre su proyecto (estado, fechas, decisiones tomadas).\n- NUNCA tomar decisiones tecnicas, legales o economicas — eso es del arquitecto.\n- Escalar (escalate=true) cuando el cliente pida cambios al briefing/contrato/presupuesto, o cuando pregunte algo tecnico.\n- Tono cercano, profesional, en espanol.\n- DEVUELVE SOLO JSON: { \"reply\": \"...\", \"escalate\": bool, \"escalate_reason\": \"...\" }`;\nconst userPrompt = `PROYECTO: ${project.name}\nBRIEFING: ${briefing?.summary?.slice(0,300) ?? '(sin briefing)'}\n\nULTIMOS 10 MENSAJES:\n${recentMsgs.map(m => '- ['+m.role+']: '+m.message.slice(0,200)).join('\\\n')}\n\nMENSAJE DEL CLIENTE: ${userMessage}\n\nResponde y decide si escalar.`;\n\nreturn [{ json: { user_id: sess.user_id, tenant_id: sess.tenant_id, project_id: project.id, request_id: sess.request_id, body: sess.body, user_message: $json.body?.message || null, llm_payload: { model: 'gpt-4o', messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }], temperature: 0.2, max_tokens: 2000, response_format: { type: 'json_object' }}}}];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -322,9 +322,9 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "INSERT INTO client_conversations (project_id, role, message, metadata) VALUES ($1::uuid, 'assistant', $2::text, $3::jsonb) RETURNING id",
+        "query": "INSERT INTO agent_conversations (tenant_id, project_id, agent_name, role, content, metadata) VALUES ($1::uuid, $2::uuid, 'agent_client_concierge', 'agent', $3::text, $4::jsonb) RETURNING id",
         "options": {
-          "queryReplacement": "={{ [$json.project_id, $json.output.reply, JSON.stringify({ escalate: $json.output.escalate, escalate_reason: $json.output.escalate_reason, request_id: $json.request_id })] }}"
+          "queryReplacement": "={{ [$json.tenant_id, $json.project_id, $json.output.reply, JSON.stringify({ escalate: $json.output.escalate, escalate_reason: $json.output.escalate_reason, user_message: $json.body?.message, request_id: $json.request_id })] }}"
         }
       },
       "credentials": {
@@ -565,7 +565,9 @@
     }
   },
   "settings": {
-    "executionOrder": "v1"
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
   },
   "pinData": {}
 }

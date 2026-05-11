@@ -1,7 +1,7 @@
 {
   "name": "agent_permit_tracker",
-  "_description": "Tramitador de Licencias. Revisa permit_applications del proyecto, detecta estados estancados (>30 dias sin avance), genera proximas acciones.",
-  "_status": "B72-fase-C AUX",
+  "_description": "agent_permit_tracker (sync from n8n live)",
+  "_status": "B72-fase-C-debug (sync from live)",
   "nodes": [
     {
       "parameters": {
@@ -135,7 +135,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT id, permit_type, status, submitted_at, expected_resolution, notes FROM permit_applications WHERE project_id = $1::uuid",
+        "query": "SELECT id, application_type AS permit_type, status, submitted_at, expected_response_days, notes FROM permit_applications WHERE project_id = $1::uuid",
         "options": {
           "queryReplacement": "={{ [$('Decode JWT + Body').first().json.project_id] }}"
         }
@@ -159,7 +159,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT permit_id, status, changed_at, notes FROM permit_status_history WHERE permit_id IN (SELECT id FROM permit_applications WHERE project_id = $1::uuid) ORDER BY changed_at DESC LIMIT 30",
+        "query": "SELECT permit_id, new_status AS status, old_status, changed_at, notes FROM permit_status_history WHERE permit_id IN (SELECT id FROM permit_applications WHERE project_id = $1::uuid) ORDER BY changed_at DESC LIMIT 30",
         "options": {
           "queryReplacement": "={{ [$('Decode JWT + Body').first().json.project_id] }}"
         }
@@ -183,7 +183,7 @@
     {
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const sess = $('Decode JWT + Body').first().json;\nconst projectRows = $('Load Project').all().map(i => i.json).filter(p => p && p.id);\nif (projectRows.length === 0) return [{ json: { _error: 'PROJECT_NOT_FOUND', _status: 404, _details: 'project_id no existe', request_id: sess.request_id }}];\nconst project = projectRows[0];\nconst rows_0 = $('Load Permits').all().map(it => it.json).filter(r => r);\\nconst rows_1 = $('Load Permit History').all().map(it => it.json).filter(r => r);\n\nconst permits = rows_0;\nconst history = rows_1;\nconst systemPrompt = `Eres agent_permit_tracker. Tu trabajo: dado el estado actual de los permits municipales del proyecto, detectar:\\n- Permits estancados > 30 dias sin cambio\\n- Permits proximos a expirar resolucion\\n- Documentacion adicional probable a aportar\\n- Recomendar siguiente accion (esperar / reclamar / aportar X)\\nDEVUELVE SOLO JSON.`;\nconst userPrompt = `PROYECTO: ${project.name} (${project.location_city}, ${project.location_province})\\n\\nPERMITS (${permits.length}):\\n${JSON.stringify(permits)}\\n\\nHISTORY ultimos 30:\\n${JSON.stringify(history)}\\n\\nFecha hoy: ${new Date().toISOString().slice(0,10)}\\n\\nGenera analisis + recomendaciones.\\n\\nOUTPUT JSON:\\n{ \"stuck_permits\": [{ \"permit_id\": \"uuid\", \"days_stuck\": 45, \"recommended_action\": \"reclamar\" }], \"upcoming_expirations\": [...], \"next_actions\": [\"...\"], \"summary\": \"...\" }`;\n\nreturn [{ json: { user_id: sess.user_id, tenant_id: sess.tenant_id, project_id: project.id, request_id: sess.request_id, body: sess.body,  llm_payload: { model: 'gpt-4o', messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }], temperature: 0.2, max_tokens: 2000, response_format: { type: 'json_object' }}}}];"
+        "jsCode": "const sess = $('Decode JWT + Body').first().json;\nconst projectRows = $('Load Project').all().map(i => i.json).filter(p => p && p.id);\nif (projectRows.length === 0) return [{ json: { _error: 'PROJECT_NOT_FOUND', _status: 404, _details: 'project_id no existe', request_id: sess.request_id }}];\nconst project = projectRows[0];\nconst rows_0 = $('Load Permits').all().map(it => it.json).filter(r => r);\nconst rows_1 = $('Load Permit History').all().map(it => it.json).filter(r => r);\n\nconst permits = rows_0;\nconst history = rows_1;\nconst systemPrompt = `Eres agent_permit_tracker. Tu trabajo: dado el estado actual de los permits municipales del proyecto, detectar:\n- Permits estancados > 30 dias sin cambio\n- Permits proximos a expirar resolucion\n- Documentacion adicional probable a aportar\n- Recomendar siguiente accion (esperar / reclamar / aportar X)\nDEVUELVE SOLO JSON.`;\nconst userPrompt = `PROYECTO: ${project.name} (${project.location_city}, ${project.location_province})\n\nPERMITS (${permits.length}):\n${JSON.stringify(permits)}\n\nHISTORY ultimos 30:\n${JSON.stringify(history)}\n\nFecha hoy: ${new Date().toISOString().slice(0,10)}\n\nGenera analisis + recomendaciones.\n\nOUTPUT JSON:\n{ \"stuck_permits\": [{ \"permit_id\": \"uuid\", \"days_stuck\": 45, \"recommended_action\": \"reclamar\" }], \"upcoming_expirations\": [...], \"next_actions\": [\"...\"], \"summary\": \"...\" }`;\n\nreturn [{ json: { user_id: sess.user_id, tenant_id: sess.tenant_id, project_id: project.id, request_id: sess.request_id, body: sess.body,  llm_payload: { model: 'gpt-4o', messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }], temperature: 0.2, max_tokens: 2000, response_format: { type: 'json_object' }}}}];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -565,7 +565,9 @@
     }
   },
   "settings": {
-    "executionOrder": "v1"
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
   },
   "pinData": {}
 }

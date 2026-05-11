@@ -1,7 +1,7 @@
 {
   "name": "agent_collab_coordinator",
-  "_description": "Coordinador de Colaboradores Externos. Asigna tareas (calculo estructural, decoracion, geotecnia, etc.) a colaboradores registrados segun la fase del proyecto.",
-  "_status": "B72-fase-C AUX",
+  "_description": "agent_collab_coordinator (sync from n8n live)",
+  "_status": "B72-fase-C-debug (sync from live)",
   "nodes": [
     {
       "parameters": {
@@ -135,7 +135,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT id, name, specialty, email, status FROM collaborators WHERE status = 'active' ORDER BY specialty",
+        "query": "SELECT id, name, specialty, email FROM collaborators WHERE active = true ORDER BY specialty",
         "options": {
           "queryReplacement": "={{ [] }}"
         }
@@ -159,7 +159,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT id, collaborator_id, task_type, status FROM collab_assignments WHERE project_id = $1::uuid",
+        "query": "SELECT id, collaborator_id, role, scope, status FROM collab_assignments WHERE project_id = $1::uuid",
         "options": {
           "queryReplacement": "={{ [$('Decode JWT + Body').first().json.project_id] }}"
         }
@@ -183,7 +183,7 @@
     {
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const sess = $('Decode JWT + Body').first().json;\nconst projectRows = $('Load Project').all().map(i => i.json).filter(p => p && p.id);\nif (projectRows.length === 0) return [{ json: { _error: 'PROJECT_NOT_FOUND', _status: 404, _details: 'project_id no existe', request_id: sess.request_id }}];\nconst project = projectRows[0];\nconst rows_0 = $('Load Collaborators').all().map(it => it.json).filter(r => r);\\nconst rows_1 = $('Load Existing Assignments').all().map(it => it.json).filter(r => r);\n\nconst collaborators = rows_0;\nconst existing = rows_1;\nconst phase = project.current_phase;\nconst systemPrompt = `Eres agent_collab_coordinator. Decides que colaboradores externos asignar al proyecto segun su fase y necesidades.\\nFASES Y TIPICOS COLABS:\\n- briefing_done/design_done: arquitecto tecnico (si necesita calculo estructural)\\n- analysis_done: calculista, geotecnico (segun complejidad)\\n- costs_done: aparejador\\n- approved: decorador (opcional, comercial)\\nNUNCA dupliques una asignacion ya existente.\\nDEVUELVE SOLO JSON.`;\nconst userPrompt = `PROYECTO: ${project.name} (${project.project_type}, ${project.property_area_m2 ?? '?'} m2, fase ${phase})\\nUBICACION: ${project.location_city}, ${project.location_province}\\n\\nCOLABORADORES DISPONIBLES (${collaborators.length}):\\n${JSON.stringify(collaborators)}\\n\\nASIGNACIONES EXISTENTES:\\n${JSON.stringify(existing)}\\n\\nTAREA: lista de NUEVAS asignaciones recomendadas (no dupliques las existentes).\\n\\nOUTPUT JSON:\\n{ \"assignments\": [{ \"collaborator_id\": \"uuid\", \"task_type\": \"calculo_estructural|decoracion|geotecnia|otro\", \"description\": \"...\", \"deadline_days\": 14, \"priority\": \"high|medium|low\" }], \"notes\": \"...\" }`;\n\nreturn [{ json: { user_id: sess.user_id, tenant_id: sess.tenant_id, project_id: project.id, request_id: sess.request_id, body: sess.body,  llm_payload: { model: 'gpt-4o', messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }], temperature: 0.2, max_tokens: 2000, response_format: { type: 'json_object' }}}}];"
+        "jsCode": "const sess = $('Decode JWT + Body').first().json;\nconst projectRows = $('Load Project').all().map(i => i.json).filter(p => p && p.id);\nif (projectRows.length === 0) return [{ json: { _error: 'PROJECT_NOT_FOUND', _status: 404, _details: 'project_id no existe', request_id: sess.request_id }}];\nconst project = projectRows[0];\nconst rows_0 = $('Load Collaborators').all().map(it => it.json).filter(r => r);\nconst rows_1 = $('Load Existing Assignments').all().map(it => it.json).filter(r => r);\n\nconst collaborators = rows_0;\nconst existing = rows_1;\nconst phase = project.current_phase;\nconst systemPrompt = `Eres agent_collab_coordinator. Decides que colaboradores externos asignar al proyecto segun su fase y necesidades.\nFASES Y TIPICOS COLABS:\n- briefing_done/design_done: arquitecto tecnico (si necesita calculo estructural)\n- analysis_done: calculista, geotecnico (segun complejidad)\n- costs_done: aparejador\n- approved: decorador (opcional, comercial)\nNUNCA dupliques una asignacion ya existente.\nDEVUELVE SOLO JSON.`;\nconst userPrompt = `PROYECTO: ${project.name} (${project.project_type}, ${project.property_area_m2 ?? '?'} m2, fase ${phase})\nUBICACION: ${project.location_city}, ${project.location_province}\n\nCOLABORADORES DISPONIBLES (${collaborators.length}):\n${JSON.stringify(collaborators)}\n\nASIGNACIONES EXISTENTES:\n${JSON.stringify(existing)}\n\nTAREA: lista de NUEVAS asignaciones recomendadas (no dupliques las existentes).\n\nOUTPUT JSON:\n{ \"assignments\": [{ \"collaborator_id\": \"uuid\", \"task_type\": \"calculo_estructural|decoracion|geotecnia|otro\", \"description\": \"...\", \"deadline_days\": 14, \"priority\": \"high|medium|low\" }], \"notes\": \"...\" }`;\n\nreturn [{ json: { user_id: sess.user_id, tenant_id: sess.tenant_id, project_id: project.id, request_id: sess.request_id, body: sess.body,  llm_payload: { model: 'gpt-4o', messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }], temperature: 0.2, max_tokens: 2000, response_format: { type: 'json_object' }}}}];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -322,7 +322,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "INSERT INTO collab_assignments (project_id, collaborator_id, task_type, description, status)\nSELECT $1::uuid, (a->>'collaborator_id')::uuid, (a->>'task_type')::text, (a->>'description')::text, 'open'\nFROM jsonb_array_elements($2::jsonb) AS a\nWHERE (a->>'collaborator_id') IS NOT NULL\nRETURNING id, task_type",
+        "query": "INSERT INTO collab_assignments (project_id, collaborator_id, role, scope, deliverables, status)\nSELECT $1::uuid, (a->>'collaborator_id')::uuid, COALESCE(a->>'task_type','colaboracion'), COALESCE(a->>'description', ''), COALESCE(a->'deliverables', '[]'::jsonb), 'invited'\nFROM jsonb_array_elements($2::jsonb) AS a\nWHERE (a->>'collaborator_id') IS NOT NULL\nRETURNING id, role",
         "options": {
           "queryReplacement": "={{ [$json.project_id, JSON.stringify($json.output.assignments || [])] }}"
         }
@@ -565,7 +565,9 @@
     }
   },
   "settings": {
-    "executionOrder": "v1"
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
   },
   "pinData": {}
 }

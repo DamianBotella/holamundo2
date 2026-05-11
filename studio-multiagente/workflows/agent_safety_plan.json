@@ -1,7 +1,7 @@
 {
   "name": "agent_safety_plan",
-  "_description": "Recuperado de n8n live (no estaba en repo). Drift fixed B72-fase-C.",
-  "_status": "B72-fase-C drift fix",
+  "_description": "agent_safety_plan (sync from n8n live)",
+  "_status": "B72-fase-C-debug (sync from live)",
   "nodes": [
     {
       "id": "as-01",

@@ -1,7 +1,7 @@
 {
   "name": "agent_anomaly_detector",
-  "_description": "Inspector de Fraude: 8 heuristicas sobre invoices+cost_estimates+trade_quotes para detectar anomalias economicas (precio fuera de rango, duplicados, ramos sin presupuesto, etc.).",
-  "_status": "B72-fase-C AUX",
+  "_description": "agent_anomaly_detector (sync from n8n live)",
+  "_status": "B72-fase-C-debug (sync from live)",
   "nodes": [
     {
       "parameters": {
@@ -135,7 +135,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT id, amount, vendor, invoice_date, status, project_id FROM invoices WHERE project_id = $1::uuid ORDER BY invoice_date DESC LIMIT 50",
+        "query": "SELECT id, total_amount AS amount, supplier_name AS vendor, invoice_date, status, project_id FROM invoices WHERE project_id = $1::uuid ORDER BY invoice_date DESC LIMIT 50",
         "options": {
           "queryReplacement": "={{ [$('Decode JWT + Body').first().json.project_id] }}"
         }
@@ -183,7 +183,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT id, trade_type, amount_eur, vendor_name, status FROM trade_quotes WHERE project_id = $1::uuid LIMIT 30",
+        "query": "SELECT id, trade_type, amount, supplier_name AS vendor_name, status FROM trade_quotes WHERE project_id = $1::uuid LIMIT 30",
         "options": {
           "queryReplacement": "={{ [$('Decode JWT + Body').first().json.project_id] }}"
         }
@@ -207,7 +207,7 @@
     {
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const sess = $('Decode JWT + Body').first().json;\nconst projectRows = $('Load Project').all().map(i => i.json).filter(p => p && p.id);\nif (projectRows.length === 0) return [{ json: { _error: 'PROJECT_NOT_FOUND', _status: 404, _details: 'project_id no existe', request_id: sess.request_id }}];\nconst project = projectRows[0];\nconst rows_0 = $('Load Invoices').all().map(it => it.json).filter(r => r);\\nconst rows_1 = $('Load Cost Estimate').all().map(it => it.json).filter(r => r);\\nconst rows_2 = $('Load Quotes').all().map(it => it.json).filter(r => r);\n\nconst invoices = rows_0;\nconst costRow = rows_1[0] || null;\nconst quotes = rows_2;\nconst systemPrompt = `Eres agent_anomaly_detector. Aplicas 8 heuristicas sobre los datos economicos del proyecto para detectar anomalias:\\n1. Factura > 30% sobre coste estimado de su partida\\n2. Facturas duplicadas (mismo vendor + amount + fecha proxima)\\n3. Ramo de presupuesto sin facturacion pasado 50% del plazo\\n4. Quote rechazado pero factura del mismo vendor\\n5. Suma facturas > 110% del total_estimated\\n6. Factura sin proyecto/categoria asignada\\n7. Vendor nuevo (no aparece en quotes previos) con factura > 5000 EUR\\n8. Variacion vendor mismo trade > 40%\\nDEVUELVE SOLO JSON con anomalies (max 20) y risk_score 0-100.`;\nconst userPrompt = `PROYECTO: ${project.name}\\nCOST ESTIMATE: ${costRow ? 'v'+costRow.version+', total '+costRow.total_estimated+' EUR' : '(sin estimate)'}\\nBREAKDOWN: ${JSON.stringify((costRow?.breakdown || []).slice(0,15))}\\n\\nINVOICES (${invoices.length}):\\n${JSON.stringify(invoices.slice(0,20))}\\n\\nQUOTES (${quotes.length}):\\n${JSON.stringify(quotes.slice(0,20))}\\n\\nAplica las 8 heuristicas.\\n\\nOUTPUT JSON:\\n{ \"risk_score\": 35, \"anomalies\": [{ \"heuristic\": 1, \"severity\": \"high\", \"description\": \"...\", \"evidence\": { ... }, \"recommendation\": \"...\" }], \"summary\": \"...\" }`;\n\nreturn [{ json: { user_id: sess.user_id, tenant_id: sess.tenant_id, project_id: project.id, request_id: sess.request_id, body: sess.body,  llm_payload: { model: 'gpt-4o', messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }], temperature: 0.2, max_tokens: 2000, response_format: { type: 'json_object' }}}}];"
+        "jsCode": "const sess = $('Decode JWT + Body').first().json;\nconst projectRows = $('Load Project').all().map(i => i.json).filter(p => p && p.id);\nif (projectRows.length === 0) return [{ json: { _error: 'PROJECT_NOT_FOUND', _status: 404, _details: 'project_id no existe', request_id: sess.request_id }}];\nconst project = projectRows[0];\nconst rows_0 = $('Load Invoices').all().map(it => it.json).filter(r => r);\nconst rows_1 = $('Load Cost Estimate').all().map(it => it.json).filter(r => r);\nconst rows_2 = $('Load Quotes').all().map(it => it.json).filter(r => r);\n\nconst invoices = rows_0;\nconst costRow = rows_1[0] || null;\nconst quotes = rows_2;\nconst systemPrompt = `Eres agent_anomaly_detector. Aplicas 8 heuristicas sobre los datos economicos del proyecto para detectar anomalias:\n1. Factura > 30% sobre coste estimado de su partida\n2. Facturas duplicadas (mismo vendor + amount + fecha proxima)\n3. Ramo de presupuesto sin facturacion pasado 50% del plazo\n4. Quote rechazado pero factura del mismo vendor\n5. Suma facturas > 110% del total_estimated\n6. Factura sin proyecto/categoria asignada\n7. Vendor nuevo (no aparece en quotes previos) con factura > 5000 EUR\n8. Variacion vendor mismo trade > 40%\nDEVUELVE SOLO JSON con anomalies (max 20) y risk_score 0-100.`;\nconst userPrompt = `PROYECTO: ${project.name}\nCOST ESTIMATE: ${costRow ? 'v'+costRow.version+', total '+costRow.total_estimated+' EUR' : '(sin estimate)'}\nBREAKDOWN: ${JSON.stringify((costRow?.breakdown || []).slice(0,15))}\n\nINVOICES (${invoices.length}):\n${JSON.stringify(invoices.slice(0,20))}\n\nQUOTES (${quotes.length}):\n${JSON.stringify(quotes.slice(0,20))}\n\nAplica las 8 heuristicas.\n\nOUTPUT JSON:\n{ \"risk_score\": 35, \"anomalies\": [{ \"heuristic\": 1, \"severity\": \"high\", \"description\": \"...\", \"evidence\": { ... }, \"recommendation\": \"...\" }], \"summary\": \"...\" }`;\n\nreturn [{ json: { user_id: sess.user_id, tenant_id: sess.tenant_id, project_id: project.id, request_id: sess.request_id, body: sess.body,  llm_payload: { model: 'gpt-4o', messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }], temperature: 0.2, max_tokens: 2000, response_format: { type: 'json_object' }}}}];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -600,7 +600,9 @@
     }
   },
   "settings": {
-    "executionOrder": "v1"
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
   },
   "pinData": {}
 }

@@ -1,7 +1,7 @@
 {
   "name": "agent_trade_comms",
-  "_description": "Comunicador con Gremios. Genera mensaje formal de solicitud de presupuesto para un trade_request concreto, incluye webhook_token para que el gremio devuelva su quote.",
-  "_status": "B72-fase-C AUX",
+  "_description": "agent_trade_comms (sync from n8n live)",
+  "_status": "B72-fase-C-debug (sync from live)",
   "nodes": [
     {
       "parameters": {
@@ -135,7 +135,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT id, trade_type, description, quantity_units, expected_budget_eur, urgency FROM trade_requests WHERE id = $1::uuid LIMIT 1",
+        "query": "SELECT id, trade_type, scope_description AS description, scope_details AS quantity_units, status FROM trade_requests WHERE id = $1::uuid LIMIT 1",
         "options": {
           "queryReplacement": "={{ [$json.body?.trade_request_id || '00000000-0000-0000-0000-000000000000'] }}"
         }
@@ -159,7 +159,7 @@
     {
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const sess = $('Decode JWT + Body').first().json;\nconst projectRows = $('Load Project').all().map(i => i.json).filter(p => p && p.id);\nif (projectRows.length === 0) return [{ json: { _error: 'PROJECT_NOT_FOUND', _status: 404, _details: 'project_id no existe', request_id: sess.request_id }}];\nconst project = projectRows[0];\nconst rows_0 = $('Load Trade Request').all().map(it => it.json).filter(r => r);\n\nconst tradeReq = rows_0[0] || null;\nif (!tradeReq) return [{ json: { _error: 'TRADE_REQUEST_NOT_FOUND', _status: 404, _details: 'body.trade_request_id no existe', request_id: sess.request_id }}];\nconst systemPrompt = `Eres agent_trade_comms. Generas un mensaje formal y educado al gremio para pedir su presupuesto.\\nTono: profesional, claro, sin tecnicismos innecesarios. Espanol.\\nESTRUCTURA: 1) saludo, 2) descripcion obra, 3) detalle especifico de su especialidad, 4) plazos, 5) instrucciones para enviar quote, 6) firma del estudio.\\nDEVUELVE SOLO JSON.`;\nconst userPrompt = `PROYECTO: ${project.name}\\nUBICACION: ${project.location_city}, ${project.location_province}\\nTRADE REQUEST:\\n- Tipo: ${tradeReq.trade_type}\\n- Descripcion: ${tradeReq.description}\\n- Cantidades: ${JSON.stringify(tradeReq.quantity_units)}\\n- Budget esperado: ${tradeReq.expected_budget_eur} EUR\\n- Urgencia: ${tradeReq.urgency}\\n\\nGenera mensaje formal.\\n\\nOUTPUT JSON:\\n{ \"subject\": \"...\", \"message\": \"...\", \"deadline_days\": 7 }`;\n\nreturn [{ json: { user_id: sess.user_id, tenant_id: sess.tenant_id, project_id: project.id, request_id: sess.request_id, body: sess.body,  llm_payload: { model: 'gpt-4o', messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }], temperature: 0.2, max_tokens: 2000, response_format: { type: 'json_object' }}}}];"
+        "jsCode": "const sess = $('Decode JWT + Body').first().json;\nconst projectRows = $('Load Project').all().map(i => i.json).filter(p => p && p.id);\nif (projectRows.length === 0) return [{ json: { _error: 'PROJECT_NOT_FOUND', _status: 404, _details: 'project_id no existe', request_id: sess.request_id }}];\nconst project = projectRows[0];\nconst rows_0 = $('Load Trade Request').all().map(it => it.json).filter(r => r);\n\nconst tradeReq = rows_0[0] || null;\nif (!tradeReq) return [{ json: { _error: 'TRADE_REQUEST_NOT_FOUND', _status: 404, _details: 'body.trade_request_id no existe', request_id: sess.request_id }}];\nconst systemPrompt = `Eres agent_trade_comms. Generas un mensaje formal y educado al gremio para pedir su presupuesto.\nTono: profesional, claro, sin tecnicismos innecesarios. Espanol.\nESTRUCTURA: 1) saludo, 2) descripcion obra, 3) detalle especifico de su especialidad, 4) plazos, 5) instrucciones para enviar quote, 6) firma del estudio.\nDEVUELVE SOLO JSON.`;\nconst userPrompt = `PROYECTO: ${project.name}\nUBICACION: ${project.location_city}, ${project.location_province}\nTRADE REQUEST:\n- Tipo: ${tradeReq.trade_type}\n- Descripcion: ${tradeReq.description}\n- Cantidades: ${JSON.stringify(tradeReq.quantity_units)}\n- Budget esperado: ${tradeReq.expected_budget_eur} EUR\n- Urgencia: ${tradeReq.urgency}\n\nGenera mensaje formal.\n\nOUTPUT JSON:\n{ \"subject\": \"...\", \"message\": \"...\", \"deadline_days\": 7 }`;\n\nreturn [{ json: { user_id: sess.user_id, tenant_id: sess.tenant_id, project_id: project.id, request_id: sess.request_id, body: sess.body,  llm_payload: { model: 'gpt-4o', messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }], temperature: 0.2, max_tokens: 2000, response_format: { type: 'json_object' }}}}];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -298,9 +298,9 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "INSERT INTO trade_quotes (project_id, trade_request_id, status, request_message, webhook_token) VALUES ($1::uuid, $2::uuid, 'requested', $3::text, encode(gen_random_bytes(16), 'hex')) RETURNING id, webhook_token",
+        "query": "INSERT INTO trade_quotes (project_id, trade_request_id, supplier_name, supplier_email, status, notes, webhook_token) VALUES ($1::uuid, $2::uuid, $3::text, $4::text, 'requested', $5::text, encode(gen_random_bytes(16), 'hex')) RETURNING id, webhook_token",
         "options": {
-          "queryReplacement": "={{ [$json.project_id, $json.body?.trade_request_id, $json.output.message] }}"
+          "queryReplacement": "={{ [$json.project_id, $json.body?.trade_request_id, $json.body?.supplier_name || 'Sin asignar', $json.body?.supplier_email || 'noemail@example.com', $json.output.message] }}"
         }
       },
       "credentials": {
@@ -530,7 +530,9 @@
     }
   },
   "settings": {
-    "executionOrder": "v1"
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
   },
   "pinData": {}
 }

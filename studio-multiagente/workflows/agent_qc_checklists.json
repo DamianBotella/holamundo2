@@ -1,7 +1,7 @@
 {
   "name": "agent_qc_checklists",
-  "_description": "Controlador QC. Genera checklists de calidad ad-hoc segun la fase y tipo de obra (8-15 items por fase).",
-  "_status": "B72-fase-C AUX",
+  "_description": "agent_qc_checklists (sync from n8n live)",
+  "_status": "B72-fase-C-debug (sync from live)",
   "nodes": [
     {
       "parameters": {
@@ -135,7 +135,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT id, title, intervention_logic FROM design_options WHERE project_id = $1::uuid AND status = 'selected' LIMIT 1",
+        "query": "SELECT id, title, intervention_logic FROM design_options WHERE project_id = $1::uuid AND is_selected = true LIMIT 1",
         "options": {
           "queryReplacement": "={{ [$('Decode JWT + Body').first().json.project_id] }}"
         }
@@ -159,7 +159,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT trade_type, description FROM trade_requests WHERE project_id = $1::uuid",
+        "query": "SELECT trade_type, scope_description AS description FROM trade_requests WHERE project_id = $1::uuid",
         "options": {
           "queryReplacement": "={{ [$('Decode JWT + Body').first().json.project_id] }}"
         }
@@ -183,7 +183,7 @@
     {
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const sess = $('Decode JWT + Body').first().json;\nconst projectRows = $('Load Project').all().map(i => i.json).filter(p => p && p.id);\nif (projectRows.length === 0) return [{ json: { _error: 'PROJECT_NOT_FOUND', _status: 404, _details: 'project_id no existe', request_id: sess.request_id }}];\nconst project = projectRows[0];\nconst rows_0 = $('Load Design').all().map(it => it.json).filter(r => r);\\nconst rows_1 = $('Load Trades').all().map(it => it.json).filter(r => r);\n\nconst design = rows_0[0] || null;\nconst trades = rows_1;\nconst phase = sess.body?.phase || project.current_phase;\nconst systemPrompt = `Eres agent_qc_checklists. Generas checklists de control de calidad para una fase concreta de obra.\\nFASES Y FOCOS:\\n- demolicion: residuos, certificado RCD, integridad estructural\\n- albanileria: alineamientos, niveles, ventilaciones\\n- instalaciones: pruebas estanqueidad fontaneria, aislamiento electrico, gas\\n- pavimentos: nivelacion, juntas, transiciones materiales\\n- pintura: imprimacion, capas, repasos\\n- entrega: documentacion, certificados, fotos as-built\\n8-15 items por checklist, con criterio aprobacion y herramienta verificacion.\\nDEVUELVE SOLO JSON.`;\nconst userPrompt = `PROYECTO: ${project.name}\\nFASE OBJETIVO: ${phase}\\nDESIGN: ${design ? design.title + ' — ' + (design.intervention_logic || '').slice(0,300) : '(sin design)'}\\nTRADES: ${JSON.stringify(trades.map(t => t.trade_type))}\\n\\nGenera checklist QC para fase \\\"${phase}\\\".\\n\\nOUTPUT JSON:\\n{ \"phase\": \"${phase}\", \"items\": [{ \"id\": 1, \"description\": \"...\", \"criteria\": \"...\", \"tool\": \"vista|medicion|prueba\", \"critical\": true }], \"notes\": \"...\" }`;\n\nreturn [{ json: { user_id: sess.user_id, tenant_id: sess.tenant_id, project_id: project.id, request_id: sess.request_id, body: sess.body,  llm_payload: { model: 'gpt-4o', messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }], temperature: 0.2, max_tokens: 2000, response_format: { type: 'json_object' }}}}];"
+        "jsCode": "const sess = $('Decode JWT + Body').first().json;\nconst projectRows = $('Load Project').all().map(i => i.json).filter(p => p && p.id);\nif (projectRows.length === 0) return [{ json: { _error: 'PROJECT_NOT_FOUND', _status: 404, _details: 'project_id no existe', request_id: sess.request_id }}];\nconst project = projectRows[0];\nconst designRows = $('Load Design').all().map(i => i.json).filter(d => d && d.id);\nconst tradeRows = $input.all().map(i => i.json).filter(t => t && t.trade_type);\nconst design = designRows[0] || null;\nconst phase = sess.body && sess.body.phase ? sess.body.phase : (project.current_phase || 'demolicion');\nconst systemPrompt = 'Eres agent_qc_checklists. Generas checklists de control de calidad para una fase concreta de obra. Fases tipicas: demolicion (residuos, integridad estructural), albanileria (alineamientos, niveles), instalaciones (estanqueidad, aislamiento), pavimentos (nivelacion, juntas), pintura (imprimacion, capas), entrega (documentacion, fotos). 8-15 items con criterio aprobacion y herramienta verificacion. DEVUELVE SOLO JSON.';\nconst userPrompt = 'PROYECTO: ' + project.name + String.fromCharCode(10) + 'FASE OBJETIVO: ' + phase + String.fromCharCode(10) + 'DESIGN: ' + (design ? design.title + ' - ' + ((design.intervention_logic || '').slice(0, 300)) : '(sin design seleccionado)') + String.fromCharCode(10) + 'TRADES: ' + JSON.stringify(tradeRows.map(function(t){return t.trade_type;})) + String.fromCharCode(10,10) + 'Genera checklist QC para la fase \"' + phase + '\".' + String.fromCharCode(10,10) + 'OUTPUT JSON: { items: [{ id, description, criteria, tool, critical }], notes }';\nreturn [{ json: { user_id: sess.user_id, tenant_id: sess.tenant_id, project_id: project.id, request_id: sess.request_id, body: sess.body, llm_payload: { model: 'gpt-4o', messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }], temperature: 0.2, max_tokens: 2000, response_format: { type: 'json_object' }}}}];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -565,7 +565,9 @@
     }
   },
   "settings": {
-    "executionOrder": "v1"
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
   },
   "pinData": {}
 }

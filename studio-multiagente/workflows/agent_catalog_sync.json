@@ -1,7 +1,7 @@
 {
   "name": "agent_catalog_sync",
-  "_description": "Sincronizador de catalogo de materiales (B72-fase-C). Recibe lote de items {sku_fabricante, nombre, marca, categoria, precio, unidad, descripcion, url_*}, genera embeddings semanticos en batch (OpenAI text-embedding-3-small) y UPSERT en materials_catalog. Audita en catalog_sync_log. NO project_id - opera a nivel tenant.",
-  "_status": "B72-fase-C catalogo materiales",
+  "_description": "agent_catalog_sync (sync from n8n live)",
+  "_status": "B72-fase-C-debug (sync from live)",
   "nodes": [
     {
       "parameters": {
@@ -12,7 +12,10 @@
       },
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
-      "position": [240, 300],
+      "position": [
+        240,
+        300
+      ],
       "id": "acs-webhook",
       "name": "POST /catalog-sync/run",
       "webhookId": "12345678-aaaa-4bbb-9ccc-deadbeefcafe",
@@ -25,21 +28,43 @@
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [480, 300],
+      "position": [
+        480,
+        300
+      ],
       "id": "acs-decode",
       "name": "Decode JWT + Validate"
     },
     {
       "parameters": {
         "conditions": {
-          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict", "version": 2 },
-          "conditions": [{ "id": "acs-c1", "leftValue": "={{ $json._error }}", "rightValue": "", "operator": { "type": "string", "operation": "exists", "singleValue": true } }],
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "acs-c1",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
           "combinator": "and"
         }
       },
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
-      "position": [720, 300],
+      "position": [
+        720,
+        300
+      ],
       "id": "acs-if-auth",
       "name": "Auth+Payload OK?"
     },
@@ -47,11 +72,16 @@
       "parameters": {
         "respondWith": "json",
         "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details || $json._error } }) }}",
-        "options": { "responseCode": "={{ $json._status || 401 }}" }
+        "options": {
+          "responseCode": "={{ $json._status || 401 }}"
+        }
       },
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
-      "position": [960, 460],
+      "position": [
+        960,
+        460
+      ],
       "id": "acs-respond-error",
       "name": "Respond Error"
     },
@@ -59,12 +89,22 @@
       "parameters": {
         "operation": "executeQuery",
         "query": "SELECT set_session_context($1::uuid, $2::uuid, $3)",
-        "options": { "queryReplacement": "={{ [$json.user_id, $json.tenant_id, $json.role] }}" }
+        "options": {
+          "queryReplacement": "={{ [$json.user_id, $json.tenant_id, $json.role] }}"
+        }
       },
-      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
-      "position": [960, 200],
+      "position": [
+        960,
+        200
+      ],
       "id": "acs-set-session",
       "name": "Set Session Context"
     },
@@ -76,10 +116,18 @@
           "queryReplacement": "={{ [$('Decode JWT + Validate').first().json.fuente] }}"
         }
       },
-      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
-      "position": [1200, 200],
+      "position": [
+        1200,
+        200
+      ],
       "id": "acs-start-sync-log",
       "name": "Start Sync Log",
       "alwaysOutputData": true
@@ -91,21 +139,42 @@
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1440, 200],
+      "position": [
+        1440,
+        200
+      ],
       "id": "acs-normalize",
       "name": "Normalize + Validate Items"
     },
     {
       "parameters": {
         "conditions": {
-          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict", "version": 2 },
-          "conditions": [{ "id": "acs-c2", "leftValue": "={{ $json.normalized_count }}", "rightValue": 0, "operator": { "type": "number", "operation": "equals" } }],
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "acs-c2",
+              "leftValue": "={{ $json.normalized_count }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
           "combinator": "and"
         }
       },
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
-      "position": [1680, 200],
+      "position": [
+        1680,
+        200
+      ],
       "id": "acs-if-empty",
       "name": "Todos Invalidos?"
     },
@@ -117,10 +186,18 @@
           "queryReplacement": "={{ [$json.sync_log_id, JSON.stringify({ all_invalid: true, errors: $json.validation_errors }), Math.floor((Date.now() - $json.started_at_ms) / 1000)] }}"
         }
       },
-      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
-      "position": [1920, 360],
+      "position": [
+        1920,
+        360
+      ],
       "id": "acs-log-all-invalid",
       "name": "Log All Invalid"
     },
@@ -128,11 +205,16 @@
       "parameters": {
         "respondWith": "json",
         "responseBody": "={{ JSON.stringify({ error: { code: 'ALL_ITEMS_INVALID', message: 'Todos los items fallaron validacion', details: $('Normalize + Validate Items').first().json.validation_errors }, meta: { sync_log_id: $('Normalize + Validate Items').first().json.sync_log_id, fuente: $('Normalize + Validate Items').first().json.fuente, items_received: $('Normalize + Validate Items').first().json.items_count }}) }}",
-        "options": { "responseCode": 422 }
+        "options": {
+          "responseCode": 422
+        }
       },
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
-      "position": [2160, 360],
+      "position": [
+        2160,
+        360
+      ],
       "id": "acs-respond-422",
       "name": "Respond 422 All Invalid"
     },
@@ -143,16 +225,33 @@
         "authentication": "predefinedCredentialType",
         "nodeCredentialType": "httpHeaderAuth",
         "sendHeaders": true,
-        "headerParameters": { "parameters": [{ "name": "Content-Type", "value": "application/json" }] },
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify({ model: 'text-embedding-3-small', input: $('Normalize + Validate Items').first().json.embed_inputs }) }}",
-        "options": { "timeout": 90000 }
+        "options": {
+          "timeout": 90000
+        }
       },
-      "credentials": { "httpHeaderAuth": { "id": "gE1jXO133xEHS5JJ", "name": "orquestador ArquiAI" } },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "gE1jXO133xEHS5JJ",
+          "name": "orquestador ArquiAI"
+        }
+      },
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1920, 100],
+      "position": [
+        1920,
+        100
+      ],
       "id": "acs-embeddings",
       "name": "Generate Embeddings (batch)"
     },
@@ -163,21 +262,43 @@
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [2160, 100],
+      "position": [
+        2160,
+        100
+      ],
       "id": "acs-attach-embeddings",
       "name": "Attach Embeddings"
     },
     {
       "parameters": {
         "conditions": {
-          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict", "version": 2 },
-          "conditions": [{ "id": "acs-c3", "leftValue": "={{ $json._error }}", "rightValue": "", "operator": { "type": "string", "operation": "exists", "singleValue": true } }],
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "acs-c3",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
           "combinator": "and"
         }
       },
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
-      "position": [2400, 100],
+      "position": [
+        2400,
+        100
+      ],
       "id": "acs-if-emb-error",
       "name": "Embeddings OK?"
     },
@@ -189,10 +310,18 @@
           "queryReplacement": "={{ [$json.sync_log_id, JSON.stringify({ stage: 'embeddings', error: $json._error, details: $json._details }), Math.floor((Date.now() - $json.started_at_ms) / 1000)] }}"
         }
       },
-      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
-      "position": [2640, 260],
+      "position": [
+        2640,
+        260
+      ],
       "id": "acs-log-emb-error",
       "name": "Log Embeddings Error"
     },
@@ -200,11 +329,16 @@
       "parameters": {
         "respondWith": "json",
         "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details }}) }}",
-        "options": { "responseCode": "={{ $json._status || 502 }}" }
+        "options": {
+          "responseCode": "={{ $json._status || 502 }}"
+        }
       },
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
-      "position": [2880, 260],
+      "position": [
+        2880,
+        260
+      ],
       "id": "acs-respond-502",
       "name": "Respond 502"
     },
@@ -216,10 +350,18 @@
           "queryReplacement": "={{ [$json.tenant_id, JSON.stringify($json.with_embedding.map(w => ({ ...w, embedding: '[' + w.embedding.join(',') + ']' }))), $json.fuente] }}"
         }
       },
-      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
-      "position": [2640, 100],
+      "position": [
+        2640,
+        100
+      ],
       "id": "acs-upsert",
       "name": "Upsert Materials",
       "alwaysOutputData": true
@@ -232,10 +374,18 @@
           "queryReplacement": "={{ [\n  $('Attach Embeddings').first().json.sync_log_id,\n  parseInt($json.nuevos || 0),\n  parseInt($json.actualizados || 0),\n  JSON.stringify({ validation_errors: $('Normalize + Validate Items').first().json.validation_errors, embedding_tokens: $('Attach Embeddings').first().json.embedding_tokens }),\n  ($('Normalize + Validate Items').first().json.validation_errors.length > 0 ? 'partial' : 'success'),\n  Math.floor((Date.now() - $('Decode JWT + Validate').first().json.started_at_ms) / 1000)\n] }}"
         }
       },
-      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
-      "position": [2880, 100],
+      "position": [
+        2880,
+        100
+      ],
       "id": "acs-finish-sync-log",
       "name": "Finish Sync Log",
       "alwaysOutputData": true
@@ -244,40 +394,209 @@
       "parameters": {
         "respondWith": "json",
         "responseBody": "={{ JSON.stringify({\n  data: {\n    sync_log_id: $json.id,\n    fuente: $json.fuente,\n    productos_nuevos: $json.productos_nuevos,\n    productos_actualizados: $json.productos_actualizados,\n    status: $json.status,\n    duracion_segundos: $json.duracion_segundos,\n    items_received: $('Decode JWT + Validate').first().json.items_count,\n    items_validados: $('Normalize + Validate Items').first().json.normalized_count,\n    validation_errors: $('Normalize + Validate Items').first().json.validation_errors\n  },\n  meta: {\n    request_id: $('Decode JWT + Validate').first().json.request_id,\n    embedding_model: $('Attach Embeddings').first().json.embedding_model,\n    embedding_tokens: $('Attach Embeddings').first().json.embedding_tokens,\n    timestamp: new Date().toISOString()\n  }\n}) }}",
-        "options": { "responseCode": 201, "responseHeaders": { "entries": [{ "name": "Cache-Control", "value": "no-cache" }] } }
+        "options": {
+          "responseCode": 201,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Cache-Control",
+                "value": "no-cache"
+              }
+            ]
+          }
+        }
       },
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
-      "position": [3120, 100],
+      "position": [
+        3120,
+        100
+      ],
       "id": "acs-respond-201",
       "name": "Respond 201"
     }
   ],
   "connections": {
-    "POST /catalog-sync/run":   { "main": [[{ "node": "Decode JWT + Validate", "type": "main", "index": 0 }]] },
-    "Decode JWT + Validate":    { "main": [[{ "node": "Auth+Payload OK?",      "type": "main", "index": 0 }]] },
-    "Auth+Payload OK?":         { "main": [
-      [{ "node": "Respond Error",       "type": "main", "index": 0 }],
-      [{ "node": "Set Session Context", "type": "main", "index": 0 }]
-    ]},
-    "Set Session Context":      { "main": [[{ "node": "Start Sync Log",         "type": "main", "index": 0 }]] },
-    "Start Sync Log":           { "main": [[{ "node": "Normalize + Validate Items", "type": "main", "index": 0 }]] },
-    "Normalize + Validate Items":{ "main": [[{ "node": "Todos Invalidos?",      "type": "main", "index": 0 }]] },
-    "Todos Invalidos?":         { "main": [
-      [{ "node": "Log All Invalid",     "type": "main", "index": 0 }],
-      [{ "node": "Generate Embeddings (batch)", "type": "main", "index": 0 }]
-    ]},
-    "Log All Invalid":          { "main": [[{ "node": "Respond 422 All Invalid","type": "main", "index": 0 }]] },
-    "Generate Embeddings (batch)":{ "main": [[{ "node": "Attach Embeddings",   "type": "main", "index": 0 }]] },
-    "Attach Embeddings":        { "main": [[{ "node": "Embeddings OK?",        "type": "main", "index": 0 }]] },
-    "Embeddings OK?":           { "main": [
-      [{ "node": "Log Embeddings Error","type": "main", "index": 0 }],
-      [{ "node": "Upsert Materials",    "type": "main", "index": 0 }]
-    ]},
-    "Log Embeddings Error":     { "main": [[{ "node": "Respond 502",           "type": "main", "index": 0 }]] },
-    "Upsert Materials":         { "main": [[{ "node": "Finish Sync Log",       "type": "main", "index": 0 }]] },
-    "Finish Sync Log":          { "main": [[{ "node": "Respond 201",           "type": "main", "index": 0 }]] }
+    "POST /catalog-sync/run": {
+      "main": [
+        [
+          {
+            "node": "Decode JWT + Validate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decode JWT + Validate": {
+      "main": [
+        [
+          {
+            "node": "Auth+Payload OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Auth+Payload OK?": {
+      "main": [
+        [
+          {
+            "node": "Respond Error",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Set Session Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Session Context": {
+      "main": [
+        [
+          {
+            "node": "Start Sync Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Start Sync Log": {
+      "main": [
+        [
+          {
+            "node": "Normalize + Validate Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize + Validate Items": {
+      "main": [
+        [
+          {
+            "node": "Todos Invalidos?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Todos Invalidos?": {
+      "main": [
+        [
+          {
+            "node": "Log All Invalid",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Generate Embeddings (batch)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log All Invalid": {
+      "main": [
+        [
+          {
+            "node": "Respond 422 All Invalid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Embeddings (batch)": {
+      "main": [
+        [
+          {
+            "node": "Attach Embeddings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Attach Embeddings": {
+      "main": [
+        [
+          {
+            "node": "Embeddings OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embeddings OK?": {
+      "main": [
+        [
+          {
+            "node": "Log Embeddings Error",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Upsert Materials",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Embeddings Error": {
+      "main": [
+        [
+          {
+            "node": "Respond 502",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert Materials": {
+      "main": [
+        [
+          {
+            "node": "Finish Sync Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Finish Sync Log": {
+      "main": [
+        [
+          {
+            "node": "Respond 201",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
   },
-  "settings": { "executionOrder": "v1" },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
   "pinData": {}
 }

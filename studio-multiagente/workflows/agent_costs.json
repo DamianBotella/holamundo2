@@ -1,7 +1,7 @@
 {
   "name": "agent_costs",
-  "_description": "Agente de Costes (B72-fase-C). Genera cost_estimate v2 con desglose por partidas, scenarios y comparativa vs budget_target. Lee briefing aprobado + design_option seleccionada + material_items + price_references CYPE + architect_directives. Patron running->completed (B71b: jsonBody apunta a Build Prompt no a Start Execution).",
-  "_status": "B72-fase-C agente prioritario CORE",
+  "_description": "agent_costs (sync from n8n live)",
+  "_status": "B72-fase-C-debug (sync from live)",
   "nodes": [
     {
       "parameters": {
@@ -12,7 +12,10 @@
       },
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
-      "position": [240, 300],
+      "position": [
+        240,
+        300
+      ],
       "id": "ac-webhook",
       "name": "POST /costs/analyze",
       "webhookId": "b1c2d3e4-f5a6-4b7c-8d9e-0f1a2b3c4d5e",
@@ -25,23 +28,43 @@
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [480, 300],
+      "position": [
+        480,
+        300
+      ],
       "id": "ac-decode",
       "name": "Decode JWT + Body"
     },
     {
       "parameters": {
         "conditions": {
-          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict", "version": 2 },
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
           "conditions": [
-            { "id": "ac-c1", "leftValue": "={{ $json._error }}", "rightValue": "", "operator": { "type": "string", "operation": "exists", "singleValue": true } }
+            {
+              "id": "ac-c1",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
           ],
           "combinator": "and"
         }
       },
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
-      "position": [720, 300],
+      "position": [
+        720,
+        300
+      ],
       "id": "ac-if-auth",
       "name": "Auth OK?"
     },
@@ -49,11 +72,16 @@
       "parameters": {
         "respondWith": "json",
         "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details || $json._error } }) }}",
-        "options": { "responseCode": "={{ $json._status || 401 }}" }
+        "options": {
+          "responseCode": "={{ $json._status || 401 }}"
+        }
       },
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
-      "position": [960, 460],
+      "position": [
+        960,
+        460
+      ],
       "id": "ac-respond-error",
       "name": "Respond Error"
     },
@@ -61,12 +89,22 @@
       "parameters": {
         "operation": "executeQuery",
         "query": "SELECT set_session_context($1::uuid, $2::uuid, $3)",
-        "options": { "queryReplacement": "={{ [$json.user_id, $json.tenant_id, $json.role] }}" }
+        "options": {
+          "queryReplacement": "={{ [$json.user_id, $json.tenant_id, $json.role] }}"
+        }
       },
-      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
-      "position": [960, 200],
+      "position": [
+        960,
+        200
+      ],
       "id": "ac-set-session",
       "name": "Set Session Context"
     },
@@ -74,12 +112,22 @@
       "parameters": {
         "operation": "executeQuery",
         "query": "SELECT p.id, p.name, p.project_type, p.location_province, p.location_city,\n       p.property_type, p.property_area_m2, p.budget_target, p.urgency, p.current_phase,\n       p.metadata\nFROM projects p WHERE p.id = $1::uuid LIMIT 1",
-        "options": { "queryReplacement": "={{ [$('Decode JWT + Body').first().json.project_id] }}" }
+        "options": {
+          "queryReplacement": "={{ [$('Decode JWT + Body').first().json.project_id] }}"
+        }
       },
-      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
-      "position": [1200, 200],
+      "position": [
+        1200,
+        200
+      ],
       "id": "ac-load-project",
       "name": "Load Project",
       "alwaysOutputData": true
@@ -91,23 +139,43 @@
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1440, 200],
+      "position": [
+        1440,
+        200
+      ],
       "id": "ac-validate-project",
       "name": "Validate Project"
     },
     {
       "parameters": {
         "conditions": {
-          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict", "version": 2 },
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
           "conditions": [
-            { "id": "ac-c2", "leftValue": "={{ $json._error }}", "rightValue": "", "operator": { "type": "string", "operation": "exists", "singleValue": true } }
+            {
+              "id": "ac-c2",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
           ],
           "combinator": "and"
         }
       },
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
-      "position": [1680, 200],
+      "position": [
+        1680,
+        200
+      ],
       "id": "ac-if-project",
       "name": "Project OK?"
     },
@@ -115,24 +183,39 @@
       "parameters": {
         "respondWith": "json",
         "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details } }) }}",
-        "options": { "responseCode": "={{ $json._status || 404 }}" }
+        "options": {
+          "responseCode": "={{ $json._status || 404 }}"
+        }
       },
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
-      "position": [1920, 360],
+      "position": [
+        1920,
+        360
+      ],
       "id": "ac-respond-404",
       "name": "Respond 404"
     },
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT id, summary, scope, rooms_affected, client_needs, constraints, open_questions, status\nFROM briefings\nWHERE project_id = $1::uuid AND status = 'approved'\nORDER BY created_at DESC LIMIT 1",
-        "options": { "queryReplacement": "={{ [$('Decode JWT + Body').first().json.project_id] }}" }
+        "query": "SELECT id, summary, rooms_affected, client_needs, constraints, open_questions, status\nFROM briefings\nWHERE project_id = $1::uuid AND status = 'approved'\nORDER BY created_at DESC LIMIT 1",
+        "options": {
+          "queryReplacement": "={{ [$('Decode JWT + Body').first().json.project_id] }}"
+        }
       },
-      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
-      "position": [1920, 100],
+      "position": [
+        1920,
+        100
+      ],
       "id": "ac-load-briefing",
       "name": "Load Briefing",
       "alwaysOutputData": true
@@ -140,13 +223,23 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT id, title, intervention_logic, rooms_layout, constraints, pros, cons\nFROM design_options\nWHERE project_id = $1::uuid AND status = 'selected'\nORDER BY created_at DESC LIMIT 1",
-        "options": { "queryReplacement": "={{ [$('Decode JWT + Body').first().json.project_id] }}" }
+        "query": "SELECT id, title, intervention_logic, rooms_layout, pros, cons\nFROM design_options\nWHERE project_id = $1::uuid AND is_selected = true\nORDER BY created_at DESC LIMIT 1",
+        "options": {
+          "queryReplacement": "={{ [$('Decode JWT + Body').first().json.project_id] }}"
+        }
       },
-      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
-      "position": [2160, 100],
+      "position": [
+        2160,
+        100
+      ],
       "id": "ac-load-design",
       "name": "Load Design Option",
       "alwaysOutputData": true
@@ -155,12 +248,22 @@
       "parameters": {
         "operation": "executeQuery",
         "query": "SELECT id, category, name, brand, supplier, unit_price, unit, quantity_estimated, total_estimated, quality_tier, room_area\nFROM material_items\nWHERE project_id = $1::uuid AND status IN ('approved','suggested')\nORDER BY category, total_estimated DESC NULLS LAST",
-        "options": { "queryReplacement": "={{ [$('Decode JWT + Body').first().json.project_id] }}" }
+        "options": {
+          "queryReplacement": "={{ [$('Decode JWT + Body').first().json.project_id] }}"
+        }
       },
-      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
-      "position": [2400, 100],
+      "position": [
+        2400,
+        100
+      ],
       "id": "ac-load-materials",
       "name": "Load Materials",
       "alwaysOutputData": true
@@ -168,13 +271,21 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT category, item, unit, price_min, price_avg, price_max, source\nFROM price_references\nORDER BY category, item",
+        "query": "SELECT category, partida, unit, min_price, avg_price, max_price, source\nFROM price_references\nORDER BY category, partida",
         "options": {}
       },
-      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
-      "position": [2640, 100],
+      "position": [
+        2640,
+        100
+      ],
       "id": "ac-load-prices",
       "name": "Load Price References",
       "alwaysOutputData": true
@@ -185,10 +296,18 @@
         "query": "SELECT directiva, contexto, prioridad FROM architect_directives\nWHERE activa = true AND categoria = 'presupuesto'\nORDER BY prioridad DESC LIMIT 10",
         "options": {}
       },
-      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
-      "position": [2880, 100],
+      "position": [
+        2880,
+        100
+      ],
       "id": "ac-load-directives",
       "name": "Load Directives",
       "alwaysOutputData": true
@@ -196,27 +315,47 @@
     {
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const ctx = $('Validate Project').first().json;\nconst project = ctx.project;\nconst briefingRows = $('Load Briefing').all().map(i => i.json).filter(b => b && b.id);\nconst designRows = $('Load Design Option').all().map(i => i.json).filter(d => d && d.id);\nconst materialRows = $('Load Materials').all().map(i => i.json).filter(m => m && m.id);\nconst priceRows = $('Load Price References').all().map(i => i.json).filter(p => p && p.category);\nconst directiveRows = $input.all().map(i => i.json).filter(d => d && d.directiva);\n\nif (briefingRows.length === 0) {\n  return [{ json: { _error: 'BRIEFING_NOT_APPROVED', _status: 422, _details: 'No hay briefing aprobado para este proyecto. agent_costs requiere briefing en estado approved.', request_id: ctx.request_id }}];\n}\nif (designRows.length === 0) {\n  return [{ json: { _error: 'DESIGN_NOT_SELECTED', _status: 422, _details: 'No hay design_option seleccionada. El cliente debe elegir una opcion antes de calcular costes.', request_id: ctx.request_id }}];\n}\n\nconst briefing = briefingRows[0];\nconst design = designRows[0];\n\n// Resumen materials: total por categoria + total absoluto\nconst materialsByCategory = {};\nlet materialsTotal = 0;\nfor (const m of materialRows) {\n  const cat = m.category || 'otro';\n  const total = m.total_estimated ? parseFloat(m.total_estimated) : 0;\n  if (!materialsByCategory[cat]) materialsByCategory[cat] = { count: 0, total: 0, items: [] };\n  materialsByCategory[cat].count += 1;\n  materialsByCategory[cat].total += total;\n  materialsByCategory[cat].items.push({\n    name: m.name,\n    unit_price: m.unit_price ? parseFloat(m.unit_price) : null,\n    unit: m.unit,\n    qty: m.quantity_estimated ? parseFloat(m.quantity_estimated) : null,\n    total: total,\n    quality_tier: m.quality_tier\n  });\n  materialsTotal += total;\n}\n\n// Resumen prices: por categoria\nconst pricesByCategory = {};\nfor (const p of priceRows) {\n  const cat = p.category;\n  if (!pricesByCategory[cat]) pricesByCategory[cat] = [];\n  pricesByCategory[cat].push({\n    item: p.item,\n    unit: p.unit,\n    min: p.price_min ? parseFloat(p.price_min) : null,\n    avg: p.price_avg ? parseFloat(p.price_avg) : null,\n    max: p.price_max ? parseFloat(p.price_max) : null\n  });\n}\n\nconst directivesText = directiveRows.length\n  ? directiveRows.map(d => `- (${d.prioridad}) ${d.directiva}${d.contexto ? ' [' + d.contexto + ']' : ''}`).join('\\n')\n  : '(sin directivas activas en categoria presupuesto)';\n\nconst systemPrompt = `Eres agent_costs, especialista en presupuestos de reforma residencial en Espana.\\n\\nREGLAS DE ORO:\\n- Usa price_references CYPE como BASELINE objetivo. Si los material_items del proyecto se desvian > 20% por categoria, MARCALO en risk_notes.\\n- Aplica IVA 10% obras de reforma residencial (no 21%) salvo que la obra incluya cambio de uso.\\n- Incluye 8-12% de imprevistos sobre el subtotal de obra (NO sobre materiales premium).\\n- Genera 3 scenarios: economico (-15%), recomendado, premium (+25%).\\n- Compara contra budget_target del proyecto y calcula deviation_status: within_budget (<=5%), slight_over (5-15%), over_budget (15-30%), critical_over (>30%).\\n- El arquitecto firma. Tu propones. Sin tecnicismos legales.\\n- DEVUELVE SOLO JSON valido, sin texto fuera del JSON.`;\n\nconst userPrompt = `CONTEXTO DEL PROYECTO:\\n- Nombre: ${project.name}\\n- Tipo: ${project.project_type}\\n- Superficie: ${project.property_area_m2 ?? '?'} m2\\n- Ubicacion: ${project.location_city ?? '?'}, ${project.location_province ?? '?'}\\n- Budget target: ${project.budget_target ?? 'no especificado'} EUR\\n\\nBRIEFING APROBADO:\\n- Summary: ${briefing.summary?.slice(0, 600) ?? ''}\\n- Rooms afectadas: ${JSON.stringify(briefing.rooms_affected ?? [])}\\n- Constraints: ${JSON.stringify(briefing.constraints ?? [])}\\n\\nDESIGN OPTION SELECCIONADA:\\n- Titulo: ${design.title}\\n- Logica intervencion: ${(design.intervention_logic || '').slice(0, 800)}\\n- Rooms layout: ${JSON.stringify(design.rooms_layout ?? [])}\\n- Cons declarados: ${JSON.stringify(design.cons ?? [])}\\n\\nMATERIALES YA SELECCIONADOS (${materialRows.length} items, total ${materialsTotal.toFixed(2)} EUR):\\n${JSON.stringify(materialsByCategory, null, 2)}\\n\\nREFERENCIAS CYPE (baselines de mercado por categoria):\\n${JSON.stringify(pricesByCategory, null, 2)}\\n\\nDIRECTIVAS DEL ESTUDIO (categoria presupuesto):\\n${directivesText}\\n\\nTAREA:\\n1. Genera un BREAKDOWN por partidas (8-15 partidas tipicas: demolicion, albanileria, fontaneria, electricidad, climatizacion, carpinteria, pavimentos, revestimientos, sanitarios, pintura, cocina, otros). Cada partida con: name, category, base_cost, materials_cost, labor_cost, total, notes.\\n2. Calcula total_estimated = subtotal_obra + imprevistos (8-12%) + IVA 10%.\\n3. Compara con budget_target del proyecto, calcula deviation_pct y deviation_status.\\n4. Genera 3 SCENARIOS (economico/recomendado/premium) con su total y diferencias clave.\\n5. Lista 3-6 ADJUSTMENTS_SUGGESTED para reducir coste si over_budget.\\n6. Lista ASSUMPTIONS criticas (precios validos a fecha, sin imprevistos estructurales no detectados, etc.).\\n7. RISK_NOTES: cualquier desviacion >20% vs CYPE, materiales premium dudosos, plazos cortos que encarezcan.\\n\\nOUTPUT (JSON estricto, SOLO el JSON):\\n{\\n  \\\"version\\\": 1,\\n  \\\"total_estimated\\\": 45000,\\n  \\\"budget_target\\\": ${project.budget_target ?? null},\\n  \\\"deviation_pct\\\": 12.5,\\n  \\\"deviation_status\\\": \\\"slight_over\\\",\\n  \\\"breakdown\\\": [\\n    { \\\"name\\\": \\\"Demolicion\\\", \\\"category\\\": \\\"obra_basica\\\", \\\"base_cost\\\": 2500, \\\"materials_cost\\\": 200, \\\"labor_cost\\\": 2300, \\\"total\\\": 2500, \\\"notes\\\": \\\"...\\\" }\\n  ],\\n  \\\"adjustments_suggested\\\": [ { \\\"item\\\": \\\"...\\\", \\\"saving_eur\\\": 1500, \\\"impact\\\": \\\"...\\\" } ],\\n  \\\"scenarios\\\": {\\n    \\\"economico\\\": { \\\"total\\\": 38000, \\\"key_changes\\\": [\\\"...\\\"] },\\n    \\\"recomendado\\\": { \\\"total\\\": 45000, \\\"key_changes\\\": [] },\\n    \\\"premium\\\": { \\\"total\\\": 55000, \\\"key_changes\\\": [\\\"...\\\"] }\\n  },\\n  \\\"assumptions\\\": [\\\"...\\\"],\\n  \\\"risk_notes\\\": \\\"...\\\"\\n}`;\n\nreturn [{ json: {\n  user_id: ctx.user_id,\n  tenant_id: ctx.tenant_id,\n  project_id: project.id,\n  request_id: ctx.request_id,\n  budget_target: project.budget_target,\n  materials_total: materialsTotal,\n  materials_count: materialRows.length,\n  llm_payload: {\n    model: 'gpt-4o',\n    messages: [\n      { role: 'system', content: systemPrompt },\n      { role: 'user', content: userPrompt }\n    ],\n    temperature: 0.2,\n    max_tokens: 2500,\n    response_format: { type: 'json_object' }\n  }\n}}];"
+        "jsCode": "const ctx = $('Validate Project').first().json;\nconst project = ctx.project;\nconst briefingRows = $('Load Briefing').all().map(i => i.json).filter(b => b && b.id);\nconst designRows = $('Load Design Option').all().map(i => i.json).filter(d => d && d.id);\nconst materialRows = $('Load Materials').all().map(i => i.json).filter(m => m && m.id);\nconst priceRows = $('Load Price References').all().map(i => i.json).filter(p => p && p.category);\nconst directiveRows = $input.all().map(i => i.json).filter(d => d && d.directiva);\n\nif (briefingRows.length === 0) {\n  return [{ json: { _error: 'BRIEFING_NOT_APPROVED', _status: 422, _details: 'No hay briefing aprobado para este proyecto. agent_costs requiere briefing en estado approved.', request_id: ctx.request_id }}];\n}\nif (designRows.length === 0) {\n  return [{ json: { _error: 'DESIGN_NOT_SELECTED', _status: 422, _details: 'No hay design_option seleccionada. El cliente debe elegir una opcion antes de calcular costes.', request_id: ctx.request_id }}];\n}\n\nconst briefing = briefingRows[0];\nconst design = designRows[0];\n\n// Resumen materials: total por categoria + total absoluto\nconst materialsByCategory = {};\nlet materialsTotal = 0;\nfor (const m of materialRows) {\n  const cat = m.category || 'otro';\n  const total = m.total_estimated ? parseFloat(m.total_estimated) : 0;\n  if (!materialsByCategory[cat]) materialsByCategory[cat] = { count: 0, total: 0, items: [] };\n  materialsByCategory[cat].count += 1;\n  materialsByCategory[cat].total += total;\n  materialsByCategory[cat].items.push({\n    name: m.name,\n    unit_price: m.unit_price ? parseFloat(m.unit_price) : null,\n    unit: m.unit,\n    qty: m.quantity_estimated ? parseFloat(m.quantity_estimated) : null,\n    total: total,\n    quality_tier: m.quality_tier\n  });\n  materialsTotal += total;\n}\n\n// Resumen prices: por categoria\nconst pricesByCategory = {};\nfor (const p of priceRows) {\n  const cat = p.category;\n  if (!pricesByCategory[cat]) pricesByCategory[cat] = [];\n  pricesByCategory[cat].push({\n    partida: p.partida,\n    unit: p.unit,\n    min: p.min_price ? parseFloat(p.min_price) : null,\n    avg: p.avg_price ? parseFloat(p.avg_price) : null,\n    max: p.max_price ? parseFloat(p.max_price) : null\n  });\n}\n\nconst directivesText = directiveRows.length\n  ? directiveRows.map(d => `- (${d.prioridad}) ${d.directiva}${d.contexto ? ' [' + d.contexto + ']' : ''}`).join('\\n')\n  : '(sin directivas activas en categoria presupuesto)';\n\nconst systemPrompt = `Eres agent_costs, especialista en presupuestos de reforma residencial en Espana.\\n\\nREGLAS DE ORO:\\n- Usa price_references CYPE como BASELINE objetivo. Si los material_items del proyecto se desvian > 20% por categoria, MARCALO en risk_notes.\\n- Aplica IVA 10% obras de reforma residencial (no 21%) salvo que la obra incluya cambio de uso.\\n- Incluye 8-12% de imprevistos sobre el subtotal de obra (NO sobre materiales premium).\\n- Genera 3 scenarios: economico (-15%), recomendado, premium (+25%).\\n- Compara contra budget_target del proyecto y calcula deviation_status: within_budget (<=5%), slight_over (5-15%), over_budget (15-30%), critical_over (>30%).\\n- El arquitecto firma. Tu propones. Sin tecnicismos legales.\\n- DEVUELVE SOLO JSON valido, sin texto fuera del JSON.`;\n\nconst userPrompt = `CONTEXTO DEL PROYECTO:\\n- Nombre: ${project.name}\\n- Tipo: ${project.project_type}\\n- Superficie: ${project.property_area_m2 ?? '?'} m2\\n- Ubicacion: ${project.location_city ?? '?'}, ${project.location_province ?? '?'}\\n- Budget target: ${project.budget_target ?? 'no especificado'} EUR\\n\\nBRIEFING APROBADO:\\n- Summary: ${briefing.summary?.slice(0, 600) ?? ''}\\n- Rooms afectadas: ${JSON.stringify(briefing.rooms_affected ?? [])}\\n- Constraints: ${JSON.stringify(briefing.constraints ?? [])}\\n\\nDESIGN OPTION SELECCIONADA:\\n- Titulo: ${design.title}\\n- Logica intervencion: ${(design.intervention_logic || '').slice(0, 800)}\\n- Rooms layout: ${JSON.stringify(design.rooms_layout ?? [])}\\n- Cons declarados: ${JSON.stringify(design.cons ?? [])}\\n\\nMATERIALES YA SELECCIONADOS (${materialRows.length} items, total ${materialsTotal.toFixed(2)} EUR):\\n${JSON.stringify(materialsByCategory, null, 2)}\\n\\nREFERENCIAS CYPE (baselines de mercado por categoria):\\n${JSON.stringify(pricesByCategory, null, 2)}\\n\\nDIRECTIVAS DEL ESTUDIO (categoria presupuesto):\\n${directivesText}\\n\\nTAREA:\\n1. Genera un BREAKDOWN por partidas (8-15 partidas tipicas: demolicion, albanileria, fontaneria, electricidad, climatizacion, carpinteria, pavimentos, revestimientos, sanitarios, pintura, cocina, otros). Cada partida con: name, category, base_cost, materials_cost, labor_cost, total, notes.\\n2. Calcula total_estimated = subtotal_obra + imprevistos (8-12%) + IVA 10%.\\n3. Compara con budget_target del proyecto, calcula deviation_pct y deviation_status.\\n4. Genera 3 SCENARIOS (economico/recomendado/premium) con su total y diferencias clave.\\n5. Lista 3-6 ADJUSTMENTS_SUGGESTED para reducir coste si over_budget.\\n6. Lista ASSUMPTIONS criticas (precios validos a fecha, sin imprevistos estructurales no detectados, etc.).\\n7. RISK_NOTES: cualquier desviacion >20% vs CYPE, materiales premium dudosos, plazos cortos que encarezcan.\\n\\nOUTPUT (JSON estricto, SOLO el JSON):\\n{\\n  \\\"version\\\": 1,\\n  \\\"total_estimated\\\": 45000,\\n  \\\"budget_target\\\": ${project.budget_target ?? null},\\n  \\\"deviation_pct\\\": 12.5,\\n  \\\"deviation_status\\\": \\\"slight_over\\\",\\n  \\\"breakdown\\\": [\\n    { \\\"name\\\": \\\"Demolicion\\\", \\\"category\\\": \\\"obra_basica\\\", \\\"base_cost\\\": 2500, \\\"materials_cost\\\": 200, \\\"labor_cost\\\": 2300, \\\"total\\\": 2500, \\\"notes\\\": \\\"...\\\" }\\n  ],\\n  \\\"adjustments_suggested\\\": [ { \\\"item\\\": \\\"...\\\", \\\"saving_eur\\\": 1500, \\\"impact\\\": \\\"...\\\" } ],\\n  \\\"scenarios\\\": {\\n    \\\"economico\\\": { \\\"total\\\": 38000, \\\"key_changes\\\": [\\\"...\\\"] },\\n    \\\"recomendado\\\": { \\\"total\\\": 45000, \\\"key_changes\\\": [] },\\n    \\\"premium\\\": { \\\"total\\\": 55000, \\\"key_changes\\\": [\\\"...\\\"] }\\n  },\\n  \\\"assumptions\\\": [\\\"...\\\"],\\n  \\\"risk_notes\\\": \\\"...\\\"\\n}`;\n\nreturn [{ json: {\n  user_id: ctx.user_id,\n  tenant_id: ctx.tenant_id,\n  project_id: project.id,\n  request_id: ctx.request_id,\n  budget_target: project.budget_target,\n  materials_total: materialsTotal,\n  materials_count: materialRows.length,\n  llm_payload: {\n    model: 'gpt-4o',\n    messages: [\n      { role: 'system', content: systemPrompt },\n      { role: 'user', content: userPrompt }\n    ],\n    temperature: 0.2,\n    max_tokens: 2500,\n    response_format: { type: 'json_object' }\n  }\n}}];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [3120, 100],
+      "position": [
+        3120,
+        100
+      ],
       "id": "ac-build-prompt",
       "name": "Build Prompt"
     },
     {
       "parameters": {
         "conditions": {
-          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict", "version": 2 },
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
           "conditions": [
-            { "id": "ac-c3", "leftValue": "={{ $json._error }}", "rightValue": "", "operator": { "type": "string", "operation": "exists", "singleValue": true } }
+            {
+              "id": "ac-c3",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
           ],
           "combinator": "and"
         }
       },
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
-      "position": [3360, 100],
+      "position": [
+        3360,
+        100
+      ],
       "id": "ac-if-prompt",
       "name": "Prompt OK?"
     },
@@ -224,11 +363,16 @@
       "parameters": {
         "respondWith": "json",
         "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details } }) }}",
-        "options": { "responseCode": "={{ $json._status || 422 }}" }
+        "options": {
+          "responseCode": "={{ $json._status || 422 }}"
+        }
       },
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
-      "position": [3600, 260],
+      "position": [
+        3600,
+        260
+      ],
       "id": "ac-respond-422",
       "name": "Respond 422"
     },
@@ -240,10 +384,18 @@
           "queryReplacement": "={{ [\n  $('Build Prompt').first().json.project_id,\n  JSON.stringify({ project_id: $('Build Prompt').first().json.project_id, budget_target: $('Build Prompt').first().json.budget_target, materials_count: $('Build Prompt').first().json.materials_count, materials_total: $('Build Prompt').first().json.materials_total }),\n  JSON.stringify({ request_id: $('Build Prompt').first().json.request_id, source: 'api_costs_analyze' })\n] }}"
         }
       },
-      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
-      "position": [3480, 0],
+      "position": [
+        3480,
+        0
+      ],
       "id": "ac-start-exec",
       "name": "Start Execution",
       "alwaysOutputData": true
@@ -256,17 +408,32 @@
         "nodeCredentialType": "httpHeaderAuth",
         "sendHeaders": true,
         "headerParameters": {
-          "parameters": [{ "name": "Content-Type", "value": "application/json" }]
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
         },
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify($('Build Prompt').first().json.llm_payload) }}",
-        "options": { "timeout": 120000 }
+        "options": {
+          "timeout": 120000
+        }
       },
-      "credentials": { "httpHeaderAuth": { "id": "gE1jXO133xEHS5JJ", "name": "orquestador ArquiAI" } },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "gE1jXO133xEHS5JJ",
+          "name": "orquestador ArquiAI"
+        }
+      },
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [3720, 0],
+      "position": [
+        3720,
+        0
+      ],
       "id": "ac-llm",
       "name": "Call LLM"
     },
@@ -277,7 +444,10 @@
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [3960, 0],
+      "position": [
+        3960,
+        0
+      ],
       "id": "ac-format",
       "name": "Format Response"
     },
@@ -289,10 +459,18 @@
           "queryReplacement": "={{ [\n  $json.project_id,\n  $json.total_estimated,\n  $json.budget_target,\n  $json.deviation_pct,\n  $json.deviation_status,\n  JSON.stringify($json.output.breakdown),\n  JSON.stringify($json.output.adjustments_suggested),\n  JSON.stringify($json.output.scenarios),\n  JSON.stringify($json.output.assumptions),\n  $json.output.risk_notes\n] }}"
         }
       },
-      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
-      "position": [4200, 0],
+      "position": [
+        4200,
+        0
+      ],
       "id": "ac-insert-estimate",
       "name": "Insert Cost Estimate",
       "alwaysOutputData": true
@@ -305,10 +483,18 @@
           "queryReplacement": "={{ [\n  $('Start Execution').first().json.id,\n  JSON.stringify({ cost_estimate_id: $json.id, version: $json.version, total_estimated: $('Format Response').first().json.total_estimated, deviation_pct: $('Format Response').first().json.deviation_pct, deviation_status: $('Format Response').first().json.deviation_status }),\n  JSON.stringify({ model: $('Format Response').first().json.model, tokens_in: $('Format Response').first().json.tokens_in, tokens_out: $('Format Response').first().json.tokens_out, breakdown_count: $('Format Response').first().json.breakdown_count, eu_ai_act: 'asistencia profesional supervisada por tecnico colegiado' })\n] }}"
         }
       },
-      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
-      "position": [4440, 0],
+      "position": [
+        4440,
+        0
+      ],
       "id": "ac-finish-exec",
       "name": "Finish Execution",
       "alwaysOutputData": true,
@@ -321,47 +507,261 @@
         "options": {
           "responseCode": 201,
           "responseHeaders": {
-            "entries": [{ "name": "Cache-Control", "value": "no-cache" }]
+            "entries": [
+              {
+                "name": "Cache-Control",
+                "value": "no-cache"
+              }
+            ]
           }
         }
       },
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
-      "position": [4680, 0],
+      "position": [
+        4680,
+        0
+      ],
       "id": "ac-respond-201",
       "name": "Respond 201"
     }
   ],
   "connections": {
-    "POST /costs/analyze":   { "main": [[{ "node": "Decode JWT + Body", "type": "main", "index": 0 }]] },
-    "Decode JWT + Body":     { "main": [[{ "node": "Auth OK?",           "type": "main", "index": 0 }]] },
-    "Auth OK?":              { "main": [
-      [{ "node": "Respond Error",        "type": "main", "index": 0 }],
-      [{ "node": "Set Session Context",  "type": "main", "index": 0 }]
-    ]},
-    "Set Session Context":   { "main": [[{ "node": "Load Project",       "type": "main", "index": 0 }]] },
-    "Load Project":          { "main": [[{ "node": "Validate Project",   "type": "main", "index": 0 }]] },
-    "Validate Project":      { "main": [[{ "node": "Project OK?",        "type": "main", "index": 0 }]] },
-    "Project OK?":           { "main": [
-      [{ "node": "Respond 404",          "type": "main", "index": 0 }],
-      [{ "node": "Load Briefing",        "type": "main", "index": 0 }]
-    ]},
-    "Load Briefing":         { "main": [[{ "node": "Load Design Option", "type": "main", "index": 0 }]] },
-    "Load Design Option":    { "main": [[{ "node": "Load Materials",     "type": "main", "index": 0 }]] },
-    "Load Materials":        { "main": [[{ "node": "Load Price References","type": "main", "index": 0 }]] },
-    "Load Price References": { "main": [[{ "node": "Load Directives",    "type": "main", "index": 0 }]] },
-    "Load Directives":       { "main": [[{ "node": "Build Prompt",       "type": "main", "index": 0 }]] },
-    "Build Prompt":          { "main": [[{ "node": "Prompt OK?",         "type": "main", "index": 0 }]] },
-    "Prompt OK?":            { "main": [
-      [{ "node": "Respond 422",          "type": "main", "index": 0 }],
-      [{ "node": "Start Execution",      "type": "main", "index": 0 }]
-    ]},
-    "Start Execution":       { "main": [[{ "node": "Call LLM",           "type": "main", "index": 0 }]] },
-    "Call LLM":              { "main": [[{ "node": "Format Response",    "type": "main", "index": 0 }]] },
-    "Format Response":       { "main": [[{ "node": "Insert Cost Estimate","type": "main", "index": 0 }]] },
-    "Insert Cost Estimate":  { "main": [[{ "node": "Finish Execution",   "type": "main", "index": 0 }]] },
-    "Finish Execution":      { "main": [[{ "node": "Respond 201",        "type": "main", "index": 0 }]] }
+    "POST /costs/analyze": {
+      "main": [
+        [
+          {
+            "node": "Decode JWT + Body",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decode JWT + Body": {
+      "main": [
+        [
+          {
+            "node": "Auth OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Auth OK?": {
+      "main": [
+        [
+          {
+            "node": "Respond Error",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Set Session Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Session Context": {
+      "main": [
+        [
+          {
+            "node": "Load Project",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Project": {
+      "main": [
+        [
+          {
+            "node": "Validate Project",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Project": {
+      "main": [
+        [
+          {
+            "node": "Project OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Project OK?": {
+      "main": [
+        [
+          {
+            "node": "Respond 404",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Load Briefing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Briefing": {
+      "main": [
+        [
+          {
+            "node": "Load Design Option",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Design Option": {
+      "main": [
+        [
+          {
+            "node": "Load Materials",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Materials": {
+      "main": [
+        [
+          {
+            "node": "Load Price References",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Price References": {
+      "main": [
+        [
+          {
+            "node": "Load Directives",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Directives": {
+      "main": [
+        [
+          {
+            "node": "Build Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Prompt": {
+      "main": [
+        [
+          {
+            "node": "Prompt OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prompt OK?": {
+      "main": [
+        [
+          {
+            "node": "Respond 422",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Start Execution",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Start Execution": {
+      "main": [
+        [
+          {
+            "node": "Call LLM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call LLM": {
+      "main": [
+        [
+          {
+            "node": "Format Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Response": {
+      "main": [
+        [
+          {
+            "node": "Insert Cost Estimate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Cost Estimate": {
+      "main": [
+        [
+          {
+            "node": "Finish Execution",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Finish Execution": {
+      "main": [
+        [
+          {
+            "node": "Respond 201",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
   },
-  "settings": { "executionOrder": "v1" },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
   "pinData": {}
 }

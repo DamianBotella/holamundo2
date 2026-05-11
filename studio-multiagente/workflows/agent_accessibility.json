@@ -1,7 +1,7 @@
 {
   "name": "agent_accessibility",
-  "_description": "Agente de Accesibilidad (B72-fase-C). Auditor DB-SUA 9 + Orden VIV/561/2010. Determina applies_to_project, evalua compliance, genera issues + recommendations + commercial_argumentation. Patron running->completed.",
-  "_status": "B72-fase-C agente CORE",
+  "_description": "agent_accessibility (sync from n8n live)",
+  "_status": "B72-fase-C-debug (sync from live)",
   "nodes": [
     {
       "parameters": {
@@ -12,7 +12,10 @@
       },
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
-      "position": [240, 300],
+      "position": [
+        240,
+        300
+      ],
       "id": "aa-webhook",
       "name": "POST /accessibility/audit",
       "webhookId": "c2d3e4f5-a6b7-4c8d-9e0f-1a2b3c4d5e6f",
@@ -25,21 +28,43 @@
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [480, 300],
+      "position": [
+        480,
+        300
+      ],
       "id": "aa-decode",
       "name": "Decode JWT + Body"
     },
     {
       "parameters": {
         "conditions": {
-          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict", "version": 2 },
-          "conditions": [ { "id": "aa-c1", "leftValue": "={{ $json._error }}", "rightValue": "", "operator": { "type": "string", "operation": "exists", "singleValue": true } } ],
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "aa-c1",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
           "combinator": "and"
         }
       },
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
-      "position": [720, 300],
+      "position": [
+        720,
+        300
+      ],
       "id": "aa-if-auth",
       "name": "Auth OK?"
     },
@@ -47,11 +72,16 @@
       "parameters": {
         "respondWith": "json",
         "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details || $json._error } }) }}",
-        "options": { "responseCode": "={{ $json._status || 401 }}" }
+        "options": {
+          "responseCode": "={{ $json._status || 401 }}"
+        }
       },
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
-      "position": [960, 460],
+      "position": [
+        960,
+        460
+      ],
       "id": "aa-respond-error",
       "name": "Respond Error"
     },
@@ -59,12 +89,22 @@
       "parameters": {
         "operation": "executeQuery",
         "query": "SELECT set_session_context($1::uuid, $2::uuid, $3)",
-        "options": { "queryReplacement": "={{ [$json.user_id, $json.tenant_id, $json.role] }}" }
+        "options": {
+          "queryReplacement": "={{ [$json.user_id, $json.tenant_id, $json.role] }}"
+        }
       },
-      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
-      "position": [960, 200],
+      "position": [
+        960,
+        200
+      ],
       "id": "aa-set-session",
       "name": "Set Session Context"
     },
@@ -72,12 +112,22 @@
       "parameters": {
         "operation": "executeQuery",
         "query": "SELECT id, name, project_type, location_province, location_city,\n       property_type, property_area_m2, budget_target,\n       (metadata->>'edad_edificio')::int AS edad_edificio,\n       (metadata->>'numero_viviendas')::int AS num_viviendas,\n       metadata->>'usuario_movilidad_reducida' AS usuario_mr\nFROM projects WHERE id = $1::uuid LIMIT 1",
-        "options": { "queryReplacement": "={{ [$('Decode JWT + Body').first().json.project_id] }}" }
+        "options": {
+          "queryReplacement": "={{ [$('Decode JWT + Body').first().json.project_id] }}"
+        }
       },
-      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
-      "position": [1200, 200],
+      "position": [
+        1200,
+        200
+      ],
       "id": "aa-load-project",
       "name": "Load Project",
       "alwaysOutputData": true
@@ -86,12 +136,22 @@
       "parameters": {
         "operation": "executeQuery",
         "query": "SELECT id, summary, rooms_affected, constraints\nFROM briefings\nWHERE project_id = $1::uuid AND status = 'approved'\nORDER BY created_at DESC LIMIT 1",
-        "options": { "queryReplacement": "={{ [$('Decode JWT + Body').first().json.project_id] }}" }
+        "options": {
+          "queryReplacement": "={{ [$('Decode JWT + Body').first().json.project_id] }}"
+        }
       },
-      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
-      "position": [1440, 200],
+      "position": [
+        1440,
+        200
+      ],
       "id": "aa-load-briefing",
       "name": "Load Briefing",
       "alwaysOutputData": true
@@ -99,13 +159,23 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT id, title, intervention_logic, rooms_layout, constraints\nFROM design_options\nWHERE project_id = $1::uuid AND status = 'selected'\nORDER BY created_at DESC LIMIT 1",
-        "options": { "queryReplacement": "={{ [$('Decode JWT + Body').first().json.project_id] }}" }
+        "query": "SELECT id, title, intervention_logic, rooms_layout\nFROM design_options\nWHERE project_id = $1::uuid AND is_selected = true\nORDER BY created_at DESC LIMIT 1",
+        "options": {
+          "queryReplacement": "={{ [$('Decode JWT + Body').first().json.project_id] }}"
+        }
       },
-      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
-      "position": [1680, 200],
+      "position": [
+        1680,
+        200
+      ],
       "id": "aa-load-design",
       "name": "Load Design Option",
       "alwaysOutputData": true
@@ -117,21 +187,43 @@
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1920, 200],
+      "position": [
+        1920,
+        200
+      ],
       "id": "aa-build-prompt",
       "name": "Build Prompt"
     },
     {
       "parameters": {
         "conditions": {
-          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict", "version": 2 },
-          "conditions": [ { "id": "aa-c2", "leftValue": "={{ $json._error }}", "rightValue": "", "operator": { "type": "string", "operation": "exists", "singleValue": true } } ],
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "aa-c2",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
           "combinator": "and"
         }
       },
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
-      "position": [2160, 200],
+      "position": [
+        2160,
+        200
+      ],
       "id": "aa-if-prompt",
       "name": "Prompt OK?"
     },
@@ -139,11 +231,16 @@
       "parameters": {
         "respondWith": "json",
         "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details } }) }}",
-        "options": { "responseCode": "={{ $json._status || 404 }}" }
+        "options": {
+          "responseCode": "={{ $json._status || 404 }}"
+        }
       },
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
-      "position": [2400, 360],
+      "position": [
+        2400,
+        360
+      ],
       "id": "aa-respond-404",
       "name": "Respond Error Project"
     },
@@ -155,10 +252,18 @@
           "queryReplacement": "={{ [\n  $('Build Prompt').first().json.project_id,\n  JSON.stringify({ project_id: $('Build Prompt').first().json.project_id, applies_heuristic: $('Build Prompt').first().json.applies_heuristic }),\n  JSON.stringify({ request_id: $('Build Prompt').first().json.request_id, source: 'api_accessibility_audit' })\n] }}"
         }
       },
-      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
-      "position": [2400, 100],
+      "position": [
+        2400,
+        100
+      ],
       "id": "aa-start-exec",
       "name": "Start Execution",
       "alwaysOutputData": true
@@ -170,27 +275,47 @@
         "authentication": "predefinedCredentialType",
         "nodeCredentialType": "httpHeaderAuth",
         "sendHeaders": true,
-        "headerParameters": { "parameters": [{ "name": "Content-Type", "value": "application/json" }] },
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify($('Build Prompt').first().json.llm_payload) }}",
-        "options": { "timeout": 90000 }
+        "options": {
+          "timeout": 90000
+        }
       },
-      "credentials": { "httpHeaderAuth": { "id": "gE1jXO133xEHS5JJ", "name": "orquestador ArquiAI" } },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "gE1jXO133xEHS5JJ",
+          "name": "orquestador ArquiAI"
+        }
+      },
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [2640, 100],
+      "position": [
+        2640,
+        100
+      ],
       "id": "aa-llm",
       "name": "Call LLM"
     },
     {
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const llm = $input.first()?.json;\nconst built = $('Build Prompt').first().json;\nconst raw = llm?.choices?.[0]?.message?.content || '{}';\nlet parsed;\ntry { parsed = JSON.parse(raw); } catch (e) {\n  return [{ json: { _error: 'LLM_INVALID_JSON', _status: 502, _details: e.message, _raw: raw.slice(0, 500), request_id: built.request_id }}];\n}\nconst usage = llm?.usage || {};\nconst issues = Array.isArray(parsed.compliance_issues) ? parsed.compliance_issues : [];\nconst recs = Array.isArray(parsed.recommendations) ? parsed.recommendations : [];\nreturn [{ json: {\n  user_id: built.user_id,\n  tenant_id: built.tenant_id,\n  project_id: built.project_id,\n  request_id: built.request_id,\n  applies: parsed.applies_to_project ?? built.applies_heuristic,\n  overall_compliance: parsed.overall_compliance || 'not_applicable',\n  issues_count: issues.length,\n  output: {\n    applies_to_project: parsed.applies_to_project ?? built.applies_heuristic,\n    applies_reason: parsed.applies_reason || null,\n    overall_compliance: parsed.overall_compliance || 'not_applicable',\n    compliance_issues: issues,\n    recommendations: recs,\n    commercial_argumentation: parsed.commercial_argumentation || null\n  },\n  model: llm?.model || 'gpt-4o',\n  tokens_in: usage.prompt_tokens || 0,\n  tokens_out: usage.completion_tokens || 0\n}}];"
+        "jsCode": "const llm = $input.first()?.json;\nconst built = $('Build Prompt').first().json;\nconst raw = llm?.choices?.[0]?.message?.content || '{}';\nlet parsed;\ntry { parsed = JSON.parse(raw); } catch (e) {\n  return [{ json: { _error: 'LLM_INVALID_JSON', _status: 502, _details: e.message, _raw: raw.slice(0, 500), request_id: built.request_id }}];\n}\nconst usage = llm?.usage || {};\nconst issues = Array.isArray(parsed.compliance_issues) ? parsed.compliance_issues : [];\nconst recs = Array.isArray(parsed.recommendations) ? parsed.recommendations : [];\nreturn [{ json: {\n  user_id: built.user_id,\n  tenant_id: built.tenant_id,\n  project_id: built.project_id,\n  request_id: built.request_id,\n  applies: parsed.applies_to_project ?? built.applies_heuristic,\n  overall_compliance: (['compliant','partial','non_compliant','pending'].includes(parsed.overall_compliance) ? parsed.overall_compliance : 'pending'),\n  issues_count: issues.length,\n  output: {\n    applies_to_project: parsed.applies_to_project ?? built.applies_heuristic,\n    applies_reason: parsed.applies_reason || null,\n    overall_compliance: (['compliant','partial','non_compliant','pending'].includes(parsed.overall_compliance) ? parsed.overall_compliance : 'pending'),\n    compliance_issues: issues,\n    recommendations: recs,\n    commercial_argumentation: parsed.commercial_argumentation || null\n  },\n  model: llm?.model || 'gpt-4o',\n  tokens_in: usage.prompt_tokens || 0,\n  tokens_out: usage.completion_tokens || 0\n}}];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [2880, 100],
+      "position": [
+        2880,
+        100
+      ],
       "id": "aa-format",
       "name": "Format Response"
     },
@@ -202,10 +327,18 @@
           "queryReplacement": "={{ [\n  $json.project_id,\n  $json.output.applies_to_project,\n  $json.output.overall_compliance,\n  JSON.stringify($json.output.compliance_issues),\n  JSON.stringify($json.output.recommendations),\n  $json.output.commercial_argumentation\n] }}"
         }
       },
-      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
-      "position": [3120, 100],
+      "position": [
+        3120,
+        100
+      ],
       "id": "aa-insert-audit",
       "name": "Insert Audit",
       "alwaysOutputData": true
@@ -218,10 +351,18 @@
           "queryReplacement": "={{ [\n  $('Start Execution').first().json.id,\n  JSON.stringify({ audit_id: $json.id, applies: $('Format Response').first().json.applies, overall_compliance: $('Format Response').first().json.overall_compliance, issues_count: $('Format Response').first().json.issues_count }),\n  JSON.stringify({ model: $('Format Response').first().json.model, tokens_in: $('Format Response').first().json.tokens_in, tokens_out: $('Format Response').first().json.tokens_out, eu_ai_act: 'asistencia profesional supervisada por tecnico colegiado' })\n] }}"
         }
       },
-      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
-      "position": [3360, 100],
+      "position": [
+        3360,
+        100
+      ],
       "id": "aa-finish-exec",
       "name": "Finish Execution",
       "alwaysOutputData": true,
@@ -231,37 +372,202 @@
       "parameters": {
         "respondWith": "json",
         "responseBody": "={{ JSON.stringify({\n  data: {\n    audit_id: $('Insert Audit').first().json.id,\n    project_id: $('Format Response').first().json.project_id,\n    ...$('Format Response').first().json.output\n  },\n  meta: {\n    request_id: $('Format Response').first().json.request_id,\n    model: $('Format Response').first().json.model,\n    tokens_in: $('Format Response').first().json.tokens_in,\n    tokens_out: $('Format Response').first().json.tokens_out,\n    timestamp: new Date().toISOString()\n  }\n}) }}",
-        "options": { "responseCode": 201, "responseHeaders": { "entries": [{ "name": "Cache-Control", "value": "no-cache" }] } }
+        "options": {
+          "responseCode": 201,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Cache-Control",
+                "value": "no-cache"
+              }
+            ]
+          }
+        }
       },
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
-      "position": [3600, 100],
+      "position": [
+        3600,
+        100
+      ],
       "id": "aa-respond-201",
       "name": "Respond 201"
     }
   ],
   "connections": {
-    "POST /accessibility/audit": { "main": [[{ "node": "Decode JWT + Body", "type": "main", "index": 0 }]] },
-    "Decode JWT + Body":         { "main": [[{ "node": "Auth OK?", "type": "main", "index": 0 }]] },
-    "Auth OK?":                  { "main": [
-      [{ "node": "Respond Error", "type": "main", "index": 0 }],
-      [{ "node": "Set Session Context", "type": "main", "index": 0 }]
-    ]},
-    "Set Session Context": { "main": [[{ "node": "Load Project", "type": "main", "index": 0 }]] },
-    "Load Project":        { "main": [[{ "node": "Load Briefing", "type": "main", "index": 0 }]] },
-    "Load Briefing":       { "main": [[{ "node": "Load Design Option", "type": "main", "index": 0 }]] },
-    "Load Design Option":  { "main": [[{ "node": "Build Prompt", "type": "main", "index": 0 }]] },
-    "Build Prompt":        { "main": [[{ "node": "Prompt OK?", "type": "main", "index": 0 }]] },
-    "Prompt OK?":          { "main": [
-      [{ "node": "Respond Error Project", "type": "main", "index": 0 }],
-      [{ "node": "Start Execution", "type": "main", "index": 0 }]
-    ]},
-    "Start Execution":     { "main": [[{ "node": "Call LLM", "type": "main", "index": 0 }]] },
-    "Call LLM":            { "main": [[{ "node": "Format Response", "type": "main", "index": 0 }]] },
-    "Format Response":     { "main": [[{ "node": "Insert Audit", "type": "main", "index": 0 }]] },
-    "Insert Audit":        { "main": [[{ "node": "Finish Execution", "type": "main", "index": 0 }]] },
-    "Finish Execution":    { "main": [[{ "node": "Respond 201", "type": "main", "index": 0 }]] }
+    "POST /accessibility/audit": {
+      "main": [
+        [
+          {
+            "node": "Decode JWT + Body",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decode JWT + Body": {
+      "main": [
+        [
+          {
+            "node": "Auth OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Auth OK?": {
+      "main": [
+        [
+          {
+            "node": "Respond Error",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Set Session Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Session Context": {
+      "main": [
+        [
+          {
+            "node": "Load Project",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Project": {
+      "main": [
+        [
+          {
+            "node": "Load Briefing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Briefing": {
+      "main": [
+        [
+          {
+            "node": "Load Design Option",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Design Option": {
+      "main": [
+        [
+          {
+            "node": "Build Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Prompt": {
+      "main": [
+        [
+          {
+            "node": "Prompt OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prompt OK?": {
+      "main": [
+        [
+          {
+            "node": "Respond Error Project",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Start Execution",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Start Execution": {
+      "main": [
+        [
+          {
+            "node": "Call LLM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call LLM": {
+      "main": [
+        [
+          {
+            "node": "Format Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Response": {
+      "main": [
+        [
+          {
+            "node": "Insert Audit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Audit": {
+      "main": [
+        [
+          {
+            "node": "Finish Execution",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Finish Execution": {
+      "main": [
+        [
+          {
+            "node": "Respond 201",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
   },
-  "settings": { "executionOrder": "v1" },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
   "pinData": {}
 }

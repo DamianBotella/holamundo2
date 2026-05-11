@@ -1,7 +1,7 @@
 {
   "name": "agent_aftercare",
-  "_description": "Postventa. Triaje de incidencias post-entrega LOE (1 ano acabados, 3 anos habitabilidad, 10 anos estructura). Clasifica gravedad y responsable.",
-  "_status": "B72-fase-C AUX",
+  "_description": "agent_aftercare (sync from n8n live)",
+  "_status": "B72-fase-C-debug (sync from live)",
   "nodes": [
     {
       "parameters": {
@@ -135,7 +135,7 @@
     {
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const sess = $('Decode JWT + Body').first().json;\nconst projectRows = $('Load Project').all().map(i => i.json).filter(p => p && p.id);\nif (projectRows.length === 0) return [{ json: { _error: 'PROJECT_NOT_FOUND', _status: 404, _details: 'project_id no existe', request_id: sess.request_id }}];\nconst project = projectRows[0];\n\n\nconst incidentText = (sess.body?.incident_description || '').trim();\nconst monthsSinceDelivery = sess.body?.months_since_delivery || null;\nif (!incidentText) return [{ json: { _error: 'NO_INCIDENT', _status: 400, _details: 'falta body.incident_description', request_id: sess.request_id }}];\nconst systemPrompt = `Eres agent_aftercare. Procesas incidencias post-entrega segun LOE espanola:\\n- LOE 1 ano: acabados (pintura, rodapies, sellados)\\n- LOE 3 anos: habitabilidad (humedades, aislamiento, instalaciones)\\n- LOE 10 anos: estructura (grietas estructurales, asentamientos)\\nDecide: cubierto_por_LOE (true/false), garantia_aplicable (1y|3y|10y|none), gravedad (low/medium/high/critical), responsable (estudio|gremio|cliente|seguro), accion_inmediata.\\nDEVUELVE SOLO JSON.`;\nconst userPrompt = `PROYECTO: ${project.name}\\nMESES DESDE ENTREGA: ${monthsSinceDelivery ?? '?'}\\n\\nINCIDENCIA REPORTADA POR EL CLIENTE:\\n${incidentText}\\n\\nTriajea.\\n\\nOUTPUT JSON:\\n{ \"cubierto_por_loe\": true, \"garantia_aplicable\": \"3y\", \"gravedad\": \"medium\", \"responsable\": \"gremio\", \"accion_inmediata\": \"...\", \"plazo_respuesta_dias\": 7, \"summary\": \"...\" }`;\n\nreturn [{ json: { user_id: sess.user_id, tenant_id: sess.tenant_id, project_id: project.id, request_id: sess.request_id, body: sess.body, incident_description: $json.body?.incident_description || null, months_since_delivery: $json.body?.months_since_delivery || null, llm_payload: { model: 'gpt-4o', messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }], temperature: 0.2, max_tokens: 2000, response_format: { type: 'json_object' }}}}];"
+        "jsCode": "const sess = $('Decode JWT + Body').first().json;\nconst projectRows = $('Load Project').all().map(i => i.json).filter(p => p && p.id);\nif (projectRows.length === 0) return [{ json: { _error: 'PROJECT_NOT_FOUND', _status: 404, _details: 'project_id no existe', request_id: sess.request_id }}];\nconst project = projectRows[0];\n\n\nconst incidentText = (sess.body?.incident_description || '').trim();\nconst monthsSinceDelivery = sess.body?.months_since_delivery || null;\nif (!incidentText) return [{ json: { _error: 'NO_INCIDENT', _status: 400, _details: 'falta body.incident_description', request_id: sess.request_id }}];\nconst systemPrompt = `Eres agent_aftercare. Procesas incidencias post-entrega segun LOE espanola:\n- LOE 1 ano: acabados (pintura, rodapies, sellados)\n- LOE 3 anos: habitabilidad (humedades, aislamiento, instalaciones)\n- LOE 10 anos: estructura (grietas estructurales, asentamientos)\nDecide: cubierto_por_LOE (true/false), garantia_aplicable (1y|3y|10y|none), gravedad (low/medium/high/critical), responsable (estudio|gremio|cliente|seguro), accion_inmediata.\nDEVUELVE SOLO JSON.`;\nconst userPrompt = `PROYECTO: ${project.name}\nMESES DESDE ENTREGA: ${monthsSinceDelivery ?? '?'}\n\nINCIDENCIA REPORTADA POR EL CLIENTE:\n${incidentText}\n\nTriajea.\n\nOUTPUT JSON:\n{ \"cubierto_por_loe\": true, \"garantia_aplicable\": \"3y\", \"gravedad\": \"medium\", \"responsable\": \"gremio\", \"accion_inmediata\": \"...\", \"plazo_respuesta_dias\": 7, \"summary\": \"...\" }`;\n\nreturn [{ json: { user_id: sess.user_id, tenant_id: sess.tenant_id, project_id: project.id, request_id: sess.request_id, body: sess.body, incident_description: $json.body?.incident_description || null, months_since_delivery: $json.body?.months_since_delivery || null, llm_payload: { model: 'gpt-4o', messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }], temperature: 0.2, max_tokens: 2000, response_format: { type: 'json_object' }}}}];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -274,9 +274,9 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "INSERT INTO aftercare_incidents (project_id, incident_description, cubierto_por_loe, garantia_aplicable, gravedad, responsable, accion_inmediata, status) VALUES ($1::uuid, $2::text, $3::boolean, $4::text, $5::text, $6::text, $7::text, 'triaged') RETURNING id",
+        "query": "INSERT INTO aftercare_incidents (project_id, description, category, severity, loe_period, under_warranty, responsible_trade, notes, status)\nVALUES ($1::uuid, $2::text, $3::text, $4::text, $5::int, $6::boolean, $7::text, $8::text, 'reported') RETURNING id",
         "options": {
-          "queryReplacement": "={{ [$json.project_id, $json.body?.incident_description || '', $json.output.cubierto_por_loe ?? false, $json.output.garantia_aplicable || 'none', $json.output.gravedad || 'low', $json.output.responsable || 'estudio', $json.output.accion_inmediata || ''] }}"
+          "queryReplacement": "={{ [\n  $json.project_id,\n  $json.body?.incident_description || '',\n  ['humedad','grieta','instalacion','acabado','otro'].includes(($json.output?.category||'').toLowerCase()) ? ($json.output.category||'').toLowerCase() : 'otro',\n  ['low','medium','high','critical'].includes($json.output?.gravedad) ? $json.output.gravedad : 'medium',\n  ({'1y':1,'3y':3,'10y':10}[$json.output?.garantia_aplicable] ?? null),\n  $json.output?.cubierto_por_loe ?? false,\n  $json.output?.responsable || null,\n  $json.output?.accion_inmediata || ''\n] }}"
         }
       },
       "credentials": {
@@ -323,7 +323,7 @@
     {
       "parameters": {
         "respondWith": "json",
-        "responseBody": "={{ JSON.stringify({ data: { project_id: $('Format Response').first().json.project_id, incident_id: $('Insert Target').first().json.id, ...$('Format Response').first().json.output }, meta: { request_id: $('Format Response').first().json.request_id, model: $('Format Response').first().json.model, tokens_in: $('Format Response').first().json.tokens_in, tokens_out: $('Format Response').first().json.tokens_out, timestamp: new Date().toISOString() }}) }}",
+        "responseBody": "={{ JSON.stringify({ data: { project_id: $('Format Response').first().json.project_id, incident_id: $('Insert Target').first().json.id, cubierto_por_loe: $('Format Response').first().json.output.cubierto_por_loe, garantia_aplicable: $('Format Response').first().json.output.garantia_aplicable, gravedad: $('Format Response').first().json.output.gravedad, responsable: $('Format Response').first().json.output.responsable, accion_inmediata: $('Format Response').first().json.output.accion_inmediata, plazo_respuesta_dias: $('Format Response').first().json.output.plazo_respuesta_dias, summary: $('Format Response').first().json.output.summary }, meta: { request_id: $('Format Response').first().json.request_id, model: $('Format Response').first().json.model, tokens_in: $('Format Response').first().json.tokens_in, tokens_out: $('Format Response').first().json.tokens_out, timestamp: new Date().toISOString() }}) }}",
         "options": {
           "responseCode": 201,
           "responseHeaders": {
@@ -495,7 +495,9 @@
     }
   },
   "settings": {
-    "executionOrder": "v1"
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
   },
   "pinData": {}
 }

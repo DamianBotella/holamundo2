@@ -1,7 +1,7 @@
 {
   "name": "agent_qc_checklists",
-  "_description": "agent_qc_checklists (sync from n8n live)",
-  "_status": "B72-fase-C-debug (sync from live)",
+  "_description": "agent_qc_checklists (B72-fase-C verde E2E)",
+  "_status": "B72-fase-C smoke OK",
   "nodes": [
     {
       "parameters": {
@@ -308,7 +308,7 @@
     {
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const llm = $input.first()?.json;\nconst built = $('Build Prompt').first().json;\nconst raw = llm?.choices?.[0]?.message?.content || '{}';\nlet parsed; try { parsed = JSON.parse(raw); } catch (e) { return [{ json: { _error: 'LLM_INVALID_JSON', _status: 502, _details: e.message, _raw: raw.slice(0,500), request_id: built.request_id }}]; }\nconst usage = llm?.usage || {};\nconst outputObj = parsed;\nconst summaryObj = { phase: parsed.phase, items_count: (parsed.items || []).length, critical_count: (parsed.items || []).filter(i => i.critical).length };\nreturn [{ json: { user_id: built.user_id, tenant_id: built.tenant_id, project_id: built.project_id, request_id: built.request_id, body: built.body, output: outputObj, summary: summaryObj, model: llm?.model || 'gpt-4o', tokens_in: usage.prompt_tokens || 0, tokens_out: usage.completion_tokens || 0 }}];"
+        "jsCode": "const llm = $input.first()?.json;\nconst built = $('Build Prompt').first().json;\nconst raw = llm?.choices?.[0]?.message?.content || '{}';\nlet parsed;\ntry { parsed = JSON.parse(raw); } catch (e) {\n  return [{ json: { _error: 'LLM_INVALID_JSON', _status: 502, _details: e.message, _raw: raw.slice(0,500), request_id: built.request_id }}];\n}\nconst usage = llm?.usage || {};\nreturn [{ json: {\n  user_id: built.user_id,\n  tenant_id: built.tenant_id,\n  project_id: built.project_id,\n  request_id: built.request_id,\n  body: built.body,\n  output: parsed,\n  summary: { keys: Object.keys(parsed) },\n  model: llm?.model || 'gpt-4o',\n  tokens_in: usage.prompt_tokens || 0,\n  tokens_out: usage.completion_tokens || 0\n}}];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -322,9 +322,9 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "INSERT INTO qc_checks (project_id, phase, items, status) VALUES ($1::uuid, $2::text, $3::jsonb, 'pending') RETURNING id",
+        "query": "INSERT INTO qc_checks (project_id, phase_key, items, status)\nSELECT $1::uuid, $2::text, $3::jsonb, 'open'\nON CONFLICT (project_id, phase_key, template_version) DO UPDATE\nSET items = EXCLUDED.items, updated_at = now()\nRETURNING id",
         "options": {
-          "queryReplacement": "={{ [$json.project_id, $json.output.phase, JSON.stringify($json.output.items || [])] }}"
+          "queryReplacement": "={{ [$json.project_id, (['demolicion','replanteo','albanileria','instalaciones_electricas','instalaciones_fontaneria','instalaciones_climatizacion','aislamiento_carpinteria','pavimentos_revestimientos','sanitarios_griferia','pintura','recepcion_provisional','otros'].includes($json.body?.phase) ? $json.body.phase : 'otros'), JSON.stringify($json.output.items || [])] }}"
         }
       },
       "credentials": {
@@ -371,7 +371,7 @@
     {
       "parameters": {
         "respondWith": "json",
-        "responseBody": "={{ JSON.stringify({ data: { project_id: $('Format Response').first().json.project_id, phase: $('Format Response').first().json.output.phase, items_count: ($('Format Response').first().json.output.items || []).length, items: $('Format Response').first().json.output.items, notes: $('Format Response').first().json.output.notes }, meta: { request_id: $('Format Response').first().json.request_id, model: $('Format Response').first().json.model, tokens_in: $('Format Response').first().json.tokens_in, tokens_out: $('Format Response').first().json.tokens_out, timestamp: new Date().toISOString() }}) }}",
+        "responseBody": "={{ JSON.stringify({ data: { project_id: $('Format Response').first().json.project_id, insert_id: $('Insert Target').first().json.id, output: $('Format Response').first().json.output }, meta: { request_id: $('Format Response').first().json.request_id, model: $('Format Response').first().json.model, tokens_in: $('Format Response').first().json.tokens_in, tokens_out: $('Format Response').first().json.tokens_out } }) }}",
         "options": {
           "responseCode": 201,
           "responseHeaders": {

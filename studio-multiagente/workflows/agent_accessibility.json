@@ -1,7 +1,7 @@
 {
   "name": "agent_accessibility",
-  "_description": "agent_accessibility (sync from n8n live)",
-  "_status": "B72-fase-C-debug (sync from live)",
+  "_description": "agent_accessibility (B72-fase-C verde E2E)",
+  "_status": "B72-fase-C smoke OK",
   "nodes": [
     {
       "parameters": {

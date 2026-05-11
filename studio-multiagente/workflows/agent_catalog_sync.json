@@ -1,7 +1,7 @@
 {
   "name": "agent_catalog_sync",
-  "_description": "agent_catalog_sync (sync from n8n live)",
-  "_status": "B72-fase-C-debug (sync from live)",
+  "_description": "agent_catalog_sync (B72-fase-C verde E2E)",
+  "_status": "B72-fase-C smoke OK",
   "nodes": [
     {
       "parameters": {

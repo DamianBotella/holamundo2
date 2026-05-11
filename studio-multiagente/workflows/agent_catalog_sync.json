@@ -1,0 +1,283 @@
+{
+  "name": "agent_catalog_sync",
+  "_description": "Sincronizador de catalogo de materiales (B72-fase-C). Recibe lote de items {sku_fabricante, nombre, marca, categoria, precio, unidad, descripcion, url_*}, genera embeddings semanticos en batch (OpenAI text-embedding-3-small) y UPSERT en materials_catalog. Audita en catalog_sync_log. NO project_id - opera a nivel tenant.",
+  "_status": "B72-fase-C catalogo materiales",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "api/v1/agents/catalog-sync/run",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "id": "acs-webhook",
+      "name": "POST /catalog-sync/run",
+      "webhookId": "12345678-aaaa-4bbb-9ccc-deadbeefcafe",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const auth = $input.first().json.headers?.authorization || '';\nif (!auth.startsWith('Bearer ')) return [{ json: { _error: 'AUTH_MISSING_TOKEN', _status: 401 } }];\nconst token = auth.slice(7);\ntry {\n  const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'));\n  if (!payload.sub) throw new Error('No sub');\n  if (payload.exp && Date.now()/1000 > payload.exp) throw new Error('JWT expired');\n  if (!payload.tenant_id) throw new Error('No tenant_id');\n  const body = $input.first().json.body || {};\n  const fuente = (body.fuente || '').trim();\n  const validFuentes = ['BIMobject','ACAE','BEDEC','PDF','Newsletter','Manual'];\n  if (!validFuentes.includes(fuente)) {\n    return [{ json: { _error: 'INVALID_FUENTE', _status: 400, _details: 'fuente debe ser uno de: ' + validFuentes.join(', ') } }];\n  }\n  const items = Array.isArray(body.items) ? body.items : [];\n  if (items.length === 0) {\n    return [{ json: { _error: 'NO_ITEMS', _status: 400, _details: 'body.items debe ser array no vacio' } }];\n  }\n  if (items.length > 200) {\n    return [{ json: { _error: 'TOO_MANY_ITEMS', _status: 413, _details: 'max 200 items por sync (recibidos ' + items.length + '). Trocea en lotes.' } }];\n  }\n  return [{ json: {\n    user_id: payload.sub,\n    tenant_id: payload.tenant_id,\n    role: payload.role || 'architect',\n    fuente,\n    items,\n    items_count: items.length,\n    request_id: 'sync_' + Math.random().toString(36).slice(2, 10),\n    started_at_ms: Date.now()\n  }}];\n} catch (e) { return [{ json: { _error: 'AUTH_INVALID_TOKEN', _status: 401, _details: e.message } }]; }"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 300],
+      "id": "acs-decode",
+      "name": "Decode JWT + Validate"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict", "version": 2 },
+          "conditions": [{ "id": "acs-c1", "leftValue": "={{ $json._error }}", "rightValue": "", "operator": { "type": "string", "operation": "exists", "singleValue": true } }],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [720, 300],
+      "id": "acs-if-auth",
+      "name": "Auth+Payload OK?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details || $json._error } }) }}",
+        "options": { "responseCode": "={{ $json._status || 401 }}" }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [960, 460],
+      "id": "acs-respond-error",
+      "name": "Respond Error"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT set_session_context($1::uuid, $2::uuid, $3)",
+        "options": { "queryReplacement": "={{ [$json.user_id, $json.tenant_id, $json.role] }}" }
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [960, 200],
+      "id": "acs-set-session",
+      "name": "Set Session Context"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO catalog_sync_log (fuente, status, productos_nuevos, productos_actualizados, errores)\nVALUES ($1::text, 'running', 0, 0, '{}'::jsonb)\nRETURNING id, fecha_sync",
+        "options": {
+          "queryReplacement": "={{ [$('Decode JWT + Validate').first().json.fuente] }}"
+        }
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1200, 200],
+      "id": "acs-start-sync-log",
+      "name": "Start Sync Log",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const sess = $('Decode JWT + Validate').first().json;\nconst items = sess.items;\nconst validCategorias = ['ceramica','sanitarios','griferia','carpinteria_interior','carpinteria_exterior','aislamiento','impermeabilizacion','pintura','pavimento','revestimiento','iluminacion','electrodomesticos','climatizacion','fontaneria','electricidad','otros'];\nconst validUnidades = ['m2','m3','ml','ud','kg','l'];\n\n// Normalizar + validar cada item. Generar texto de embedding (nombre+marca+desc).\nconst normalized = [];\nconst errors = [];\nfor (let i = 0; i < items.length; i++) {\n  const it = items[i] || {};\n  const e = [];\n  if (!it.nombre || typeof it.nombre !== 'string') e.push('nombre requerido');\n  if (!it.marca || typeof it.marca !== 'string') e.push('marca requerido');\n  if (!it.categoria || !validCategorias.includes(it.categoria)) e.push('categoria invalida (' + (it.categoria||'?') + ')');\n  if (it.unidad && !validUnidades.includes(it.unidad)) e.push('unidad invalida (' + it.unidad + ')');\n  if (e.length) { errors.push({ idx: i, sku: it.sku_fabricante || null, errors: e }); continue; }\n  const embedText = [it.nombre, it.marca, it.categoria, it.descripcion || ''].filter(Boolean).join(' | ').slice(0, 500);\n  normalized.push({\n    sku_fabricante: it.sku_fabricante || null,\n    nombre: it.nombre.slice(0, 300),\n    marca: it.marca.slice(0, 100),\n    categoria: it.categoria,\n    precio_pvp_eur: typeof it.precio === 'number' ? it.precio : (typeof it.precio_pvp_eur === 'number' ? it.precio_pvp_eur : null),\n    unidad: it.unidad || null,\n    fecha_precio: it.fecha_precio || new Date().toISOString(),\n    url_fabricante: it.url_fabricante || null,\n    url_bimobject: it.url_bimobject || null,\n    epd_url: it.epd_url || null,\n    huella_co2_kg: typeof it.huella_co2_kg === 'number' ? it.huella_co2_kg : null,\n    descripcion: it.descripcion || null,\n    raw_metadata: it.raw_metadata || {},\n    embed_text: embedText\n  });\n}\nreturn [{ json: {\n  ...sess,\n  sync_log_id: $input.first().json.id,\n  normalized,\n  normalized_count: normalized.length,\n  validation_errors: errors,\n  embed_inputs: normalized.map(n => n.embed_text)\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1440, 200],
+      "id": "acs-normalize",
+      "name": "Normalize + Validate Items"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict", "version": 2 },
+          "conditions": [{ "id": "acs-c2", "leftValue": "={{ $json.normalized_count }}", "rightValue": 0, "operator": { "type": "number", "operation": "equals" } }],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1680, 200],
+      "id": "acs-if-empty",
+      "name": "Todos Invalidos?"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE catalog_sync_log SET status = 'error', errores = $2::jsonb, duracion_segundos = $3::int WHERE id = $1::uuid",
+        "options": {
+          "queryReplacement": "={{ [$json.sync_log_id, JSON.stringify({ all_invalid: true, errors: $json.validation_errors }), Math.floor((Date.now() - $json.started_at_ms) / 1000)] }}"
+        }
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1920, 360],
+      "id": "acs-log-all-invalid",
+      "name": "Log All Invalid"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: 'ALL_ITEMS_INVALID', message: 'Todos los items fallaron validacion', details: $('Normalize + Validate Items').first().json.validation_errors }, meta: { sync_log_id: $('Normalize + Validate Items').first().json.sync_log_id, fuente: $('Normalize + Validate Items').first().json.fuente, items_received: $('Normalize + Validate Items').first().json.items_count }}) }}",
+        "options": { "responseCode": 422 }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [2160, 360],
+      "id": "acs-respond-422",
+      "name": "Respond 422 All Invalid"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/embeddings",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [{ "name": "Content-Type", "value": "application/json" }] },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'text-embedding-3-small', input: $('Normalize + Validate Items').first().json.embed_inputs }) }}",
+        "options": { "timeout": 90000 }
+      },
+      "credentials": { "httpHeaderAuth": { "id": "gE1jXO133xEHS5JJ", "name": "orquestador ArquiAI" } },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1920, 100],
+      "id": "acs-embeddings",
+      "name": "Generate Embeddings (batch)"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const emb = $input.first()?.json;\nconst built = $('Normalize + Validate Items').first().json;\nif (!emb?.data || !Array.isArray(emb.data)) {\n  return [{ json: { _error: 'EMBEDDINGS_FAILED', _status: 502, _details: 'OpenAI no devolvio data[]', sync_log_id: built.sync_log_id, started_at_ms: built.started_at_ms } }];\n}\nif (emb.data.length !== built.normalized.length) {\n  return [{ json: { _error: 'EMBEDDINGS_COUNT_MISMATCH', _status: 502, _details: 'esperados ' + built.normalized.length + ' vectores, recibidos ' + emb.data.length, sync_log_id: built.sync_log_id, started_at_ms: built.started_at_ms } }];\n}\n// Adjuntar embedding a cada item normalizado\nconst withEmb = built.normalized.map((n, i) => ({\n  ...n,\n  embedding: emb.data[i].embedding\n}));\nreturn [{ json: {\n  ...built,\n  with_embedding: withEmb,\n  embedding_tokens: emb.usage?.total_tokens || 0,\n  embedding_model: emb.model || 'text-embedding-3-small'\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2160, 100],
+      "id": "acs-attach-embeddings",
+      "name": "Attach Embeddings"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict", "version": 2 },
+          "conditions": [{ "id": "acs-c3", "leftValue": "={{ $json._error }}", "rightValue": "", "operator": { "type": "string", "operation": "exists", "singleValue": true } }],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [2400, 100],
+      "id": "acs-if-emb-error",
+      "name": "Embeddings OK?"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE catalog_sync_log SET status = 'error', errores = $2::jsonb, duracion_segundos = $3::int WHERE id = $1::uuid",
+        "options": {
+          "queryReplacement": "={{ [$json.sync_log_id, JSON.stringify({ stage: 'embeddings', error: $json._error, details: $json._details }), Math.floor((Date.now() - $json.started_at_ms) / 1000)] }}"
+        }
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [2640, 260],
+      "id": "acs-log-emb-error",
+      "name": "Log Embeddings Error"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details }}) }}",
+        "options": { "responseCode": "={{ $json._status || 502 }}" }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [2880, 260],
+      "id": "acs-respond-502",
+      "name": "Respond 502"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH input AS (\n  SELECT * FROM jsonb_to_recordset($2::jsonb) AS x(\n    sku_fabricante text, nombre text, marca text, categoria text,\n    precio_pvp_eur numeric, unidad text, fecha_precio timestamptz,\n    url_fabricante text, url_bimobject text, epd_url text,\n    huella_co2_kg numeric, descripcion text, raw_metadata jsonb,\n    embedding text\n  )\n),\nupsert AS (\n  INSERT INTO materials_catalog (\n    tenant_id, sku_fabricante, nombre, marca, categoria, precio_pvp_eur,\n    unidad, fecha_precio, fuente_precio, url_fabricante, url_bimobject,\n    epd_url, huella_co2_kg, descripcion, embedding_descripcion, raw_metadata, updated_at\n  )\n  SELECT $1::uuid, sku_fabricante, nombre, marca, categoria, precio_pvp_eur,\n         unidad, fecha_precio, $3::text, url_fabricante, url_bimobject,\n         epd_url, huella_co2_kg, descripcion, embedding::vector, raw_metadata, now()\n  FROM input\n  ON CONFLICT (tenant_id, sku_fabricante) WHERE sku_fabricante IS NOT NULL\n  DO UPDATE SET\n    nombre = EXCLUDED.nombre,\n    marca = EXCLUDED.marca,\n    categoria = EXCLUDED.categoria,\n    precio_pvp_eur = EXCLUDED.precio_pvp_eur,\n    unidad = EXCLUDED.unidad,\n    fecha_precio = EXCLUDED.fecha_precio,\n    fuente_precio = EXCLUDED.fuente_precio,\n    url_fabricante = EXCLUDED.url_fabricante,\n    url_bimobject = EXCLUDED.url_bimobject,\n    epd_url = EXCLUDED.epd_url,\n    huella_co2_kg = EXCLUDED.huella_co2_kg,\n    descripcion = EXCLUDED.descripcion,\n    embedding_descripcion = EXCLUDED.embedding_descripcion,\n    raw_metadata = EXCLUDED.raw_metadata,\n    updated_at = now()\n  RETURNING id, (xmax = 0) AS is_new\n)\nSELECT\n  COUNT(*) FILTER (WHERE is_new) AS nuevos,\n  COUNT(*) FILTER (WHERE NOT is_new) AS actualizados,\n  COUNT(*) AS total\nFROM upsert",
+        "options": {
+          "queryReplacement": "={{ [$json.tenant_id, JSON.stringify($json.with_embedding.map(w => ({ ...w, embedding: '[' + w.embedding.join(',') + ']' }))), $json.fuente] }}"
+        }
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [2640, 100],
+      "id": "acs-upsert",
+      "name": "Upsert Materials",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE catalog_sync_log\nSET status = $5::text,\n    productos_nuevos = $2::int,\n    productos_actualizados = $3::int,\n    errores = $4::jsonb,\n    duracion_segundos = $6::int\nWHERE id = $1::uuid\nRETURNING id, fuente, productos_nuevos, productos_actualizados, status, duracion_segundos",
+        "options": {
+          "queryReplacement": "={{ [\n  $('Attach Embeddings').first().json.sync_log_id,\n  parseInt($json.nuevos || 0),\n  parseInt($json.actualizados || 0),\n  JSON.stringify({ validation_errors: $('Normalize + Validate Items').first().json.validation_errors, embedding_tokens: $('Attach Embeddings').first().json.embedding_tokens }),\n  ($('Normalize + Validate Items').first().json.validation_errors.length > 0 ? 'partial' : 'success'),\n  Math.floor((Date.now() - $('Decode JWT + Validate').first().json.started_at_ms) / 1000)\n] }}"
+        }
+      },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [2880, 100],
+      "id": "acs-finish-sync-log",
+      "name": "Finish Sync Log",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({\n  data: {\n    sync_log_id: $json.id,\n    fuente: $json.fuente,\n    productos_nuevos: $json.productos_nuevos,\n    productos_actualizados: $json.productos_actualizados,\n    status: $json.status,\n    duracion_segundos: $json.duracion_segundos,\n    items_received: $('Decode JWT + Validate').first().json.items_count,\n    items_validados: $('Normalize + Validate Items').first().json.normalized_count,\n    validation_errors: $('Normalize + Validate Items').first().json.validation_errors\n  },\n  meta: {\n    request_id: $('Decode JWT + Validate').first().json.request_id,\n    embedding_model: $('Attach Embeddings').first().json.embedding_model,\n    embedding_tokens: $('Attach Embeddings').first().json.embedding_tokens,\n    timestamp: new Date().toISOString()\n  }\n}) }}",
+        "options": { "responseCode": 201, "responseHeaders": { "entries": [{ "name": "Cache-Control", "value": "no-cache" }] } }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [3120, 100],
+      "id": "acs-respond-201",
+      "name": "Respond 201"
+    }
+  ],
+  "connections": {
+    "POST /catalog-sync/run":   { "main": [[{ "node": "Decode JWT + Validate", "type": "main", "index": 0 }]] },
+    "Decode JWT + Validate":    { "main": [[{ "node": "Auth+Payload OK?",      "type": "main", "index": 0 }]] },
+    "Auth+Payload OK?":         { "main": [
+      [{ "node": "Respond Error",       "type": "main", "index": 0 }],
+      [{ "node": "Set Session Context", "type": "main", "index": 0 }]
+    ]},
+    "Set Session Context":      { "main": [[{ "node": "Start Sync Log",         "type": "main", "index": 0 }]] },
+    "Start Sync Log":           { "main": [[{ "node": "Normalize + Validate Items", "type": "main", "index": 0 }]] },
+    "Normalize + Validate Items":{ "main": [[{ "node": "Todos Invalidos?",      "type": "main", "index": 0 }]] },
+    "Todos Invalidos?":         { "main": [
+      [{ "node": "Log All Invalid",     "type": "main", "index": 0 }],
+      [{ "node": "Generate Embeddings (batch)", "type": "main", "index": 0 }]
+    ]},
+    "Log All Invalid":          { "main": [[{ "node": "Respond 422 All Invalid","type": "main", "index": 0 }]] },
+    "Generate Embeddings (batch)":{ "main": [[{ "node": "Attach Embeddings",   "type": "main", "index": 0 }]] },
+    "Attach Embeddings":        { "main": [[{ "node": "Embeddings OK?",        "type": "main", "index": 0 }]] },
+    "Embeddings OK?":           { "main": [
+      [{ "node": "Log Embeddings Error","type": "main", "index": 0 }],
+      [{ "node": "Upsert Materials",    "type": "main", "index": 0 }]
+    ]},
+    "Log Embeddings Error":     { "main": [[{ "node": "Respond 502",           "type": "main", "index": 0 }]] },
+    "Upsert Materials":         { "main": [[{ "node": "Finish Sync Log",       "type": "main", "index": 0 }]] },
+    "Finish Sync Log":          { "main": [[{ "node": "Respond 201",           "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {}
+}

@@ -1,0 +1,685 @@
+{
+  "name": "agent_client_translator",
+  "_description": "Agente Traductor de Decisiones del Cliente (B72-fase-D.2). Convierte un texto natural del cliente (email/chat/transcripcion de reunion) en una decision formal estructurada con tipo, impacto economico, impacto plazo y deteccion de contradicciones con decisiones previas. Anti scope-creep: cada decision queda registrada inmutable en client_decisions con timestamp + metodo_confirmacion para evitar 'pero yo nunca dije eso' en obra.",
+  "_status": "B72-fase-D.2 traductor decisiones cliente",
+  "_n8n_id": "Nr3Bk2x73bXrq98u",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "api/v1/agents/client-translator/record-decision",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ],
+      "id": "act-webhook",
+      "name": "POST /client-translator/record-decision",
+      "webhookId": "feedface-1234-4abc-9def-cafebabe0001",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const auth = $input.first().json.headers?.authorization || '';\nif (!auth.startsWith('Bearer ')) return [{ json: { _error: 'AUTH_MISSING_TOKEN', _status: 401 } }];\nconst token = auth.slice(7);\ntry {\n  const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'));\n  if (!payload.sub) throw new Error('No sub');\n  if (payload.exp && Date.now()/1000 > payload.exp) throw new Error('JWT expired');\n  if (!payload.tenant_id) throw new Error('No tenant_id');\n  const body = $input.first().json.body || {};\n  const projectId = (body.project_id || '').trim();\n  if (!projectId) return [{ json: { _error: 'VALIDATION_FAILED', _status: 400, _details: 'project_id requerido' } }];\n  const clientText = (body.client_text || '').trim();\n  if (!clientText) return [{ json: { _error: 'VALIDATION_FAILED', _status: 400, _details: 'client_text requerido (lo que dijo el cliente: email, chat, transcripcion reunion)' } }];\n  if (clientText.length > 4000) return [{ json: { _error: 'TEXT_TOO_LONG', _status: 413, _details: 'client_text max 4000 chars (recibidos ' + clientText.length + '). Trocear en fragmentos.' } }];\n  const validMetodos = ['email','firma_digital','reunion','chat','otro'];\n  const metodo = validMetodos.includes(body.metodo_confirmacion) ? body.metodo_confirmacion : 'chat';\n  return [{ json: {\n    user_id: payload.sub,\n    tenant_id: payload.tenant_id,\n    role: payload.role || 'architect',\n    project_id: projectId,\n    client_text: clientText,\n    contexto_propuesta: body.contexto_propuesta || null,\n    metodo_confirmacion: metodo,\n    evidencia_url: body.evidencia_url || null,\n    request_id: 'req_' + Math.random().toString(36).slice(2, 10)\n  }}];\n} catch (e) {\n  return [{ json: { _error: 'AUTH_INVALID_TOKEN', _status: 401, _details: e.message } }];\n}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        300
+      ],
+      "id": "act-decode",
+      "name": "Decode JWT + Validate"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "act-c1",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        720,
+        300
+      ],
+      "id": "act-if-auth",
+      "name": "Auth+Payload OK?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details || $json._error } }) }}",
+        "options": {
+          "responseCode": "={{ $json._status || 401 }}"
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        960,
+        460
+      ],
+      "id": "act-respond-error",
+      "name": "Respond Error"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT set_session_context($1::uuid, $2::uuid, $3)",
+        "options": {
+          "queryReplacement": "={{ [$json.user_id, $json.tenant_id, $json.role] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        960,
+        200
+      ],
+      "id": "act-set-session",
+      "name": "Set Session Context"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, name, project_type, location_city, property_area_m2, budget_target, current_phase FROM projects WHERE id = $1::uuid LIMIT 1",
+        "options": {
+          "queryReplacement": "={{ [$('Decode JWT + Validate').first().json.project_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1200,
+        200
+      ],
+      "id": "act-load-project",
+      "name": "Load Project",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, summary, client_needs, constraints, status FROM briefings WHERE project_id = $1::uuid ORDER BY created_at DESC LIMIT 1",
+        "options": {
+          "queryReplacement": "={{ [$('Decode JWT + Validate').first().json.project_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1440,
+        200
+      ],
+      "id": "act-load-briefing",
+      "name": "Load Briefing",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, decision_tipo, decision_descripcion, impacto_economico, impacto_plazo_dias, fecha_decision, confirmada_cliente FROM client_decisions WHERE project_id = $1::uuid ORDER BY fecha_decision DESC LIMIT 20",
+        "options": {
+          "queryReplacement": "={{ [$('Decode JWT + Validate').first().json.project_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1680,
+        200
+      ],
+      "id": "act-load-previous",
+      "name": "Load Previous Decisions",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, version, total_estimated, budget_target, deviation_status FROM cost_estimates WHERE project_id = $1::uuid ORDER BY version DESC LIMIT 1",
+        "options": {
+          "queryReplacement": "={{ [$('Decode JWT + Validate').first().json.project_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1920,
+        200
+      ],
+      "id": "act-load-cost",
+      "name": "Load Cost Estimate",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const sess = $('Decode JWT + Validate').first().json;\nconst projectRows = $('Load Project').all().map(i => i.json).filter(p => p && p.id);\nif (projectRows.length === 0) return [{ json: { _error: 'PROJECT_NOT_FOUND', _status: 404, _details: 'project_id no existe', request_id: sess.request_id }}];\nconst project = projectRows[0];\nconst briefingRows = $('Load Briefing').all().map(i => i.json).filter(b => b && b.id);\nconst prevDecisionRows = $('Load Previous Decisions').all().map(i => i.json).filter(d => d && d.id);\nconst costRows = $input.all().map(i => i.json).filter(c => c && c.id);\nconst briefing = briefingRows[0] || null;\nconst cost = costRows[0] || null;\n\nconst prevDecisionsText = prevDecisionRows.length\n  ? prevDecisionRows.map(function(d) { return '- [' + (d.decision_tipo || 'otro') + ' / ' + (d.confirmada_cliente ? 'confirmada' : 'pendiente') + '] ' + (d.decision_descripcion || '').slice(0, 200) + ' (impacto ' + (d.impacto_economico || 0) + ' EUR, ' + (d.impacto_plazo_dias || 0) + ' dias, ' + d.fecha_decision + ')'; }).join('\\n')\n  : '(sin decisiones previas registradas)';\n\nconst contextoPropuesta = sess.contexto_propuesta\n  ? (typeof sess.contexto_propuesta === 'string' ? sess.contexto_propuesta : JSON.stringify(sess.contexto_propuesta))\n  : '(no aportado)';\n\nconst systemPrompt = 'Eres agent_client_translator. Tu rol: convertir comunicacion natural del cliente (email/chat/transcripcion reunion) en una DECISION FORMAL ESTRUCTURADA. Anti scope-creep. Cada decision es inmutable - se registra con timestamp.\\n\\nREGLAS DE ORO:\\n- Si el texto NO contiene una decision clara (cliente solo pregunta o conversa), devuelve has_decision=false con razon.\\n- Si SI hay decision, identifica: decision_tipo (CHECK constraint), descripcion concisa, impacto economico estimado en EUR, impacto plazo en dias, contradicciones con decisiones previas listadas.\\n- decision_tipo valido: distribucion, material, presupuesto, plazo, acabados, equipamiento, otro.\\n- IMPACTO ECONOMICO: si el cliente pide algo que afecta presupuesto (ej. \"quiero porcelanico premium en vez del medio\"), estima el delta en EUR (positivo = sube coste).\\n- IMPACTO PLAZO: dias adicionales si la decision retrasa obra (ej. \"esperemos a que llegue el material X\" -> +N dias).\\n- CONTRADICCIONES: si la nueva decision choca con una previa confirmada, listala con id + razon.\\n- DEVUELVE SOLO JSON valido.';\n\nconst userPrompt = 'PROYECTO: ' + project.name + ' (' + project.project_type + ', ' + (project.property_area_m2 || '?') + ' m2, budget ' + (project.budget_target || '?') + ' EUR, fase ' + project.current_phase + ')\\n\\n' +\n  'BRIEFING: ' + (briefing && briefing.summary ? briefing.summary.slice(0, 500) : '(sin briefing)') + '\\n\\n' +\n  'COST ESTIMATE: ' + (cost ? 'v' + cost.version + ', total ' + cost.total_estimated + ' EUR, deviation ' + cost.deviation_status : '(sin cost estimate)') + '\\n\\n' +\n  'CONTEXTO QUE SE PROPUSO AL CLIENTE: ' + contextoPropuesta + '\\n\\n' +\n  'DECISIONES PREVIAS REGISTRADAS (' + prevDecisionRows.length + '):\\n' + prevDecisionsText + '\\n\\n' +\n  'TEXTO DEL CLIENTE (' + sess.metodo_confirmacion + '):\\n' + sess.client_text + '\\n\\n' +\n  'TAREA: analiza si hay decision, extraela formalmente, calcula impactos, detecta contradicciones.\\n\\n' +\n  'OUTPUT JSON estricto:\\n' +\n  '{ \"has_decision\": true, \"razon_sin_decision\": null, \"decision_tipo\": \"material\", \"decision_descripcion\": \"...\", \"contexto_propuesta\": { ... } | null, \"impacto_economico\": 1500, \"impacto_plazo_dias\": 7, \"contradicciones\": [ { \"decision_id\": \"uuid\", \"razon\": \"...\" } ], \"confidence\": 0.85, \"resumen_para_arquitecto\": \"...\" }';\n\nreturn [{ json: {\n  user_id: sess.user_id,\n  tenant_id: sess.tenant_id,\n  project_id: project.id,\n  request_id: sess.request_id,\n  client_text: sess.client_text,\n  contexto_propuesta: sess.contexto_propuesta,\n  metodo_confirmacion: sess.metodo_confirmacion,\n  evidencia_url: sess.evidencia_url,\n  llm_payload: {\n    model: 'gpt-4o',\n    messages: [\n      { role: 'system', content: systemPrompt },\n      { role: 'user', content: userPrompt }\n    ],\n    temperature: 0.1,\n    max_tokens: 1500,\n    response_format: { type: 'json_object' }\n  }\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2160,
+        200
+      ],
+      "id": "act-build-prompt",
+      "name": "Build Prompt"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "act-c2",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2400,
+        200
+      ],
+      "id": "act-if-prompt",
+      "name": "Prompt OK?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details } }) }}",
+        "options": {
+          "responseCode": "={{ $json._status || 404 }}"
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        2640,
+        360
+      ],
+      "id": "act-respond-404",
+      "name": "Respond 404"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO agent_executions (project_id, agent_name, status, started_at, input, metadata) VALUES ($1::uuid, 'agent_client_translator', 'running', now(), $2::jsonb, $3::jsonb) RETURNING id",
+        "options": {
+          "queryReplacement": "={{ [$('Build Prompt').first().json.project_id, JSON.stringify({ project_id: $('Build Prompt').first().json.project_id, client_text_len: $('Build Prompt').first().json.client_text.length, metodo_confirmacion: $('Build Prompt').first().json.metodo_confirmacion }), JSON.stringify({ request_id: $('Build Prompt').first().json.request_id, source: 'api_client_translator' })] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2640,
+        100
+      ],
+      "id": "act-start-exec",
+      "name": "Start Execution",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($('Build Prompt').first().json.llm_payload) }}",
+        "options": {
+          "timeout": 90000
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "gE1jXO133xEHS5JJ",
+          "name": "orquestador ArquiAI"
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2880,
+        100
+      ],
+      "id": "act-llm",
+      "name": "Call LLM"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const llm = $input.first()?.json;\nconst built = $('Build Prompt').first().json;\nconst raw = llm?.choices?.[0]?.message?.content || '{}';\nlet parsed;\ntry { parsed = JSON.parse(raw); } catch (e) {\n  return [{ json: { _error: 'LLM_INVALID_JSON', _status: 502, _details: e.message, _raw: raw.slice(0, 500), request_id: built.request_id }}];\n}\nconst usage = llm?.usage || {};\nconst validTipos = ['distribucion','material','presupuesto','plazo','acabados','equipamiento','otro'];\nconst tipo = validTipos.includes(parsed.decision_tipo) ? parsed.decision_tipo : 'otro';\nreturn [{ json: {\n  user_id: built.user_id,\n  tenant_id: built.tenant_id,\n  project_id: built.project_id,\n  request_id: built.request_id,\n  client_text: built.client_text,\n  contexto_propuesta: built.contexto_propuesta,\n  metodo_confirmacion: built.metodo_confirmacion,\n  evidencia_url: built.evidencia_url,\n  output: {\n    has_decision: !!parsed.has_decision,\n    razon_sin_decision: parsed.razon_sin_decision || null,\n    decision_tipo: tipo,\n    decision_descripcion: parsed.decision_descripcion || null,\n    contexto_propuesta: parsed.contexto_propuesta || built.contexto_propuesta || null,\n    impacto_economico: typeof parsed.impacto_economico === 'number' ? parsed.impacto_economico : null,\n    impacto_plazo_dias: typeof parsed.impacto_plazo_dias === 'number' ? parsed.impacto_plazo_dias : null,\n    contradicciones: Array.isArray(parsed.contradicciones) ? parsed.contradicciones : [],\n    confidence: typeof parsed.confidence === 'number' ? parsed.confidence : null,\n    resumen_para_arquitecto: parsed.resumen_para_arquitecto || null\n  },\n  summary: {\n    has_decision: !!parsed.has_decision,\n    decision_tipo: tipo,\n    impacto_economico: typeof parsed.impacto_economico === 'number' ? parsed.impacto_economico : null,\n    contradicciones_count: (Array.isArray(parsed.contradicciones) ? parsed.contradicciones.length : 0)\n  },\n  model: llm?.model || 'gpt-4o',\n  tokens_in: usage.prompt_tokens || 0,\n  tokens_out: usage.completion_tokens || 0\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3120,
+        100
+      ],
+      "id": "act-format",
+      "name": "Format Response"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "act-c3",
+              "leftValue": "={{ $json.output.has_decision }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3360,
+        100
+      ],
+      "id": "act-if-decision",
+      "name": "Has Decision?"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO client_decisions (project_id, tenant_id, decision_tipo, decision_descripcion, contexto_propuesta, impacto_economico, impacto_plazo_dias, contradicciones, confirmada_cliente, metodo_confirmacion, evidencia_url)\nVALUES ($1::uuid, $2::uuid, $3::text, $4::text, $5::jsonb, $6::numeric, $7::int, $8::jsonb, false, $9::text, $10::text)\nRETURNING id, fecha_decision",
+        "options": {
+          "queryReplacement": "={{ [\n  $json.project_id,\n  $json.tenant_id,\n  $json.output.decision_tipo,\n  $json.output.decision_descripcion,\n  JSON.stringify($json.output.contexto_propuesta),\n  $json.output.impacto_economico,\n  $json.output.impacto_plazo_dias,\n  JSON.stringify($json.output.contradicciones || []),\n  $json.metodo_confirmacion,\n  $json.evidencia_url\n] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        3600,
+        0
+      ],
+      "id": "act-insert-decision",
+      "name": "Insert Decision",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE agent_executions SET status = 'completed', finished_at = now(), output = $2::jsonb, metadata = COALESCE(metadata, '{}'::jsonb) || $3::jsonb WHERE id = $1::uuid",
+        "options": {
+          "queryReplacement": "={{ [\n  $('Start Execution').first().json.id,\n  JSON.stringify({ has_decision: $('Format Response').first().json.summary.has_decision, decision_id: ($json.id || null), decision_tipo: $('Format Response').first().json.summary.decision_tipo, impacto_economico: $('Format Response').first().json.summary.impacto_economico, contradicciones_count: $('Format Response').first().json.summary.contradicciones_count }),\n  JSON.stringify({ model: $('Format Response').first().json.model, tokens_in: $('Format Response').first().json.tokens_in, tokens_out: $('Format Response').first().json.tokens_out, eu_ai_act: 'asistencia formalizacion decisiones, supervisada por arquitecto' })\n] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        3840,
+        100
+      ],
+      "id": "act-finish-exec",
+      "name": "Finish Execution",
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "responseCode": 201,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Cache-Control",
+                "value": "no-cache"
+              }
+            ]
+          }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        4200,
+        100
+      ],
+      "id": "act-respond-201",
+      "name": "Respond 201"
+    },
+    {
+      "id": "b747bc06-58f7-4fbb-89d6-76d6f16ca72f",
+      "name": "Build Final Body",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3960,
+        100
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const fmt = $('Format Response').first().json;\nconst inserted = $('Insert Decision').isExecuted ? ($('Insert Decision').first()?.json || null) : null;\nreturn [{ json: {\n  data: {\n    project_id: fmt.project_id,\n    decision_id: inserted ? inserted.id : null,\n    fecha_decision: inserted ? inserted.fecha_decision : null,\n    output: fmt.output,\n    summary: fmt.summary\n  },\n  meta: {\n    request_id: fmt.request_id,\n    model: fmt.model,\n    tokens_in: fmt.tokens_in,\n    tokens_out: fmt.tokens_out,\n    eu_ai_act: 'formalizacion no vinculante; el arquitecto valida antes de confirmada_cliente=true'\n  }\n}}];"
+      }
+    }
+  ],
+  "connections": {
+    "POST /client-translator/record-decision": {
+      "main": [
+        [
+          {
+            "node": "Decode JWT + Validate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decode JWT + Validate": {
+      "main": [
+        [
+          {
+            "node": "Auth+Payload OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Auth+Payload OK?": {
+      "main": [
+        [
+          {
+            "node": "Respond Error",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Set Session Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Session Context": {
+      "main": [
+        [
+          {
+            "node": "Load Project",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Project": {
+      "main": [
+        [
+          {
+            "node": "Load Briefing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Briefing": {
+      "main": [
+        [
+          {
+            "node": "Load Previous Decisions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Previous Decisions": {
+      "main": [
+        [
+          {
+            "node": "Load Cost Estimate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Cost Estimate": {
+      "main": [
+        [
+          {
+            "node": "Build Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Prompt": {
+      "main": [
+        [
+          {
+            "node": "Prompt OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prompt OK?": {
+      "main": [
+        [
+          {
+            "node": "Respond 404",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Start Execution",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Start Execution": {
+      "main": [
+        [
+          {
+            "node": "Call LLM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call LLM": {
+      "main": [
+        [
+          {
+            "node": "Format Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Response": {
+      "main": [
+        [
+          {
+            "node": "Has Decision?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Decision?": {
+      "main": [
+        [
+          {
+            "node": "Insert Decision",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Finish Execution",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Decision": {
+      "main": [
+        [
+          {
+            "node": "Finish Execution",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Finish Execution": {
+      "main": [
+        [
+          {
+            "node": "Build Final Body",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Final Body": {
+      "main": [
+        [
+          {
+            "node": "Respond 201",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": {}
+}

@@ -1,0 +1,606 @@
+{
+  "name": "agent_decision_engine",
+  "_description": "agent_decision_engine (B72-fase-D motor decisiones)",
+  "_status": "B72-fase-D smoke E2E verde",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "api/v1/agents/decision-engine/evaluate",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ],
+      "id": "ade-webhook",
+      "name": "POST /decision-engine/evaluate",
+      "webhookId": "deadbeef-cafe-4abc-9def-1234567890ab",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const auth = $input.first().json.headers?.authorization || '';\nif (!auth.startsWith('Bearer ')) return [{ json: { _error: 'AUTH_MISSING_TOKEN', _status: 401 } }];\nconst token = auth.slice(7);\ntry {\n  const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'));\n  if (!payload.sub) throw new Error('No sub');\n  if (payload.exp && Date.now()/1000 > payload.exp) throw new Error('JWT expired');\n  if (!payload.tenant_id) throw new Error('No tenant_id');\n  const body = $input.first().json.body || {};\n  const projectId = (body.project_id || '').trim();\n  if (!projectId) return [{ json: { _error: 'VALIDATION_FAILED', _status: 400, _details: 'project_id requerido' } }];\n  if (!body.decision_context || typeof body.decision_context !== 'string') return [{ json: { _error: 'VALIDATION_FAILED', _status: 400, _details: 'decision_context requerido (string explicando que se debe decidir)' } }];\n  if (!Array.isArray(body.options) || body.options.length < 2) return [{ json: { _error: 'VALIDATION_FAILED', _status: 400, _details: 'options requerido (array con al menos 2 opciones a comparar)' } }];\n  if (body.options.length > 8) return [{ json: { _error: 'TOO_MANY_OPTIONS', _status: 413, _details: 'max 8 opciones a evaluar (recibidas ' + body.options.length + ')' } }];\n  const validOrigen = ['arquitecto','cliente','sistema','agente'];\n  const decisionOrigen = validOrigen.includes(body.decision_origen) ? body.decision_origen : 'arquitecto';\n  return [{ json: {\n    user_id: payload.sub,\n    tenant_id: payload.tenant_id,\n    role: payload.role || 'architect',\n    project_id: projectId,\n    decision_context: body.decision_context,\n    options: body.options,\n    criterios_prioritarios: Array.isArray(body.criterios_prioritarios) ? body.criterios_prioritarios : [],\n    decision_origen: decisionOrigen,\n    request_id: 'req_' + Math.random().toString(36).slice(2, 10)\n  }}];\n} catch (e) {\n  return [{ json: { _error: 'AUTH_INVALID_TOKEN', _status: 401, _details: e.message } }];\n}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        300
+      ],
+      "id": "ade-decode",
+      "name": "Decode JWT + Validate"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "ade-c1",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        720,
+        300
+      ],
+      "id": "ade-if-auth",
+      "name": "Auth+Payload OK?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details || $json._error } }) }}",
+        "options": {
+          "responseCode": "={{ $json._status || 401 }}"
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        960,
+        460
+      ],
+      "id": "ade-respond-error",
+      "name": "Respond Error"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT set_session_context($1::uuid, $2::uuid, $3)",
+        "options": {
+          "queryReplacement": "={{ [$json.user_id, $json.tenant_id, $json.role] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        960,
+        200
+      ],
+      "id": "ade-set-session",
+      "name": "Set Session Context"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, name, project_type, location_province, location_city, property_type, property_area_m2, budget_target, urgency, current_phase, metadata\nFROM projects WHERE id = $1::uuid LIMIT 1",
+        "options": {
+          "queryReplacement": "={{ [$('Decode JWT + Validate').first().json.project_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1200,
+        200
+      ],
+      "id": "ade-load-project",
+      "name": "Load Project",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, summary, constraints, client_needs FROM briefings WHERE project_id = $1::uuid AND status = 'approved' ORDER BY created_at DESC LIMIT 1",
+        "options": {
+          "queryReplacement": "={{ [$('Decode JWT + Validate').first().json.project_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1440,
+        200
+      ],
+      "id": "ade-load-briefing",
+      "name": "Load Briefing",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, version, total_estimated, budget_target, deviation_status FROM cost_estimates WHERE project_id = $1::uuid ORDER BY version DESC LIMIT 1",
+        "options": {
+          "queryReplacement": "={{ [$('Decode JWT + Validate').first().json.project_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1680,
+        200
+      ],
+      "id": "ade-load-costs",
+      "name": "Load Cost Estimate",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT directiva, contexto, prioridad, categoria FROM architect_directives WHERE activa = true ORDER BY prioridad DESC LIMIT 15",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1920,
+        200
+      ],
+      "id": "ade-load-directives",
+      "name": "Load Directives",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const sess = $('Decode JWT + Validate').first().json;\nconst projectRows = $('Load Project').all().map(i => i.json).filter(p => p && p.id);\nif (projectRows.length === 0) return [{ json: { _error: 'PROJECT_NOT_FOUND', _status: 404, _details: 'project_id no existe', request_id: sess.request_id }}];\nconst project = projectRows[0];\nconst briefingRows = $('Load Briefing').all().map(i => i.json).filter(b => b && b.id);\nconst costRows = $('Load Cost Estimate').all().map(i => i.json).filter(c => c && c.id);\nconst directiveRows = $input.all().map(i => i.json).filter(d => d && d.directiva);\nconst briefing = briefingRows[0] || null;\nconst cost = costRows[0] || null;\n\nconst optionsDescriptions = sess.options.map(function(o, i) {\n  return (i+1) + '. ' + (o.name || o.id || 'opt_' + i) + ': ' + (o.description || '(sin descripcion)');\n}).join('\\n');\n\nconst directivesText = directiveRows.length\n  ? directiveRows.map(function(d) { return '- (' + d.categoria + ', prio ' + d.prioridad + ') ' + d.directiva + (d.contexto ? ' [' + d.contexto + ']' : ''); }).join('\\n')\n  : '(sin directivas activas)';\n\nconst criteriosTexto = sess.criterios_prioritarios.length\n  ? sess.criterios_prioritarios.join(', ')\n  : 'coste, calidad, plazo, normativa, eficiencia_energetica';\n\nconst systemPrompt = 'Eres agent_decision_engine, motor de decisiones del estudio. Tu rol: evaluar opciones presentadas con criterios objetivos y recomendar la mejor opcion, SIN tomar la decision final (el humano firma).\\n\\nREGLAS DE ORO:\\n- Evalua cada opcion contra TODOS los criterios. Da score 0-100 por criterio y total ponderado.\\n- Prioriza los criterios que el caller marca como prioritarios.\\n- Estima impacto economico (EUR), normativo (texto: cumple/no cumple/condicional) y energetico (texto: clase A/B/C/D segun aplique, o impacto kWh/m2 estimado).\\n- Justificacion clara en espanol arquitecto, sin tecnicismos legales.\\n- Si una opcion tiene un riesgo critico (incumple normativa, supera 30% del presupuesto, etc.) MARCALO.\\n- DEVUELVE SOLO JSON valido.';\n\nconst userPrompt = 'CONTEXTO DE DECISION: ' + sess.decision_context + '\\n\\nPROYECTO: ' + project.name + ' (' + project.project_type + ', ' + (project.property_area_m2 || '?') + ' m2, budget ' + (project.budget_target || '?') + ' EUR)\\n' +\n  'Ubicacion: ' + (project.location_city || '?') + ', ' + (project.location_province || '?') + '\\n' +\n  'Fase actual: ' + project.current_phase + '\\n\\n' +\n  'BRIEFING: ' + (briefing && briefing.summary ? briefing.summary.slice(0, 500) : '(sin briefing aprobado)') + '\\n' +\n  'Constraints: ' + JSON.stringify(briefing && briefing.constraints ? briefing.constraints : []) + '\\n\\n' +\n  'COST ESTIMATE: ' + (cost ? 'v' + cost.version + ', total ' + cost.total_estimated + ' EUR, deviation ' + cost.deviation_status : '(sin cost estimate)') + '\\n\\n' +\n  'OPCIONES A EVALUAR (' + sess.options.length + '):\\n' + optionsDescriptions + '\\n\\n' +\n  'CRITERIOS PRIORITARIOS: ' + criteriosTexto + '\\n\\n' +\n  'DIRECTIVAS DEL ESTUDIO:\\n' + directivesText + '\\n\\n' +\n  'TAREA: evalua cada opcion contra los criterios y devuelve recomendacion.\\n\\n' +\n  'OUTPUT JSON (estricto, SOLO el JSON):\\n' +\n  '{ \"options_evaluation\": [ { \"id\": \"opt_a\", \"name\": \"...\", \"scores\": { \"coste\": 80, \"normativa\": 100, \"eficiencia_energetica\": 65 }, \"score_total\": 81, \"impacto_economico_eur\": 12500, \"impacto_normativo\": \"cumple CTE HE-1\", \"impacto_energetico\": \"clase B\", \"pros\": [\"...\"], \"cons\": [\"...\"], \"risk_flags\": [] } ], \"recomendacion\": { \"opcion_id\": \"opt_a\", \"justificacion\": \"...\", \"alternativa_secundaria\": \"opt_b\", \"confianza\": 0.85 }, \"criterios_aplicados\": [ { \"nombre\": \"coste\", \"peso\": 0.3 } ], \"notas_adicionales\": \"...\" }';\n\nreturn [{ json: {\n  user_id: sess.user_id,\n  tenant_id: sess.tenant_id,\n  project_id: project.id,\n  request_id: sess.request_id,\n  decision_context: sess.decision_context,\n  options_input: sess.options,\n  criterios_prioritarios: sess.criterios_prioritarios,\n  decision_origen: sess.decision_origen,\n  llm_payload: {\n    model: 'gpt-4o',\n    messages: [\n      { role: 'system', content: systemPrompt },\n      { role: 'user', content: userPrompt }\n    ],\n    temperature: 0.2,\n    max_tokens: 2500,\n    response_format: { type: 'json_object' }\n  }\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2160,
+        200
+      ],
+      "id": "ade-build-prompt",
+      "name": "Build Prompt"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "ade-c2",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2400,
+        200
+      ],
+      "id": "ade-if-prompt",
+      "name": "Prompt OK?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details } }) }}",
+        "options": {
+          "responseCode": "={{ $json._status || 404 }}"
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        2640,
+        360
+      ],
+      "id": "ade-respond-404",
+      "name": "Respond 404"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO agent_executions (project_id, agent_name, status, started_at, input, metadata)\nVALUES ($1::uuid, 'agent_decision_engine', 'running', now(), $2::jsonb, $3::jsonb) RETURNING id",
+        "options": {
+          "queryReplacement": "={{ [$('Build Prompt').first().json.project_id, JSON.stringify({ project_id: $('Build Prompt').first().json.project_id, decision_context: $('Build Prompt').first().json.decision_context, options_count: $('Build Prompt').first().json.options_input.length, decision_origen: $('Build Prompt').first().json.decision_origen }), JSON.stringify({ request_id: $('Build Prompt').first().json.request_id, source: 'api_decision_engine_evaluate' })] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2640,
+        100
+      ],
+      "id": "ade-start-exec",
+      "name": "Start Execution",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($('Build Prompt').first().json.llm_payload) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "gE1jXO133xEHS5JJ",
+          "name": "orquestador ArquiAI"
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2880,
+        100
+      ],
+      "id": "ade-llm",
+      "name": "Call LLM"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const llm = $input.first()?.json;\nconst built = $('Build Prompt').first().json;\nconst raw = llm?.choices?.[0]?.message?.content || '{}';\nlet parsed;\ntry { parsed = JSON.parse(raw); } catch (e) {\n  return [{ json: { _error: 'LLM_INVALID_JSON', _status: 502, _details: e.message, _raw: raw.slice(0, 500), request_id: built.request_id } }];\n}\nconst usage = llm?.usage || {};\nconst options = Array.isArray(parsed.options_evaluation) ? parsed.options_evaluation : [];\nconst recommendation = parsed.recomendacion || {};\nreturn [{ json: {\n  user_id: built.user_id,\n  tenant_id: built.tenant_id,\n  project_id: built.project_id,\n  request_id: built.request_id,\n  decision_context: built.decision_context,\n  options_input: built.options_input,\n  decision_origen: built.decision_origen,\n  output: {\n    options_evaluation: options,\n    recomendacion: recommendation,\n    criterios_aplicados: parsed.criterios_aplicados || [],\n    notas_adicionales: parsed.notas_adicionales || null\n  },\n  summary: {\n    options_evaluated: options.length,\n    recommended_option: recommendation.opcion_id || null,\n    confianza: recommendation.confianza || null\n  },\n  model: llm?.model || 'gpt-4o',\n  tokens_in: usage.prompt_tokens || 0,\n  tokens_out: usage.completion_tokens || 0\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3120,
+        100
+      ],
+      "id": "ade-format",
+      "name": "Format Response"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO decision_log (project_id, tenant_id, decision_origen, agente_recomendador, opciones_evaluadas, opcion_elegida, criterios_decision, justificacion, impacto_economico, impacto_normativo, impacto_energetico, decided_by)\nVALUES ($1::uuid, $2::uuid, $3::text, 'agent_decision_engine', $4::jsonb, $5::jsonb, $6::jsonb, $7::text, $8::numeric, $9::text, $10::text, $11::uuid)\nRETURNING id, decided_at",
+        "options": {
+          "queryReplacement": "={{ [\n  $json.project_id,\n  $json.tenant_id,\n  $json.decision_origen,\n  JSON.stringify($json.output.options_evaluation),\n  JSON.stringify($json.output.recomendacion),\n  JSON.stringify($json.output.criterios_aplicados),\n  $json.output.recomendacion.justificacion || null,\n  (function(){ const r = ($json.output.options_evaluation || []).find(function(o){return o.id === $json.output.recomendacion.opcion_id;}); return r && r.impacto_economico_eur ? r.impacto_economico_eur : null; })(),\n  (function(){ const r = ($json.output.options_evaluation || []).find(function(o){return o.id === $json.output.recomendacion.opcion_id;}); return r && r.impacto_normativo ? r.impacto_normativo : null; })(),\n  (function(){ const r = ($json.output.options_evaluation || []).find(function(o){return o.id === $json.output.recomendacion.opcion_id;}); return r && r.impacto_energetico ? r.impacto_energetico : null; })(),\n  $json.user_id\n] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        3360,
+        100
+      ],
+      "id": "ade-insert-decision",
+      "name": "Insert Decision Log",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE agent_executions SET status = 'completed', finished_at = now(), output = $2::jsonb, metadata = COALESCE(metadata, '{}'::jsonb) || $3::jsonb WHERE id = $1::uuid",
+        "options": {
+          "queryReplacement": "={{ [\n  $('Start Execution').first().json.id,\n  JSON.stringify({ decision_log_id: $json.id, recommended_option: $('Format Response').first().json.summary.recommended_option, confianza: $('Format Response').first().json.summary.confianza, options_evaluated: $('Format Response').first().json.summary.options_evaluated }),\n  JSON.stringify({ model: $('Format Response').first().json.model, tokens_in: $('Format Response').first().json.tokens_in, tokens_out: $('Format Response').first().json.tokens_out, eu_ai_act: 'recomendacion supervisada por humano (arquitecto/cliente firma)' })\n] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        3600,
+        100
+      ],
+      "id": "ade-finish-exec",
+      "name": "Finish Execution",
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ data: { project_id: $('Format Response').first().json.project_id, decision_log_id: $('Insert Decision Log').first().json.id, decided_at: $('Insert Decision Log').first().json.decided_at, decision_origen: $('Format Response').first().json.decision_origen, decision_context: $('Format Response').first().json.decision_context, output: $('Format Response').first().json.output, summary: $('Format Response').first().json.summary }, meta: { request_id: $('Format Response').first().json.request_id, model: $('Format Response').first().json.model, tokens_in: $('Format Response').first().json.tokens_in, tokens_out: $('Format Response').first().json.tokens_out, eu_ai_act: 'recomendacion no vinculante, decision final humana' } }) }}",
+        "options": {
+          "responseCode": 201,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Cache-Control",
+                "value": "no-cache"
+              }
+            ]
+          }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        3840,
+        100
+      ],
+      "id": "ade-respond-201",
+      "name": "Respond 201"
+    }
+  ],
+  "connections": {
+    "POST /decision-engine/evaluate": {
+      "main": [
+        [
+          {
+            "node": "Decode JWT + Validate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decode JWT + Validate": {
+      "main": [
+        [
+          {
+            "node": "Auth+Payload OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Auth+Payload OK?": {
+      "main": [
+        [
+          {
+            "node": "Respond Error",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Set Session Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Session Context": {
+      "main": [
+        [
+          {
+            "node": "Load Project",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Project": {
+      "main": [
+        [
+          {
+            "node": "Load Briefing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Briefing": {
+      "main": [
+        [
+          {
+            "node": "Load Cost Estimate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Cost Estimate": {
+      "main": [
+        [
+          {
+            "node": "Load Directives",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Directives": {
+      "main": [
+        [
+          {
+            "node": "Build Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Prompt": {
+      "main": [
+        [
+          {
+            "node": "Prompt OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prompt OK?": {
+      "main": [
+        [
+          {
+            "node": "Respond 404",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Start Execution",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Start Execution": {
+      "main": [
+        [
+          {
+            "node": "Call LLM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call LLM": {
+      "main": [
+        [
+          {
+            "node": "Format Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Response": {
+      "main": [
+        [
+          {
+            "node": "Insert Decision Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Decision Log": {
+      "main": [
+        [
+          {
+            "node": "Finish Execution",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Finish Execution": {
+      "main": [
+        [
+          {
+            "node": "Respond 201",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": {}
+}

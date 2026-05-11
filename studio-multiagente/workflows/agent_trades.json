@@ -1,0 +1,129 @@
+{
+  "name": "agent_trades",
+  "_description": "Agente de Oficios (B72-fase-C). Genera trade_requests (una por cada especialidad necesaria: albanileria, fontaneria, electricidad, carpinteria, climatizacion, pintura, etc.) a partir de design_option + cost_estimate. Patron running->completed.",
+  "_status": "B72-fase-C agente CORE",
+  "nodes": [
+    {
+      "parameters": { "httpMethod": "POST", "path": "api/v1/agents/trades/generate", "responseMode": "responseNode", "options": {} },
+      "type": "n8n-nodes-base.webhook", "typeVersion": 2, "position": [240, 300],
+      "id": "atr-webhook", "name": "POST /trades/generate",
+      "webhookId": "d3e4f5a6-b7c8-4d9e-0f1a-2b3c4d5e6f7a",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const auth = $input.first().json.headers?.authorization || '';\nif (!auth.startsWith('Bearer ')) return [{ json: { _error: 'AUTH_MISSING_TOKEN', _status: 401 } }];\nconst token = auth.slice(7);\ntry {\n  const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'));\n  if (!payload.sub) throw new Error('No sub');\n  if (payload.exp && Date.now()/1000 > payload.exp) throw new Error('JWT expired');\n  if (!payload.tenant_id) throw new Error('No tenant_id');\n  const body = $input.first().json.body || {};\n  const projectId = (body.project_id || '').trim();\n  if (!projectId) return [{ json: { _error: 'VALIDATION_FAILED', _status: 400, _details: 'project_id requerido' } }];\n  return [{ json: { user_id: payload.sub, tenant_id: payload.tenant_id, role: payload.role || 'architect', project_id: projectId, request_id: 'req_' + Math.random().toString(36).slice(2, 10) }}];\n} catch (e) { return [{ json: { _error: 'AUTH_INVALID_TOKEN', _status: 401, _details: e.message }}]; }"
+      },
+      "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [480, 300],
+      "id": "atr-decode", "name": "Decode JWT + Body"
+    },
+    {
+      "parameters": { "conditions": { "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict", "version": 2 }, "conditions": [{"id":"atr-c1","leftValue":"={{ $json._error }}","rightValue":"","operator":{"type":"string","operation":"exists","singleValue":true}}], "combinator": "and" } },
+      "type": "n8n-nodes-base.if", "typeVersion": 2.2, "position": [720, 300],
+      "id": "atr-if-auth", "name": "Auth OK?"
+    },
+    {
+      "parameters": { "respondWith": "json", "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details || $json._error } }) }}", "options": { "responseCode": "={{ $json._status || 401 }}" } },
+      "type": "n8n-nodes-base.respondToWebhook", "typeVersion": 1.1, "position": [960, 460],
+      "id": "atr-respond-error", "name": "Respond Error"
+    },
+    {
+      "parameters": { "operation": "executeQuery", "query": "SELECT set_session_context($1::uuid, $2::uuid, $3)", "options": { "queryReplacement": "={{ [$json.user_id, $json.tenant_id, $json.role] }}" } },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "type": "n8n-nodes-base.postgres", "typeVersion": 2.5, "position": [960, 200],
+      "id": "atr-set-session", "name": "Set Session Context"
+    },
+    {
+      "parameters": { "operation": "executeQuery", "query": "SELECT id, name, project_type, location_province, location_city, property_area_m2, urgency FROM projects WHERE id = $1::uuid LIMIT 1", "options": { "queryReplacement": "={{ [$('Decode JWT + Body').first().json.project_id] }}" } },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "type": "n8n-nodes-base.postgres", "typeVersion": 2.5, "position": [1200, 200],
+      "id": "atr-load-project", "name": "Load Project", "alwaysOutputData": true
+    },
+    {
+      "parameters": { "operation": "executeQuery", "query": "SELECT id, title, intervention_logic, rooms_layout FROM design_options WHERE project_id = $1::uuid AND status = 'selected' ORDER BY created_at DESC LIMIT 1", "options": { "queryReplacement": "={{ [$('Decode JWT + Body').first().json.project_id] }}" } },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "type": "n8n-nodes-base.postgres", "typeVersion": 2.5, "position": [1440, 200],
+      "id": "atr-load-design", "name": "Load Design", "alwaysOutputData": true
+    },
+    {
+      "parameters": { "operation": "executeQuery", "query": "SELECT id, version, total_estimated, breakdown FROM cost_estimates WHERE project_id = $1::uuid ORDER BY version DESC LIMIT 1", "options": { "queryReplacement": "={{ [$('Decode JWT + Body').first().json.project_id] }}" } },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "type": "n8n-nodes-base.postgres", "typeVersion": 2.5, "position": [1680, 200],
+      "id": "atr-load-costs", "name": "Load Cost Estimate", "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const sess = $('Decode JWT + Body').first().json;\nconst projectRows = $('Load Project').all().map(i => i.json).filter(p => p && p.id);\nconst designRows = $('Load Design').all().map(i => i.json).filter(d => d && d.id);\nconst costRows = $input.all().map(i => i.json).filter(c => c && c.id);\n\nif (projectRows.length === 0) return [{ json: { _error: 'PROJECT_NOT_FOUND', _status: 404, _details: 'project_id no existe', request_id: sess.request_id }}];\nif (designRows.length === 0) return [{ json: { _error: 'DESIGN_NOT_SELECTED', _status: 422, _details: 'No hay design_option seleccionada', request_id: sess.request_id }}];\n\nconst project = projectRows[0];\nconst design = designRows[0];\nconst cost = costRows[0] || null;\n\nconst systemPrompt = `Eres agent_trades, jefe de obra que prepara las solicitudes de presupuesto a gremios.\\n\\nESPECIALIDADES VALIDAS (trade_type): albanileria, fontaneria, electricidad, carpinteria, climatizacion, pintura, ceramica, otros.\\n\\nREGLAS:\\n- Genera UNA trade_request por especialidad NECESARIA segun el design + costes.\\n- Cada request con: trade_type, description (que tiene que hacer), expected_budget_eur (del breakdown del cost_estimate), quantity_units (m2, ud, ml, etc.), urgency (low/medium/high segun urgency del proyecto y dependencias).\\n- Si una especialidad no aplica al design, NO la incluyas.\\n- Orden recomendado por dependencias (albanileria primero, pintura ultimo).\\n- DEVUELVE SOLO JSON valido.`;\n\nconst userPrompt = `PROYECTO: ${project.name} (${project.project_type}, ${project.property_area_m2 ?? '?'} m2, urgencia ${project.urgency})\\nUbicacion: ${project.location_city}, ${project.location_province}\\n\\nDESIGN: ${design.title}\\nLogica: ${(design.intervention_logic || '').slice(0, 600)}\\nRooms layout: ${JSON.stringify(design.rooms_layout ?? [])}\\n\\nCOST ESTIMATE${cost ? ' (v' + cost.version + ', total ' + cost.total_estimated + ' EUR)' : ' (no disponible)'}:\\n${cost ? JSON.stringify(cost.breakdown ?? [], null, 2).slice(0, 1500) : 'sin breakdown'}\\n\\nTAREA:\\nGenera lista de trade_requests, una por cada especialidad necesaria.\\n\\nOUTPUT JSON:\\n{\\n  \\\"trade_requests\\\": [\\n    { \\\"trade_type\\\": \\\"albanileria\\\", \\\"description\\\": \\\"Demolicion + albanileria humeda 35 m2\\\", \\\"expected_budget_eur\\\": 4500, \\\"quantity_units\\\": { \\\"m2\\\": 35 }, \\\"urgency\\\": \\\"high\\\", \\\"dependencies\\\": [], \\\"order\\\": 1 }\\n  ],\\n  \\\"orden_recomendado\\\": [\\\"albanileria\\\", \\\"...\\\"],\\n  \\\"notes\\\": \\\"...\\\"\\n}`;\n\nreturn [{ json: { user_id: sess.user_id, tenant_id: sess.tenant_id, project_id: project.id, request_id: sess.request_id, design_id: design.id, cost_estimate_id: cost ? cost.id : null, llm_payload: { model: 'gpt-4o', messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }], temperature: 0.2, max_tokens: 2000, response_format: { type: 'json_object' }}}}];"
+      },
+      "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [1920, 200],
+      "id": "atr-build-prompt", "name": "Build Prompt"
+    },
+    {
+      "parameters": { "conditions": { "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict", "version": 2 }, "conditions": [{"id":"atr-c2","leftValue":"={{ $json._error }}","rightValue":"","operator":{"type":"string","operation":"exists","singleValue":true}}], "combinator": "and" }},
+      "type": "n8n-nodes-base.if", "typeVersion": 2.2, "position": [2160, 200],
+      "id": "atr-if-prompt", "name": "Prompt OK?"
+    },
+    {
+      "parameters": { "respondWith": "json", "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details } }) }}", "options": { "responseCode": "={{ $json._status || 422 }}" } },
+      "type": "n8n-nodes-base.respondToWebhook", "typeVersion": 1.1, "position": [2400, 360],
+      "id": "atr-respond-422", "name": "Respond 422"
+    },
+    {
+      "parameters": { "operation": "executeQuery", "query": "INSERT INTO agent_executions (project_id, agent_name, status, started_at, input, metadata)\nVALUES ($1::uuid, 'agent_trades', 'running', now(), $2::jsonb, $3::jsonb) RETURNING id", "options": { "queryReplacement": "={{ [$('Build Prompt').first().json.project_id, JSON.stringify({ project_id: $('Build Prompt').first().json.project_id, design_id: $('Build Prompt').first().json.design_id, cost_estimate_id: $('Build Prompt').first().json.cost_estimate_id }), JSON.stringify({ request_id: $('Build Prompt').first().json.request_id, source: 'api_trades_generate' })] }}" } },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "type": "n8n-nodes-base.postgres", "typeVersion": 2.5, "position": [2400, 100],
+      "id": "atr-start-exec", "name": "Start Execution", "alwaysOutputData": true
+    },
+    {
+      "parameters": { "method": "POST", "url": "https://api.openai.com/v1/chat/completions", "authentication": "predefinedCredentialType", "nodeCredentialType": "httpHeaderAuth", "sendHeaders": true, "headerParameters": { "parameters": [{ "name": "Content-Type", "value": "application/json" }] }, "sendBody": true, "specifyBody": "json", "jsonBody": "={{ JSON.stringify($('Build Prompt').first().json.llm_payload) }}", "options": { "timeout": 90000 } },
+      "credentials": { "httpHeaderAuth": { "id": "gE1jXO133xEHS5JJ", "name": "orquestador ArquiAI" } },
+      "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [2640, 100],
+      "id": "atr-llm", "name": "Call LLM"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const llm = $input.first()?.json;\nconst built = $('Build Prompt').first().json;\nconst raw = llm?.choices?.[0]?.message?.content || '{}';\nlet parsed;\ntry { parsed = JSON.parse(raw); } catch (e) {\n  return [{ json: { _error: 'LLM_INVALID_JSON', _status: 502, _details: e.message, _raw: raw.slice(0, 500), request_id: built.request_id }}];\n}\nconst usage = llm?.usage || {};\nconst trades = Array.isArray(parsed.trade_requests) ? parsed.trade_requests : [];\n// Validar trade_type\nconst validTypes = ['albanileria','fontaneria','electricidad','carpinteria','climatizacion','pintura','ceramica','otros'];\nconst filtered = trades.filter(t => validTypes.includes((t.trade_type || '').toLowerCase()));\nreturn [{ json: { user_id: built.user_id, tenant_id: built.tenant_id, project_id: built.project_id, request_id: built.request_id, trade_count: filtered.length, output: { trade_requests: filtered, orden_recomendado: parsed.orden_recomendado || [], notes: parsed.notes || null }, model: llm?.model || 'gpt-4o', tokens_in: usage.prompt_tokens || 0, tokens_out: usage.completion_tokens || 0 }}];"
+      },
+      "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [2880, 100],
+      "id": "atr-format", "name": "Format Response"
+    },
+    {
+      "parameters": { "operation": "executeQuery", "query": "INSERT INTO trade_requests (project_id, trade_type, description, quantity_units, expected_budget_eur, urgency, status)\nSELECT $1::uuid,\n       (req->>'trade_type')::text,\n       (req->>'description')::text,\n       (req->'quantity_units')::jsonb,\n       (req->>'expected_budget_eur')::numeric,\n       (req->>'urgency')::text,\n       'open'\nFROM jsonb_array_elements($2::jsonb) AS req\nRETURNING id, trade_type", "options": { "queryReplacement": "={{ [$json.project_id, JSON.stringify($json.output.trade_requests)] }}" } },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "type": "n8n-nodes-base.postgres", "typeVersion": 2.5, "position": [3120, 100],
+      "id": "atr-insert-requests", "name": "Insert Trade Requests", "alwaysOutputData": true
+    },
+    {
+      "parameters": { "operation": "executeQuery", "query": "UPDATE agent_executions SET status = 'completed', finished_at = now(), output = $2::jsonb, metadata = COALESCE(metadata, '{}'::jsonb) || $3::jsonb WHERE id = $1::uuid", "options": { "queryReplacement": "={{ [$('Start Execution').first().json.id, JSON.stringify({ trade_count: $('Format Response').first().json.trade_count, orden_recomendado: $('Format Response').first().json.output.orden_recomendado }), JSON.stringify({ model: $('Format Response').first().json.model, tokens_in: $('Format Response').first().json.tokens_in, tokens_out: $('Format Response').first().json.tokens_out, eu_ai_act: 'asistencia profesional supervisada' })] }}" } },
+      "credentials": { "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" } },
+      "type": "n8n-nodes-base.postgres", "typeVersion": 2.5, "position": [3360, 100],
+      "id": "atr-finish-exec", "name": "Finish Execution", "alwaysOutputData": true, "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": { "respondWith": "json", "responseBody": "={{ JSON.stringify({ data: { project_id: $('Format Response').first().json.project_id, trade_count: $('Format Response').first().json.trade_count, trade_requests: $('Format Response').first().json.output.trade_requests, orden_recomendado: $('Format Response').first().json.output.orden_recomendado, notes: $('Format Response').first().json.output.notes }, meta: { request_id: $('Format Response').first().json.request_id, model: $('Format Response').first().json.model, tokens_in: $('Format Response').first().json.tokens_in, tokens_out: $('Format Response').first().json.tokens_out, timestamp: new Date().toISOString() }}) }}", "options": { "responseCode": 201, "responseHeaders": { "entries": [{ "name": "Cache-Control", "value": "no-cache" }] } } },
+      "type": "n8n-nodes-base.respondToWebhook", "typeVersion": 1.1, "position": [3600, 100],
+      "id": "atr-respond-201", "name": "Respond 201"
+    }
+  ],
+  "connections": {
+    "POST /trades/generate": { "main": [[{ "node": "Decode JWT + Body", "type": "main", "index": 0 }]] },
+    "Decode JWT + Body": { "main": [[{ "node": "Auth OK?", "type": "main", "index": 0 }]] },
+    "Auth OK?": { "main": [[{ "node": "Respond Error", "type": "main", "index": 0 }],[{ "node": "Set Session Context", "type": "main", "index": 0 }]] },
+    "Set Session Context": { "main": [[{ "node": "Load Project", "type": "main", "index": 0 }]] },
+    "Load Project": { "main": [[{ "node": "Load Design", "type": "main", "index": 0 }]] },
+    "Load Design": { "main": [[{ "node": "Load Cost Estimate", "type": "main", "index": 0 }]] },
+    "Load Cost Estimate": { "main": [[{ "node": "Build Prompt", "type": "main", "index": 0 }]] },
+    "Build Prompt": { "main": [[{ "node": "Prompt OK?", "type": "main", "index": 0 }]] },
+    "Prompt OK?": { "main": [[{ "node": "Respond 422", "type": "main", "index": 0 }],[{ "node": "Start Execution", "type": "main", "index": 0 }]] },
+    "Start Execution": { "main": [[{ "node": "Call LLM", "type": "main", "index": 0 }]] },
+    "Call LLM": { "main": [[{ "node": "Format Response", "type": "main", "index": 0 }]] },
+    "Format Response": { "main": [[{ "node": "Insert Trade Requests", "type": "main", "index": 0 }]] },
+    "Insert Trade Requests": { "main": [[{ "node": "Finish Execution", "type": "main", "index": 0 }]] },
+    "Finish Execution": { "main": [[{ "node": "Respond 201", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {}
+}

@@ -1,0 +1,770 @@
+{
+  "name": "agent_municipal_precheck",
+  "_description": "Fase E.1 - Pre-check normativa municipal. Cruza el proyecto contra municipal_pgou_rules del municipio. Match deterministico (SQL filtrando por municipio + categoria + applies_to) + LLM categoriza aplicabilidad real segun project_context y resume al arquitecto. Output: lista de reglas aplicables, license recomendada, blockers, pitfalls, summary. Persiste en municipal_prechecks. Pre-fase: NO sustituye agent_regulatory, da una vision rapida ANTES de la inversion completa.",
+  "_status": "B72-fase-E.1 pre-check normativa Madrid",
+  "_n8n_id": "SNG5lECKgZz3Twgd",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "api/v1/agents/municipal-precheck/run",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ],
+      "id": "mp-webhook",
+      "name": "POST /municipal-precheck/run",
+      "webhookId": "feedface-7777-4abc-9def-cafebabe0007",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const auth = $input.first().json.headers?.authorization || '';\nif (!auth.startsWith('Bearer ')) return [{ json: { _error: 'AUTH_MISSING_TOKEN', _status: 401 } }];\nconst token = auth.slice(7);\ntry {\n  const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'));\n  if (!payload.sub) throw new Error('No sub');\n  if (payload.exp && Date.now()/1000 > payload.exp) throw new Error('JWT expired');\n  if (!payload.tenant_id) throw new Error('No tenant_id');\n  const body = $input.first().json.body || {};\n  const projectId = (body.project_id || '').trim();\n  if (!projectId) return [{ json: { _error: 'VALIDATION_FAILED', _status: 400, _details: 'project_id requerido' } }];\n  return [{ json: {\n    user_id: payload.sub,\n    tenant_id: payload.tenant_id,\n    role: payload.role || 'architect',\n    project_id: projectId,\n    additional_context: body.additional_context || null,\n    request_id: 'req_' + Math.random().toString(36).slice(2, 10)\n  }}];\n} catch (e) {\n  return [{ json: { _error: 'AUTH_INVALID_TOKEN', _status: 401, _details: e.message } }];\n}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        300
+      ],
+      "id": "mp-decode",
+      "name": "Decode JWT + Validate"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "mp-c1",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        720,
+        300
+      ],
+      "id": "mp-if-auth",
+      "name": "Auth OK?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details || $json._error } }) }}",
+        "options": {
+          "responseCode": "={{ $json._status || 401 }}"
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        960,
+        460
+      ],
+      "id": "mp-respond-auth",
+      "name": "Respond Auth Error"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT set_session_context($1::uuid, $2::uuid, $3)",
+        "options": {
+          "queryReplacement": "={{ [$json.user_id, $json.tenant_id, $json.role] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        960,
+        200
+      ],
+      "id": "mp-set-session",
+      "name": "Set Session Context"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, name, project_type, location_province, location_city, property_type, property_area_m2, budget_target, urgency, current_phase, metadata FROM projects WHERE id = $1::uuid LIMIT 1",
+        "options": {
+          "queryReplacement": "={{ [$('Decode JWT + Validate').first().json.project_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1200,
+        200
+      ],
+      "id": "mp-load-project",
+      "name": "Load Project",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT summary, client_needs, constraints FROM briefings WHERE project_id = $1::uuid ORDER BY created_at DESC LIMIT 1",
+        "options": {
+          "queryReplacement": "={{ [$('Decode JWT + Validate').first().json.project_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1440,
+        200
+      ],
+      "id": "mp-load-briefing",
+      "name": "Load Briefing",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const sess = $('Decode JWT + Validate').first().json;\nconst projectRows = $('Load Project').all().map(i => i.json).filter(p => p && p.id);\nif (projectRows.length === 0) return [{ json: { _error: 'PROJECT_NOT_FOUND', _status: 404, _details: 'project_id no existe', request_id: sess.request_id }}];\nconst project = projectRows[0];\nconst briefingRows = $input.all().map(i => i.json).filter(b => b && b.summary);\nconst briefing = briefingRows[0] || null;\n\nconst city = (project.location_city || '').toLowerCase().trim();\nconst knownSlugs = ['madrid','barcelona','valencia','sevilla','bilbao'];\nconst slug = knownSlugs.includes(city) ? city : null;\nif (!slug) {\n  return [{ json: { _warn: 'MUNICIPIO_NOT_IN_TOP5', _status: 200, _details: 'Municipio \"' + project.location_city + '\" no esta en el top 5 con reglas pre-cargadas. Use agent_regulatory para lookup live.', municipio_solicitado: project.location_city, top5_disponibles: knownSlugs, request_id: sess.request_id, project_id: project.id, tenant_id: sess.tenant_id }}];\n}\nreturn [{ json: {\n  user_id: sess.user_id,\n  tenant_id: sess.tenant_id,\n  project_id: project.id,\n  request_id: sess.request_id,\n  municipio_slug: slug,\n  project: {\n    id: project.id,\n    name: project.name,\n    project_type: project.project_type,\n    property_type: project.property_type,\n    property_area_m2: project.property_area_m2,\n    location_city: project.location_city,\n    current_phase: project.current_phase,\n    budget_target: project.budget_target,\n    metadata: project.metadata || {}\n  },\n  briefing: briefing ? { summary: briefing.summary, client_needs: briefing.client_needs, constraints: briefing.constraints } : null,\n  additional_context: sess.additional_context\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1680,
+        200
+      ],
+      "id": "mp-resolve-muni",
+      "name": "Resolve Municipio"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "mp-c2a",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "mp-c2b",
+              "leftValue": "={{ $json._warn }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "or"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1920,
+        200
+      ],
+      "id": "mp-if-muni",
+      "name": "Municipio OK?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ warning: $json._warn || null, error: $json._error || null, message: $json._details, municipio_solicitado: $json.municipio_solicitado || null, top5_disponibles: $json.top5_disponibles || null }) }}",
+        "options": {
+          "responseCode": "={{ $json._status || 200 }}"
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        2160,
+        360
+      ],
+      "id": "mp-respond-muni-warn",
+      "name": "Respond Muni Warn/Error"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT rule_key, rule_category, rule_title, rule_description, normative_reference, normative_url, applies_to, triggers, license_implication, pitfalls, severity FROM municipal_pgou_rules WHERE municipio_slug = $1::text ORDER BY CASE severity WHEN 'critico' THEN 1 WHEN 'importante' THEN 2 WHEN 'recomendable' THEN 3 ELSE 4 END, rule_category",
+        "options": {
+          "queryReplacement": "={{ [$('Resolve Municipio').first().json.municipio_slug] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2160,
+        100
+      ],
+      "id": "mp-load-rules",
+      "name": "Load PGOU Rules",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const ctx = $('Resolve Municipio').first().json;\nconst rules = $input.all().map(i => i.json).filter(r => r && r.rule_key);\nif (rules.length === 0) {\n  return [{ json: { _error: 'NO_RULES_FOUND', _status: 500, _details: 'No hay reglas para ' + ctx.municipio_slug + '. Migracion 077 sin aplicar?', request_id: ctx.request_id }}];\n}\n\nconst project = ctx.project;\nconst briefing = ctx.briefing;\n\n// Mapping BD project_type -> PGOU vocabulary (mas granular). Inclusive.\nconst pType = project.project_type || 'otro';\nconst pgouCandidates = {\n  reforma_integral: ['reforma','rehabilitacion','any'],\n  redistribucion:   ['reforma','any'],\n  cambio_uso:       ['cambio_uso','rehabilitacion','any'],\n  adecuacion:       ['reforma','any'],\n  apoyo_tecnico:    ['any'],\n  otro:             ['any']\n}[pType] || ['any'];\nconst preFiltered = rules.filter(r => {\n  const at = r.applies_to || {};\n  if (!at.project_type) return true;\n  if (Array.isArray(at.project_type)) {\n    return at.project_type.some(t => pgouCandidates.includes(t)) || at.project_type.includes('any');\n  }\n  return pgouCandidates.includes(at.project_type) || at.project_type === 'any';\n});\n\nconst rulesText = preFiltered.map(function(r, idx) {\n  return (idx+1) + '. [' + r.rule_category + '/' + r.severity + '] ' + r.rule_title +\n         '\\n   key: ' + r.rule_key +\n         '\\n   descripcion: ' + r.rule_description.slice(0, 350) +\n         '\\n   normativa: ' + (r.normative_reference || '-') +\n         '\\n   triggers: ' + JSON.stringify(r.triggers || {}) +\n         '\\n   licencia: ' + (r.license_implication || '-');\n}).join('\\n\\n');\n\nconst systemPrompt = 'Eres agent_municipal_precheck. Cruzas un proyecto contra reglas PGOU de un municipio. Tu trabajo: decidir cuales REALMENTE aplican.\\n\\nCriterios:\\n- Usa los \"triggers\" de cada regla y el contexto del proyecto para juzgar aplicabilidad.\\n- NO inventes reglas. Solo trabajas con las que te paso.\\n- Si los triggers no se pueden evaluar con la info del proyecto, marca la regla con applicability=\"verificar\".\\n\\nOUTPUT JSON estricto:\\n{\\n  \"applicable_rules\": [\\n    { \"rule_key\": \"...\", \"applicability\": \"si\"|\"no\"|\"verificar\", \"razon\": \"frase corta\", \"impacto\": \"critico|importante|info\" }\\n  ],\\n  \"recommended_license\": \"comunicacion_previa|declaracion_responsable|licencia_obra_menor|licencia_obra_mayor|indeterminado\",\\n  \"recommended_license_reasoning\": \"1-2 frases\",\\n  \"blockers\": [ \"cosas que paralizan licencia hasta resolverlas (ITE caducada, amianto, etc)\" ],\\n  \"pitfalls_aggregated\": [ \"errores comunes que afectan a este proyecto\" ],\\n  \"summary_for_architect\": \"3-5 frases. Espanol. Que tiene que hacer YA y que verificar.\",\\n  \"next_steps\": [ \"accion 1\", \"accion 2\", \"accion 3\" ]\\n}';\n\nconst projectSummary = 'PROYECTO: ' + project.name + '\\n' +\n  '- Tipo: ' + (project.project_type || '?') + '\\n' +\n  '- Propiedad: ' + (project.property_type || '?') + ', ' + (project.property_area_m2 || '?') + ' m2\\n' +\n  '- Municipio: ' + project.location_city + '\\n' +\n  '- Fase actual: ' + project.current_phase + '\\n' +\n  '- Budget: ' + (project.budget_target || '?') + ' EUR\\n' +\n  '- Metadata: ' + JSON.stringify(project.metadata || {}).slice(0, 400);\n\nconst briefingSummary = briefing ?\n  ('\\n\\nBRIEFING:\\n- summary: ' + (briefing.summary || '').slice(0, 400) +\n   '\\n- needs: ' + (typeof briefing.client_needs === 'object' ? JSON.stringify(briefing.client_needs).slice(0, 300) : (briefing.client_needs || '').slice(0, 300)) +\n   '\\n- constraints: ' + (typeof briefing.constraints === 'object' ? JSON.stringify(briefing.constraints).slice(0, 300) : (briefing.constraints || '').slice(0, 300)))\n  : '\\n\\nBRIEFING: (sin briefing)';\n\nconst additional = ctx.additional_context ? '\\n\\nCONTEXTO ADICIONAL: ' + ctx.additional_context.slice(0, 500) : '';\n\nconst userPrompt = projectSummary + briefingSummary + additional +\n  '\\n\\nREGLAS PGOU CANDIDATAS (' + preFiltered.length + ' filtradas de ' + rules.length + '):\\n' + rulesText +\n  '\\n\\nTAREA: para cada regla, decide si aplica (si/no/verificar) y por que. Luego sintetiza la propuesta de licencia, blockers, pitfalls y next_steps.';\n\nreturn [{ json: {\n  user_id: ctx.user_id,\n  tenant_id: ctx.tenant_id,\n  project_id: ctx.project_id,\n  request_id: ctx.request_id,\n  municipio_slug: ctx.municipio_slug,\n  rules_total: rules.length,\n  rules_prefiltered: preFiltered.length,\n  prefiltered_keys: preFiltered.map(r => r.rule_key),\n  llm_payload: {\n    model: 'gpt-4o',\n    messages: [\n      { role: 'system', content: systemPrompt },\n      { role: 'user', content: userPrompt }\n    ],\n    temperature: 0.1,\n    max_tokens: 2200,\n    response_format: { type: 'json_object' }\n  }\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2400,
+        100
+      ],
+      "id": "mp-build-prompt",
+      "name": "Build Prompt"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "mp-c3",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2640,
+        100
+      ],
+      "id": "mp-if-build",
+      "name": "Build OK?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details } }) }}",
+        "options": {
+          "responseCode": "={{ $json._status || 500 }}"
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        2880,
+        260
+      ],
+      "id": "mp-respond-build-fail",
+      "name": "Respond Build Fail"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO agent_executions (project_id, agent_name, status, started_at, input, metadata) VALUES ($1::uuid, 'agent_municipal_precheck', 'running', now(), $2::jsonb, $3::jsonb) RETURNING id",
+        "options": {
+          "queryReplacement": "={{ [$json.project_id, JSON.stringify({ municipio_slug: $json.municipio_slug, rules_prefiltered: $json.rules_prefiltered }), JSON.stringify({ request_id: $json.request_id, source: 'api_municipal_precheck' })] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2880,
+        0
+      ],
+      "id": "mp-start-exec",
+      "name": "Start Execution",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($('Build Prompt').first().json.llm_payload) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "gE1jXO133xEHS5JJ",
+          "name": "orquestador ArquiAI"
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3120,
+        0
+      ],
+      "id": "mp-llm",
+      "name": "Call LLM"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const llm = $input.first()?.json;\nconst built = $('Build Prompt').first().json;\nconst raw = llm?.choices?.[0]?.message?.content || '{}';\nlet parsed;\ntry { parsed = JSON.parse(raw); } catch (e) {\n  return [{ json: { _error: 'LLM_INVALID_JSON', _status: 502, _details: e.message, _raw: raw.slice(0, 500), request_id: built.request_id }}];\n}\nconst usage = llm?.usage || {};\n\nconst applicableRules = Array.isArray(parsed.applicable_rules) ? parsed.applicable_rules : [];\nconst applicableKeys = applicableRules.filter(r => r.applicability === 'si').map(r => r.rule_key);\nconst verificarKeys = applicableRules.filter(r => r.applicability === 'verificar').map(r => r.rule_key);\n\nconst validLicenses = ['comunicacion_previa','declaracion_responsable','licencia_obra_menor','licencia_obra_mayor','indeterminado'];\nconst recommendedLicense = validLicenses.includes(parsed.recommended_license) ? parsed.recommended_license : 'indeterminado';\n\nreturn [{ json: {\n  user_id: built.user_id,\n  tenant_id: built.tenant_id,\n  project_id: built.project_id,\n  request_id: built.request_id,\n  municipio_slug: built.municipio_slug,\n  output: {\n    municipio: built.municipio_slug,\n    rules_total_in_db: built.rules_total,\n    rules_prefiltered: built.rules_prefiltered,\n    rules_applicable_count: applicableKeys.length,\n    rules_verify_count: verificarKeys.length,\n    applicable_rules: applicableRules,\n    recommended_license: recommendedLicense,\n    recommended_license_reasoning: parsed.recommended_license_reasoning || null,\n    blockers: Array.isArray(parsed.blockers) ? parsed.blockers : [],\n    pitfalls_aggregated: Array.isArray(parsed.pitfalls_aggregated) ? parsed.pitfalls_aggregated : [],\n    summary_for_architect: parsed.summary_for_architect || null,\n    next_steps: Array.isArray(parsed.next_steps) ? parsed.next_steps : []\n  },\n  model: llm?.model || 'gpt-4o',\n  tokens_in: usage.prompt_tokens || 0,\n  tokens_out: usage.completion_tokens || 0\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3360,
+        0
+      ],
+      "id": "mp-format",
+      "name": "Format Output"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "mp-c4",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3600,
+        0
+      ],
+      "id": "mp-if-format",
+      "name": "Format OK?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details, raw: $json._raw } }) }}",
+        "options": {
+          "responseCode": "={{ $json._status || 502 }}"
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        3840,
+        160
+      ],
+      "id": "mp-respond-llm-fail",
+      "name": "Respond LLM Fail"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO municipal_prechecks (project_id, tenant_id, municipio_slug, rules_matched_count, applicable_rules, recommended_license, blockers, pitfalls_aggregated, summary_for_architect, llm_model, llm_tokens_in, llm_tokens_out, request_id) VALUES ($1::uuid, $2::uuid, $3::text, $4::int, $5::jsonb, $6::text, $7::jsonb, $8::jsonb, $9::text, $10::text, $11::int, $12::int, $13::text) RETURNING id, created_at",
+        "options": {
+          "queryReplacement": "={{ [$json.project_id, $json.tenant_id, $json.municipio_slug, $json.output.rules_applicable_count, JSON.stringify($json.output.applicable_rules), $json.output.recommended_license, JSON.stringify($json.output.blockers), JSON.stringify($json.output.pitfalls_aggregated), $json.output.summary_for_architect, $json.model, $json.tokens_in, $json.tokens_out, $json.request_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        3840,
+        0
+      ],
+      "id": "mp-save",
+      "name": "Save Precheck",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE agent_executions SET status = 'completed', finished_at = now(), output = $2::jsonb, metadata = COALESCE(metadata, '{}'::jsonb) || $3::jsonb WHERE id = $1::uuid",
+        "options": {
+          "queryReplacement": "={{ [$('Start Execution').first().json.id, JSON.stringify({ precheck_id: $('Save Precheck').first().json.id, rules_applicable_count: $('Format Output').first().json.output.rules_applicable_count, recommended_license: $('Format Output').first().json.output.recommended_license, blockers_count: ($('Format Output').first().json.output.blockers || []).length }), JSON.stringify({ model: $('Format Output').first().json.model, tokens_in: $('Format Output').first().json.tokens_in, tokens_out: $('Format Output').first().json.tokens_out, eu_ai_act: 'pre-check informativo, no sustituye agent_regulatory ni decision humana' })] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        4080,
+        0
+      ],
+      "id": "mp-finish",
+      "name": "Finish Execution",
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const f = $('Format Output').first().json;\nconst save = $('Save Precheck').isExecuted ? ($('Save Precheck').first()?.json || {}) : {};\nreturn [{ json: {\n  data: {\n    precheck_id: save.id || null,\n    project_id: f.project_id,\n    municipio: f.municipio_slug,\n    created_at: save.created_at || null,\n    output: f.output\n  },\n  meta: {\n    request_id: f.request_id,\n    model: f.model,\n    tokens_in: f.tokens_in,\n    tokens_out: f.tokens_out,\n    eu_ai_act: 'pre-check informativo, no sustituye agent_regulatory ni decision humana'\n  }\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4320,
+        0
+      ],
+      "id": "mp-build-body",
+      "name": "Build Final Body"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "responseCode": 201,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Cache-Control",
+                "value": "no-cache"
+              }
+            ]
+          }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        4560,
+        0
+      ],
+      "id": "mp-respond-ok",
+      "name": "Respond 201"
+    }
+  ],
+  "connections": {
+    "POST /municipal-precheck/run": {
+      "main": [
+        [
+          {
+            "node": "Decode JWT + Validate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decode JWT + Validate": {
+      "main": [
+        [
+          {
+            "node": "Auth OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Auth OK?": {
+      "main": [
+        [
+          {
+            "node": "Respond Auth Error",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Set Session Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Session Context": {
+      "main": [
+        [
+          {
+            "node": "Load Project",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Project": {
+      "main": [
+        [
+          {
+            "node": "Load Briefing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Briefing": {
+      "main": [
+        [
+          {
+            "node": "Resolve Municipio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resolve Municipio": {
+      "main": [
+        [
+          {
+            "node": "Municipio OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Municipio OK?": {
+      "main": [
+        [
+          {
+            "node": "Respond Muni Warn/Error",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Load PGOU Rules",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load PGOU Rules": {
+      "main": [
+        [
+          {
+            "node": "Build Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Prompt": {
+      "main": [
+        [
+          {
+            "node": "Build OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build OK?": {
+      "main": [
+        [
+          {
+            "node": "Respond Build Fail",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Start Execution",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Start Execution": {
+      "main": [
+        [
+          {
+            "node": "Call LLM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call LLM": {
+      "main": [
+        [
+          {
+            "node": "Format Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Output": {
+      "main": [
+        [
+          {
+            "node": "Format OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format OK?": {
+      "main": [
+        [
+          {
+            "node": "Respond LLM Fail",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Save Precheck",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Precheck": {
+      "main": [
+        [
+          {
+            "node": "Finish Execution",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Finish Execution": {
+      "main": [
+        [
+          {
+            "node": "Build Final Body",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Final Body": {
+      "main": [
+        [
+          {
+            "node": "Respond 201",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": {}
+}

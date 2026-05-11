@@ -1,0 +1,254 @@
+{
+  "name": "api_studio_feed",
+  "_description": "api_studio_feed (recovered from n8n live - drift fix)",
+  "_status": "B72-fase-C-drift-fix recovered from n8n live",
+  "nodes": [
+    {
+      "id": "sf-001",
+      "name": "GET /studio/feed",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "api/v1/studio/feed",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "webhookId": "a57471e0-ca1f-4d1a-ba56-cdbdd8a453d9"
+    },
+    {
+      "id": "sf-decode",
+      "name": "Decode JWT + Params",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const auth = $input.first().json.headers?.authorization || '';\nif (!auth.startsWith('Bearer ')) return [{ json: { _error: 'AUTH_MISSING_TOKEN', _status: 401 } }];\nconst token = auth.slice(7);\ntry {\n  const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'));\n  if (!payload.sub) throw new Error('No sub');\n  if (payload.exp && Date.now()/1000 > payload.exp) throw new Error('JWT expired');\n  const q = $input.first().json.query || {};\n  const since = q.since || null; // ISO 8601 timestamp\n  const limit = Math.min(parseInt(q.limit || '50'), 200);\n  return [{ json: {\n    user_id:    payload.sub,\n    tenant_id:  payload.tenant_id || null,\n    role:       payload.role || 'architect',\n    since,\n    limit,\n    request_id: 'req_' + Math.random().toString(36).slice(2, 10)\n  }}];\n} catch (e) {\n  return [{ json: { _error: 'AUTH_INVALID_TOKEN', _status: 401, _details: e.message } }];\n}"
+      }
+    },
+    {
+      "id": "sf-if-auth",
+      "name": "Auth OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        720,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "sf-c1",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "sf-respond-401",
+      "name": "Respond 401",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        960,
+        460
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details || $json._error, request_id: 'req_' + Date.now() } }) }}",
+        "options": {
+          "responseCode": "={{ $json._status || 401 }}"
+        }
+      }
+    },
+    {
+      "id": "sf-set-session",
+      "name": "Set Session Context",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        960,
+        200
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT set_session_context($1::uuid, $2::uuid, $3)",
+        "options": {
+          "queryReplacement": "={{ [$json.user_id, $json.tenant_id, $json.role] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "sf-query",
+      "name": "Query activity_log",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1200,
+        200
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, project_id, agent_name, action, status, output_summary, created_at FROM activity_log WHERE ($1::timestamptz IS NULL OR created_at > $1::timestamptz) ORDER BY created_at DESC LIMIT $2::int",
+        "options": {
+          "queryReplacement": "={{ [$('Decode JWT + Params').first().json.since, $('Decode JWT + Params').first().json.limit] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "sf-format",
+      "name": "Format Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1440,
+        200
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const items = $input.all().map(i => i.json);\nconst sess = $('Decode JWT + Params').first().json;\nreturn [{ json: {\n  data: items.map(e => ({\n    id:             e.id,\n    project_id:     e.project_id,\n    agent_name:     e.agent_name,\n    action:         e.action,\n    status:         e.status,\n    output_summary: e.output_summary,\n    timestamp:      e.created_at\n  })),\n  meta: {\n    request_id: sess.request_id,\n    timestamp:  new Date().toISOString(),\n    count:      items.length,\n    since:      sess.since\n  }\n}}];"
+      }
+    },
+    {
+      "id": "sf-respond-200",
+      "name": "Respond 200",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1680,
+        200
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Cache-Control",
+                "value": "no-cache"
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "GET /studio/feed": {
+      "main": [
+        [
+          {
+            "node": "Decode JWT + Params",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decode JWT + Params": {
+      "main": [
+        [
+          {
+            "node": "Auth OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Auth OK?": {
+      "main": [
+        [
+          {
+            "node": "Respond 401",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Set Session Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Session Context": {
+      "main": [
+        [
+          {
+            "node": "Query activity_log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Query activity_log": {
+      "main": [
+        [
+          {
+            "node": "Format Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Response": {
+      "main": [
+        [
+          {
+            "node": "Respond 200",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": {}
+}

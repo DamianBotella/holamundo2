@@ -1,0 +1,314 @@
+{
+  "name": "api_approval_decision",
+  "_description": "api_approval_decision (recovered from n8n live - drift fix)",
+  "_status": "B72-fase-C-drift-fix recovered from n8n live",
+  "nodes": [
+    {
+      "id": "ad-001",
+      "name": "POST /approval-decision",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "api/v1/approval-decision",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "webhookId": "bf5df7be-1126-4097-a0e6-fc5bd0ca3ac4"
+    },
+    {
+      "id": "ad-decode",
+      "name": "Decode JWT + Body",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const auth = $input.first().json.headers?.authorization || '';\nif (!auth.startsWith('Bearer ')) return [{ json: { _error: 'AUTH_MISSING_TOKEN', _status: 401 } }];\nconst token = auth.slice(7);\ntry {\n  const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'));\n  if (!payload.sub) throw new Error('No sub');\n  if (payload.exp && Date.now()/1000 > payload.exp) throw new Error('JWT expired');\n  const body = $input.first().json.body || {};\n  const approvalId = body.approval_id;\n  const decision = body.decision; // 'approve' | 'reject'\n  const notes = body.notes || null;\n  if (!approvalId || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(approvalId)) {\n    return [{ json: { _error: 'VALIDATION_FAILED', _status: 400, _details: 'approval_id (UUID) requerido' } }];\n  }\n  if (decision !== 'approve' && decision !== 'reject') {\n    return [{ json: { _error: 'VALIDATION_FAILED', _status: 400, _details: 'decision debe ser approve o reject' } }];\n  }\n  const newStatus = decision === 'approve' ? 'approved' : 'rejected';\n  return [{ json: {\n    user_id:     payload.sub,\n    tenant_id:   payload.tenant_id || null,\n    role:        payload.role || 'architect',\n    email:       payload.email || null,\n    full_name:   payload.full_name || null,\n    approval_id: approvalId,\n    decision,\n    new_status:  newStatus,\n    notes,\n    request_id:  'req_' + Math.random().toString(36).slice(2, 10)\n  }}];\n} catch (e) {\n  return [{ json: { _error: 'AUTH_INVALID_TOKEN', _status: 401, _details: e.message } }];\n}"
+      }
+    },
+    {
+      "id": "ad-if-auth",
+      "name": "Auth+Validation OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        720,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "ad-c1",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "ad-respond-error",
+      "name": "Respond Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        960,
+        460
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details || $json._error, request_id: 'req_' + Date.now() } }) }}",
+        "options": {
+          "responseCode": "={{ $json._status || 400 }}"
+        }
+      }
+    },
+    {
+      "id": "ad-set-session",
+      "name": "Set Session Context",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        960,
+        200
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT set_session_context($1::uuid, $2::uuid, $3)",
+        "options": {
+          "queryReplacement": "={{ [$json.user_id, $json.tenant_id, $json.role] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ad-update",
+      "name": "Update approval row",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1200,
+        200
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE approvals SET status = $1, decided_at = now(), decided_by = $2, decision_notes = $3 WHERE id = $4::uuid AND status = 'pending' RETURNING id, status, project_id, approval_type, webhook_token, decided_at, decided_by",
+        "options": {
+          "queryReplacement": "={{ [$('Decode JWT + Body').first().json.new_status, $('Decode JWT + Body').first().json.email || $('Decode JWT + Body').first().json.full_name || $('Decode JWT + Body').first().json.user_id, $('Decode JWT + Body').first().json.notes, $('Decode JWT + Body').first().json.approval_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ad-format",
+      "name": "Format Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1440,
+        200
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const row = $input.first()?.json;\nconst sess = $('Decode JWT + Body').first().json;\nif (!row || !row.id) {\n  return [{ json: {\n    _error: 'NOT_FOUND',\n    _status: 404,\n    _details: 'Approval no encontrado, no es pending o sin permisos para este tenant',\n    request_id: sess.request_id\n  }}];\n}\nreturn [{ json: {\n  data: {\n    approval_id:    row.id,\n    project_id:     row.project_id,\n    approval_type:  row.approval_type,\n    status:         row.status,\n    decided_at:     row.decided_at,\n    decided_by:     row.decided_by\n  },\n  meta: {\n    request_id: sess.request_id,\n    timestamp:  new Date().toISOString(),\n    warnings: [\n      'Decision registrada en BD. El flujo n8n Wait sigue bloqueado hasta clic en email — desbloqueo via UI requiere migracion futura (resume_webhook_url en approvals).'\n    ]\n  }\n}}];"
+      }
+    },
+    {
+      "id": "ad-if-found",
+      "name": "Found?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1680,
+        200
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "ad-c2",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "ad-respond-404",
+      "name": "Respond 404",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1920,
+        360
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details, request_id: $json.request_id } }) }}",
+        "options": {
+          "responseCode": 404
+        }
+      }
+    },
+    {
+      "id": "ad-respond-200",
+      "name": "Respond 200",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1920,
+        100
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "responseCode": 200
+        }
+      }
+    }
+  ],
+  "connections": {
+    "POST /approval-decision": {
+      "main": [
+        [
+          {
+            "node": "Decode JWT + Body",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decode JWT + Body": {
+      "main": [
+        [
+          {
+            "node": "Auth+Validation OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Auth+Validation OK?": {
+      "main": [
+        [
+          {
+            "node": "Respond Error",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Set Session Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Session Context": {
+      "main": [
+        [
+          {
+            "node": "Update approval row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update approval row": {
+      "main": [
+        [
+          {
+            "node": "Format Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Response": {
+      "main": [
+        [
+          {
+            "node": "Found?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Found?": {
+      "main": [
+        [
+          {
+            "node": "Respond 404",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 200",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": {}
+}

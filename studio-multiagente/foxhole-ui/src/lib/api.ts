@@ -13,6 +13,10 @@ import type {
   CreateProjectResponse,
   ConversationHistoryResponse,
   ProjectDeliverables,
+  BillingSubscriptionResponse,
+  CheckoutSessionResponse,
+  PortalSessionResponse,
+  BillingTier,
 } from './types';
 import { mockProfile, mockProjects, mockMetrics, mockAlerts } from './mock-data';
 import { getAccessToken } from './session';
@@ -310,6 +314,31 @@ export const api = {
       },
     );
     return r.data;
+  },
+
+  // G — Billing (Stripe)
+  billing: {
+    subscription: async (): Promise<BillingSubscriptionResponse> => {
+      const r = await fetchAPI<EnvelopeResponse<BillingSubscriptionResponse>>(
+        '/billing/subscription',
+        { headers: { 'Cache-Control': 'no-cache' } },
+      );
+      return r.data;
+    },
+    checkout: async (tier: BillingTier): Promise<CheckoutSessionResponse> => {
+      const r = await fetchAPI<EnvelopeResponse<CheckoutSessionResponse>>(
+        '/billing/checkout',
+        { method: 'POST', body: JSON.stringify({ tier }) },
+      );
+      return r.data;
+    },
+    portal: async (): Promise<PortalSessionResponse> => {
+      const r = await fetchAPI<EnvelopeResponse<PortalSessionResponse>>(
+        '/billing/portal',
+        { method: 'POST', body: JSON.stringify({}) },
+      );
+      return r.data;
+    },
   },
 };
 

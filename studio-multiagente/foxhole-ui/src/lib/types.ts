@@ -278,3 +278,78 @@ export interface CreateProjectResponse {
   created_at: string;
   briefing_triggered: boolean;
 }
+
+// G — Billing (Stripe)
+export type BillingTier = 'starter' | 'pro' | 'equipo' | 'founder';
+export type SubscriptionStatus =
+  | 'trialing'
+  | 'active'
+  | 'past_due'
+  | 'canceled'
+  | 'incomplete'
+  | 'incomplete_expired'
+  | 'paused'
+  | 'unpaid'
+  | 'no_subscription';
+
+export interface PlanLimits {
+  max_projects: number;
+  max_users: number;
+  max_ai_tokens: number;
+  max_agents: number;
+  max_agent_executions: number;
+  render_mnml_per_month?: number;
+  support?: string;
+}
+
+export interface BillingUsage {
+  projects_active: number;
+  projects_created_this_month: number;
+  ai_tokens_used_this_month: number;
+  agent_executions_this_month: number;
+}
+
+export interface BillingSubscription {
+  has_subscription: boolean;
+  tier: BillingTier | null;
+  plan_name?: string | null;
+  price_eur_monthly?: number | null;
+  status: SubscriptionStatus;
+  is_trialing?: boolean;
+  trial_ends_at?: string | null;
+  trial_days_left?: number | null;
+  current_period_end?: string | null;
+  cancel_at_period_end?: boolean;
+  limits: PlanLimits;
+  usage?: BillingUsage;
+  features?: string[];
+}
+
+export interface AvailablePlan {
+  tier: BillingTier;
+  name: string;
+  price_eur_monthly: number;
+  features: string[];
+  limits: PlanLimits;
+  trial_days: number;
+  is_current: boolean;
+}
+
+export interface BillingSubscriptionResponse {
+  subscription: BillingSubscription;
+  available_plans: AvailablePlan[];
+}
+
+export interface CheckoutSessionResponse {
+  checkout_url: string;
+  session_id: string;
+  tier: BillingTier;
+  plan_name: string;
+  status: string;
+  expires_at: number;
+}
+
+export interface PortalSessionResponse {
+  portal_url: string;
+  return_url: string;
+}

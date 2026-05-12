@@ -1,21 +1,40 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { TopBar } from './components/TopBar';
 import { DashboardPage } from './pages/DashboardPage';
 import { ProjectDetailPage } from './pages/ProjectDetailPage';
 import { LoginPage } from './pages/LoginPage';
 import { StudioPage } from './pages/StudioPage';
 import { NewProjectWizardPage } from './pages/NewProjectWizardPage';
+import { BillingPage } from './pages/BillingPage';
 import { useSession } from './lib/session';
 
 type Route =
   | { name: 'dashboard' }
   | { name: 'project'; id: string }
   | { name: 'studio' }
-  | { name: 'wizard' };
+  | { name: 'wizard' }
+  | { name: 'billing' };
 
 export function App() {
   const { session, loading } = useSession();
-  const [route, setRoute] = useState<Route>({ name: 'dashboard' });
+  const [route, setRoute] = useState<Route>(() => {
+    // Detectar #billing en URL al cargar (compatible con Stripe success_url y deep links)
+    if (typeof window !== 'undefined' && window.location.hash === '#billing') {
+      return { name: 'billing' };
+    }
+    return { name: 'dashboard' };
+  });
+
+  // Sincronizar hash con la ruta (back/forward del navegador)
+  useEffect(() => {
+    const handler = () => {
+      if (window.location.hash === '#billing' && route.name !== 'billing') {
+        setRoute({ name: 'billing' });
+      }
+    };
+    window.addEventListener('hashchange', handler);
+    return () => window.removeEventListener('hashchange', handler);
+  }, [route.name]);
 
   if (loading) {
     return (
@@ -29,13 +48,21 @@ export function App() {
     return <LoginPage />;
   }
 
-  const activeKey = route.name === 'studio' ? 'studio' : 'dashboard';
+  const activeKey =
+    route.name === 'studio' ? 'studio' : route.name === 'billing' ? 'billing' : 'dashboard';
 
   return (
     <div className="min-h-screen bg-foxhole-bg flex flex-col">
       <TopBar
-        onNavigate={() => setRoute({ name: 'dashboard' })}
+        onNavigate={() => {
+          setRoute({ name: 'dashboard' });
+          if (window.location.hash) window.history.replaceState({}, '', window.location.pathname + window.location.search);
+        }}
         onOpenStudio={() => setRoute({ name: 'studio' })}
+        onOpenBilling={() => {
+          setRoute({ name: 'billing' });
+          window.location.hash = 'billing';
+        }}
         active={activeKey}
       />
       <main className="flex-1 overflow-auto">
@@ -67,6 +94,14 @@ export function App() {
           <NewProjectWizardPage
             onBack={() => setRoute({ name: 'dashboard' })}
             onCreated={(id) => setRoute({ name: 'project', id })}
+          />
+        )}
+        {route.name === 'billing' && (
+          <BillingPage
+            onBack={() => {
+              setRoute({ name: 'dashboard' });
+              if (window.location.hash) window.history.replaceState({}, '', window.location.pathname + window.location.search);
+            }}
           />
         )}
       </main>

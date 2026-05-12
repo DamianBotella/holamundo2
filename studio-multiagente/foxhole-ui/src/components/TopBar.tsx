@@ -1,18 +1,28 @@
 import { useQuery } from '@tanstack/react-query';
-import { Activity, AlertTriangle, LogOut, Map } from 'lucide-react';
+import { Activity, AlertTriangle, CreditCard, LogOut, Map } from 'lucide-react';
 import { api, isUsingMock } from '@/lib/api';
 import { useSession } from '@/lib/session';
 
 interface Props {
   onNavigate: () => void;
   onOpenStudio?: () => void;
-  active?: 'dashboard' | 'studio';
+  onOpenBilling?: () => void;
+  active?: 'dashboard' | 'studio' | 'billing';
 }
 
-export function TopBar({ onNavigate, onOpenStudio, active = 'dashboard' }: Props) {
+export function TopBar({ onNavigate, onOpenStudio, onOpenBilling, active = 'dashboard' }: Props) {
   const { data: profile } = useQuery({ queryKey: ['me'], queryFn: api.me });
   const { data: metrics } = useQuery({ queryKey: ['metrics'], queryFn: api.metrics });
+  const { data: billing } = useQuery({
+    queryKey: ['billing', 'subscription'],
+    queryFn: api.billing.subscription,
+    staleTime: 60_000,
+    retry: false,
+  });
   const { signOut } = useSession();
+  const trialDaysLeft = billing?.subscription?.is_trialing
+    ? billing.subscription.trial_days_left ?? null
+    : null;
 
   return (
     <header className="sticky top-0 z-10 bg-foxhole-bg/95 backdrop-blur border-b border-foxhole-border">
@@ -37,6 +47,24 @@ export function TopBar({ onNavigate, onOpenStudio, active = 'dashboard' }: Props
           >
             <Map className="w-3.5 h-3.5" />
             Estudio
+          </button>
+        )}
+
+        {onOpenBilling && (
+          <button
+            onClick={onOpenBilling}
+            className={`flex items-center gap-1.5 font-mono text-xs uppercase tracking-wider transition-colors ${
+              active === 'billing' ? 'text-foxhole-accent' : 'text-foxhole-muted hover:text-foxhole-fg'
+            }`}
+            title="Suscripción y facturación"
+          >
+            <CreditCard className="w-3.5 h-3.5" />
+            Billing
+            {trialDaysLeft !== null && trialDaysLeft <= 7 && (
+              <span className="foxhole-badge-warning ml-1 text-[9px]">
+                Trial {trialDaysLeft}d
+              </span>
+            )}
           </button>
         )}
 

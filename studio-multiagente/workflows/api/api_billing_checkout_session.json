@@ -158,7 +158,7 @@
     {
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const sess = $('Decode + Validate').first().json;\nconst planRows = $('Load Plan + Tenant').all().map(i => i.json).filter(r => r && r.tier_slug);\nif (planRows.length === 0) return [{ json: { _error: 'PLAN_OR_TENANT_NOT_FOUND', _status: 404, _details: 'Plan ' + sess.tier + ' o tenant inexistente', request_id: sess.request_id }}];\nconst plan = planRows[0];\nconst configRows = $input.all().map(i => i.json).filter(c => c && c.key);\nconst cfg = Object.fromEntries(configRows.map(r => [r.key, r.value]));\nif (!cfg.stripe_secret_key || cfg.stripe_secret_key.startsWith('sk_test_REPLACE') || cfg.stripe_secret_key.startsWith('sk_live_REPLACE')) {\n  return [{ json: { _error: 'STRIPE_NOT_CONFIGURED', _status: 503, _details: 'system_config.stripe_secret_key sin configurar', request_id: sess.request_id }}];\n}\nif (!plan.stripe_price_id || plan.stripe_price_id.startsWith('price_REPLACE')) {\n  return [{ json: { _error: 'STRIPE_PRICE_ID_MISSING', _status: 503, _details: 'subscription_plans.stripe_price_id para tier ' + plan.tier_slug + ' sin configurar', request_id: sess.request_id }}];\n}\nconst successUrl = (cfg.billing_success_url || 'https://arquitai.studio/billing/success') + '?session_id={CHECKOUT_SESSION_ID}';\nconst cancelUrl = cfg.billing_cancel_url || 'https://arquitai.studio/billing/cancel';\n\n// Stripe Checkout Session body (URL-encoded form)\nconst form = {\n  'mode': 'subscription',\n  'line_items[0][price]': plan.stripe_price_id,\n  'line_items[0][quantity]': '1',\n  'success_url': successUrl,\n  'cancel_url': cancelUrl,\n  'client_reference_id': sess.tenant_id,\n  'subscription_data[trial_period_days]': String(plan.trial_days || 14),\n  'subscription_data[metadata][tenant_id]': sess.tenant_id,\n  'subscription_data[metadata][tier_slug]': plan.tier_slug,\n  'metadata[tenant_id]': sess.tenant_id,\n  'metadata[tier_slug]': plan.tier_slug,\n  'allow_promotion_codes': 'true',\n  'billing_address_collection': 'auto',\n  'locale': 'es'\n};\n// Reusar customer si ya existe\nif (plan.existing_customer_id) {\n  form['customer'] = plan.existing_customer_id;\n} else {\n  const email = sess.email || plan.tenant_email;\n  if (email) form['customer_email'] = email;\n}\nreturn [{ json: {\n  tenant_id: sess.tenant_id,\n  tier: plan.tier_slug,\n  plan_name: plan.name,\n  request_id: sess.request_id,\n  stripe_secret_key: cfg.stripe_secret_key,\n  form_body: form\n}}];"
+        "jsCode": "const sess = $('Decode + Validate').first().json;\nconst planRows = $('Load Plan + Tenant').all().map(i => i.json).filter(r => r && r.tier_slug);\nif (planRows.length === 0) return [{ json: { _error: 'PLAN_OR_TENANT_NOT_FOUND', _status: 404, _details: 'Plan ' + sess.tier + ' o tenant inexistente', request_id: sess.request_id }}];\nconst plan = planRows[0];\nconst configRows = $input.all().map(i => i.json).filter(c => c && c.key);\nconst cfg = Object.fromEntries(configRows.map(r => [r.key, r.value]));\nif (!cfg.stripe_secret_key || cfg.stripe_secret_key.startsWith('sk_test_REPLACE') || cfg.stripe_secret_key.startsWith('sk_live_REPLACE')) {\n  return [{ json: { _error: 'STRIPE_NOT_CONFIGURED', _status: 503, _details: 'system_config.stripe_secret_key sin configurar', request_id: sess.request_id }}];\n}\nif (!plan.stripe_price_id || plan.stripe_price_id.startsWith('price_REPLACE')) {\n  return [{ json: { _error: 'STRIPE_PRICE_ID_MISSING', _status: 503, _details: 'subscription_plans.stripe_price_id para tier ' + plan.tier_slug + ' sin configurar', request_id: sess.request_id }}];\n}\nconst successUrl = (cfg.billing_success_url || 'https://arquitai.studio/billing/success') + '?session_id={CHECKOUT_SESSION_ID}';\nconst cancelUrl = cfg.billing_cancel_url || 'https://arquitai.studio/billing/cancel';\n\n// Stripe Checkout Session body (URL-encoded form)\nconst form = {\n  'mode': 'subscription',\n  'line_items[0][price]': plan.stripe_price_id,\n  'line_items[0][quantity]': '1',\n  'success_url': successUrl,\n  'cancel_url': cancelUrl,\n  'client_reference_id': sess.tenant_id,\n  'subscription_data[trial_period_days]': String(plan.trial_days || 14),\n  'subscription_data[metadata][tenant_id]': sess.tenant_id,\n  'subscription_data[metadata][tier_slug]': plan.tier_slug,\n  'metadata[tenant_id]': sess.tenant_id,\n  'metadata[tier_slug]': plan.tier_slug,\n  'allow_promotion_codes': 'true',\n  'billing_address_collection': 'auto',\n  'locale': 'es'\n};\n// Reusar customer si ya existe\nif (plan.existing_customer_id) {\n  form['customer'] = plan.existing_customer_id;\n} else {\n  const email = sess.email || plan.tenant_email;\n  if (email) form['customer_email'] = email;\n}\nconst formStr = Object.entries(form).map(([k, v]) => encodeURIComponent(k) + '=' + encodeURIComponent(v)).join('&');\nreturn [{ json: {\n  tenant_id: sess.tenant_id,\n  tier: plan.tier_slug,\n  plan_name: plan.name,\n  request_id: sess.request_id,\n  stripe_secret_key: cfg.stripe_secret_key,\n  form_string: formStr\n}}];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -218,67 +218,6 @@
       ],
       "id": "ch-respond-pf",
       "name": "Respond Prep Fail"
-    },
-    {
-      "parameters": {
-        "method": "POST",
-        "url": "https://api.stripe.com/v1/checkout/sessions",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            {
-              "name": "Authorization",
-              "value": "=Bearer {{ $('Prepare Checkout').first().json.stripe_secret_key }}"
-            },
-            {
-              "name": "Stripe-Version",
-              "value": "2024-06-20"
-            }
-          ]
-        },
-        "sendBody": true,
-        "contentType": "form-urlencoded",
-        "bodyParameters": {
-          "parameters": [
-            {
-              "name": "form_passthrough",
-              "value": ""
-            }
-          ]
-        },
-        "options": {
-          "timeout": 30000,
-          "response": {
-            "response": {
-              "fullResponse": true
-            }
-          }
-        }
-      },
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [
-        2160,
-        100
-      ],
-      "id": "ch-stripe",
-      "name": "POST Stripe Checkout",
-      "onError": "continueRegularOutput",
-      "disabled": true
-    },
-    {
-      "parameters": {
-        "mode": "runOnceForAllItems",
-        "jsCode": "const body = $('Prepare Checkout').first().json.form_body;\nconst secret = $('Prepare Checkout').first().json.stripe_secret_key;\nconst form = new URLSearchParams();\nfor (const [k, v] of Object.entries(body)) form.append(k, v);\nlet resp, raw;\ntry {\n  resp = await fetch('https://api.stripe.com/v1/checkout/sessions', {\n    method: 'POST',\n    headers: {\n      'Authorization': 'Bearer ' + secret,\n      'Content-Type': 'application/x-www-form-urlencoded',\n      'Stripe-Version': '2024-06-20'\n    },\n    body: form.toString()\n  });\n  raw = await resp.text();\n} catch (e) {\n  return [{ json: { _error: 'STRIPE_NETWORK_ERROR', _status: 502, _details: e.message }}];\n}\nlet parsed;\ntry { parsed = JSON.parse(raw); } catch (e) {\n  return [{ json: { _error: 'STRIPE_INVALID_JSON', _status: 502, _details: 'Stripe respuesta no es JSON: ' + raw.slice(0, 400) }}];\n}\nif (!resp.ok) {\n  return [{ json: { _error: 'STRIPE_ERROR', _status: resp.status, _details: parsed?.error?.message || JSON.stringify(parsed).slice(0, 400), _stripe_code: parsed?.error?.code, _stripe_type: parsed?.error?.type }}];\n}\nreturn [{ json: { session_id: parsed.id, url: parsed.url, customer: parsed.customer, mode: parsed.mode, status: parsed.status, expires_at: parsed.expires_at }}];"
-      },
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        2160,
-        100
-      ],
-      "id": "ch-stripe-call",
-      "name": "Call Stripe API"
     },
     {
       "parameters": {
@@ -354,6 +293,65 @@
       ],
       "id": "ch-respond-ok",
       "name": "Respond 201"
+    },
+    {
+      "id": "41e71b78-ee31-459f-9828-479aacf756f8",
+      "name": "Stripe HTTP",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2160,
+        100
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.stripe.com/v1/checkout/sessions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.stripe_secret_key }}"
+            },
+            {
+              "name": "Stripe-Version",
+              "value": "2024-06-20"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/x-www-form-urlencoded"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/x-www-form-urlencoded",
+        "body": "={{ $json.form_string }}",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": true,
+              "fullResponse": false
+            }
+          }
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "d96c4434-a5f9-4aa9-963d-5ebdd331d950",
+      "name": "Parse Stripe",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2280,
+        100
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const r = $input.first()?.json || {};\nconst prep = $('Prepare Checkout').first().json;\nif (r.error) {\n  return [{ json: { _error: 'STRIPE_ERROR', _status: 502, _details: r.error.message || JSON.stringify(r.error).slice(0, 400), _stripe_code: r.error.code, _stripe_type: r.error.type, request_id: prep.request_id }}];\n}\nif (!r.id || !r.url) {\n  return [{ json: { _error: 'STRIPE_INVALID_RESPONSE', _status: 502, _details: 'Stripe no devolvio id/url: ' + JSON.stringify(r).slice(0, 400), request_id: prep.request_id }}];\n}\nreturn [{ json: { session_id: r.id, url: r.url, customer: r.customer, mode: r.mode, status: r.status, expires_at: r.expires_at, request_id: prep.request_id }}];"
+      }
     }
   ],
   "connections": {
@@ -452,18 +450,7 @@
         ],
         [
           {
-            "node": "Call Stripe API",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Call Stripe API": {
-      "main": [
-        [
-          {
-            "node": "Stripe OK?",
+            "node": "Stripe HTTP",
             "type": "main",
             "index": 0
           }
@@ -482,6 +469,28 @@
         [
           {
             "node": "Respond 201",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Stripe HTTP": {
+      "main": [
+        [
+          {
+            "node": "Parse Stripe",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Stripe": {
+      "main": [
+        [
+          {
+            "node": "Stripe OK?",
             "type": "main",
             "index": 0
           }

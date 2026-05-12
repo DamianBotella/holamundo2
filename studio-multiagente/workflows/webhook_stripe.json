@@ -278,6 +278,157 @@
       ],
       "id": "sw-respond-ok",
       "name": "Respond 200"
+    },
+    {
+      "id": "c8021a2f-2120-4e75-b252-92546556b24d",
+      "name": "Is Trial Will End?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2160,
+        280
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": false,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "sw-twe-1",
+              "leftValue": "={{ $json.event_type }}",
+              "rightValue": "customer.subscription.trial_will_end",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "90aac9d2-6c2d-45e5-87ca-8f2a0ee2cd9a",
+      "name": "Load Tenant Email",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2400,
+        200
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT t.id AS tenant_id, t.name AS tenant_name, t.slug AS tenant_slug, t.contact_email, sp.tier_slug AS plan_tier, ts.id AS subscription_id, ts.trial_ends_at FROM tenants t JOIN tenant_subscriptions ts ON ts.tenant_id = t.id JOIN subscription_plans sp ON sp.id = ts.plan_id WHERE t.id = $1::uuid LIMIT 1",
+        "options": {
+          "queryReplacement": "={{ [$('Route Event').first().json.tenant_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "id": "2ba2d783-290a-49e7-866c-70b910f776ed",
+      "name": "Build Trial Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2640,
+        200
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const rows = $input.all().map(i => i.json).filter(r => r && r.tenant_id);\nif (rows.length === 0 || !rows[0].contact_email) {\n  return [{ json: { _skip: true, _reason: rows.length === 0 ? 'tenant_not_found' : 'no_contact_email' }}];\n}\nconst r = rows[0];\nconst portalUrl = 'https://arquitai.studio/settings/billing';\nconst trialEndStr = r.trial_ends_at ? new Date(r.trial_ends_at).toLocaleString('es-ES') : 'pronto';\nconst subject = '[ArquitAI] Tu trial expira en 3 dias - actualiza tu metodo de pago';\nconst greet = r.tenant_name ? ('Hola ' + r.tenant_name + ',') : 'Hola,';\nconst html = '<p>' + greet + '</p>' +\n             '<p>Tu trial de <strong>' + (r.plan_tier || 'plan') + '</strong> en ArquitAI expira en <strong>3 dias</strong> (' + trialEndStr + ').</p>' +\n             '<p>Stripe nos ha avisado para que te recordemos: si quieres seguir usando ArquitAI tras el trial, configura tu metodo de pago en el portal de cliente.</p>' +\n             '<p><a href=\"' + portalUrl + '\" style=\"display:inline-block;padding:12px 24px;background:#0074d4;color:white;text-decoration:none;border-radius:6px;font-weight:600;\">Gestionar suscripcion</a></p>' +\n             '<p>Si has decidido no continuar, puedes ignorar este email.</p>' +\n             '<hr style=\"border:none;border-top:1px solid #eee;margin:24px 0;\"/>' +\n             '<p style=\"color:#888;font-size:12px;\">Aviso enviado por Stripe via webhook customer.subscription.trial_will_end</p>';\nreturn [{ json: {\n  tenant_id: r.tenant_id,\n  tenant_name: r.tenant_name,\n  tenant_slug: r.tenant_slug,\n  subscription_id: r.subscription_id,\n  email_to: r.contact_email,\n  email_subject: subject,\n  email_html: html,\n  alert_window_date: r.trial_ends_at ? new Date(r.trial_ends_at).toISOString().slice(0,10) : new Date(Date.now()).toISOString().slice(0,10),\n  plan_tier: r.plan_tier,\n  trial_ends_at: r.trial_ends_at\n}}];"
+      }
+    },
+    {
+      "id": "68fce4bf-497c-440d-ab46-b66e993dacf2",
+      "name": "Skip Trial?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2880,
+        200
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": false,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "sw-twe-2",
+              "leftValue": "={{ $json._skip }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "cfa928c3-647d-42c1-a4e5-ae912596d005",
+      "name": "Send Trial Will End Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        3120,
+        200
+      ],
+      "parameters": {
+        "sendTo": "={{ $json.email_to }}",
+        "subject": "={{ $json.email_subject }}",
+        "emailType": "html",
+        "message": "={{ $json.email_html }}",
+        "options": {}
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "cIma8ntTjZvIfU3H",
+          "name": "damian2botella"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "d65d0219-2b13-496e-a028-d2fd3ad79512",
+      "name": "Mark Will End Sent",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        3360,
+        200
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO trial_alerts_sent (tenant_id, subscription_id, alert_type, alert_window_date, email_to, metadata) VALUES ($1::uuid, $2::uuid, 'will_end_stripe', $3::date, $4::text, $5::jsonb) ON CONFLICT (tenant_id, alert_type, alert_window_date) DO NOTHING",
+        "options": {
+          "queryReplacement": "={{ [$json.tenant_id, $json.subscription_id, $json.alert_window_date, $json.email_to, JSON.stringify({ source: 'stripe_webhook_trial_will_end', plan_tier: $json.plan_tier, trial_ends_at: $json.trial_ends_at })] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueRegularOutput"
     }
   ],
   "connections": {
@@ -379,6 +530,11 @@
             "node": "Upsert Subscription",
             "type": "main",
             "index": 0
+          },
+          {
+            "node": "Is Trial Will End?",
+            "type": "main",
+            "index": 0
           }
         ]
       ]
@@ -399,6 +555,62 @@
         [
           {
             "node": "Respond 200",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Trial Will End?": {
+      "main": [
+        [
+          {
+            "node": "Load Tenant Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Tenant Email": {
+      "main": [
+        [
+          {
+            "node": "Build Trial Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Trial Email": {
+      "main": [
+        [
+          {
+            "node": "Skip Trial?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Skip Trial?": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Send Trial Will End Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Trial Will End Email": {
+      "main": [
+        [
+          {
+            "node": "Mark Will End Sent",
             "type": "main",
             "index": 0
           }

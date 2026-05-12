@@ -1,0 +1,410 @@
+{
+  "name": "cron_trial_expiry_alert",
+  "_description": "Fase G+ - Cron diario 10:00 que escanea tenant_subscriptions con trial_ends_at en 7d/3d/1d via find_expiring_trials() y manda email al contact_email del tenant con link a Customer Portal. Idempotente: registra en trial_alerts_sent (UNIQUE tenant+alert_type+window_date) para NO spammear. Excluye tenants con plan_tier='founder'. Logs en activity_log.",
+  "_status": "B72-fase-G+ trial expiry alert",
+  "_n8n_id": "yasBFGZ0hZuHnjPF",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 10 * * *"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        240,
+        300
+      ],
+      "id": "trig-cron",
+      "name": "Daily 10:00"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "_cron_trial_expiry_run",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        240,
+        460
+      ],
+      "id": "trig-manual",
+      "name": "Manual Trigger",
+      "webhookId": "feedface-cccc-4abc-9def-cafebabe000c"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT set_session_context(NULL::uuid, NULL::uuid, 'super_admin')",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        480,
+        380
+      ],
+      "id": "init-session",
+      "name": "Init Super Admin Context"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM find_expiring_trials() WHERE already_sent = false",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        720,
+        380
+      ],
+      "id": "find",
+      "name": "Find Expiring Trials",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const rows = $input.all().map(i => i.json).filter(r => r && r.tenant_id);\nif (rows.length === 0) {\n  return [{ json: { _skip: true, _reason: 'no_pending_alerts', checked_at: new Date(Date.now()).toISOString() }}];\n}\nconst windowLabels = { '7d': 'en 7 dias', '3d': 'en 3 dias', '1d': 'maniana' };\nconst out = rows.map(r => {\n  const days = r.days_until_expiry;\n  const label = windowLabels[r.alert_window] || ('en ' + days + ' dias');\n  const portalUrl = 'https://arquitai.studio/settings/billing'; // o cualquier URL frontend que dispare /billing/portal\n  const subject = '[ArquitAI] Tu trial Pro expira ' + label + ' - actualiza tu metodo de pago';\n  const greet = r.tenant_name ? ('Hola ' + r.tenant_name + ',') : 'Hola,';\n  const html = '<p>' + greet + '</p>' +\n               '<p>Tu trial de <strong>' + (r.plan_tier || 'plan') + '</strong> en ArquitAI expira <strong>' + label + '</strong> (' + new Date(r.trial_ends_at).toLocaleString('es-ES') + ').</p>' +\n               '<p>Para evitar que se interrumpa tu acceso, configura tu metodo de pago en el portal de cliente:</p>' +\n               '<p><a href=\"' + portalUrl + '\" style=\"display:inline-block;padding:12px 24px;background:#0074d4;color:white;text-decoration:none;border-radius:6px;font-weight:600;\">Gestionar suscripcion</a></p>' +\n               '<p>Si has decidido no continuar, puedes ignorar este email — tu cuenta pasara a modo lectura cuando termine el trial.</p>' +\n               '<p>Cualquier duda, responde a este email.</p>' +\n               '<hr style=\"border:none;border-top:1px solid #eee;margin:24px 0;\"/>' +\n               '<p style=\"color:#888;font-size:12px;\">Trial inicial: 14 dias. Tier ' + (r.plan_tier || '?') + '. Tenant: ' + (r.tenant_slug || '?') + '</p>';\n  const text = greet + '\\n\\n' +\n               'Tu trial de ' + (r.plan_tier || 'plan') + ' en ArquitAI expira ' + label + ' (' + new Date(r.trial_ends_at).toLocaleString('es-ES') + ').\\n\\n' +\n               'Para evitar que se interrumpa tu acceso, configura tu metodo de pago en el portal de cliente:\\n' + portalUrl + '\\n\\n' +\n               'Si has decidido no continuar, puedes ignorar este email - tu cuenta pasara a modo lectura cuando termine el trial.\\n\\n' +\n               'Cualquier duda, responde a este email.\\n\\n' +\n               '---\\nTrial inicial: 14 dias. Tier ' + (r.plan_tier || '?') + '. Tenant: ' + (r.tenant_slug || '?');\n  return { json: {\n    tenant_id: r.tenant_id,\n    tenant_name: r.tenant_name,\n    tenant_slug: r.tenant_slug,\n    subscription_id: r.subscription_id,\n    alert_window: r.alert_window,\n    alert_window_date: new Date(r.trial_ends_at).toISOString().slice(0,10),\n    email_to: r.contact_email,\n    plan_tier: r.plan_tier,\n    trial_ends_at: r.trial_ends_at,\n    days_until_expiry: r.days_until_expiry,\n    email_subject: subject,\n    email_html: html,\n    email_text: text\n  }};\n});\nreturn out;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        380
+      ],
+      "id": "build",
+      "name": "Build Emails"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cea-c1",
+              "leftValue": "={{ $json._skip }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1200,
+        380
+      ],
+      "id": "skip",
+      "name": "Nothing To Send?"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, status, details) VALUES (NULL::uuid, 'cron_trial_expiry_alert', 'no_alerts_to_send', 'skipped', $1::jsonb)",
+        "options": {
+          "queryReplacement": "={{ [JSON.stringify({ checked_at: $json.checked_at, reason: $json._reason })] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1440,
+        240
+      ],
+      "id": "log-skip",
+      "name": "Log Skip",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cea-c2",
+              "leftValue": "={{ $json.email_to }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1440,
+        520
+      ],
+      "id": "has-email",
+      "name": "Has Email?"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.email_to }}",
+        "subject": "={{ $json.email_subject }}",
+        "emailType": "html",
+        "message": "={{ $json.email_html }}",
+        "options": {}
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "cIma8ntTjZvIfU3H",
+          "name": "damian2botella"
+        }
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1680,
+        460
+      ],
+      "id": "send",
+      "name": "Send Trial Alert",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO trial_alerts_sent (tenant_id, subscription_id, alert_type, alert_window_date, email_to, metadata) VALUES ($1::uuid, $2::uuid, $3::text, $4::date, $5::text, $6::jsonb) ON CONFLICT (tenant_id, alert_type, alert_window_date) DO NOTHING RETURNING id",
+        "options": {
+          "queryReplacement": "={{ [$json.tenant_id, $json.subscription_id, $json.alert_window, $json.alert_window_date, $json.email_to, JSON.stringify({ plan_tier: $json.plan_tier, days_until_expiry: $json.days_until_expiry, trial_ends_at: $json.trial_ends_at, channel: 'gmail' })] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1920,
+        460
+      ],
+      "id": "mark",
+      "name": "Mark Sent",
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, status, details) VALUES (NULL::uuid, 'cron_trial_expiry_alert', $1::text, 'success', $2::jsonb)",
+        "options": {
+          "queryReplacement": "={{ [\n  'sent_trial_alert_' + $('Build Emails').first().json.alert_window,\n  JSON.stringify({ tenant_slug: $('Build Emails').first().json.tenant_slug, email_to: $('Build Emails').first().json.email_to, alert_window: $('Build Emails').first().json.alert_window, days_until_expiry: $('Build Emails').first().json.days_until_expiry, plan_tier: $('Build Emails').first().json.plan_tier })\n] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2160,
+        460
+      ],
+      "id": "log",
+      "name": "Log Activity",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, status, details) VALUES (NULL::uuid, 'cron_trial_expiry_alert', 'no_email_address', 'warning', $1::jsonb)",
+        "options": {
+          "queryReplacement": "={{ [JSON.stringify({ tenant_slug: $json.tenant_slug, alert_window: $json.alert_window })] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1680,
+        660
+      ],
+      "id": "log-no-email",
+      "name": "Log Missing Email",
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "Daily 10:00": {
+      "main": [
+        [
+          {
+            "node": "Init Super Admin Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Init Super Admin Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Init Super Admin Context": {
+      "main": [
+        [
+          {
+            "node": "Find Expiring Trials",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Expiring Trials": {
+      "main": [
+        [
+          {
+            "node": "Build Emails",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Emails": {
+      "main": [
+        [
+          {
+            "node": "Nothing To Send?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Nothing To Send?": {
+      "main": [
+        [
+          {
+            "node": "Log Skip",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Has Email?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Email?": {
+      "main": [
+        [
+          {
+            "node": "Log Missing Email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Trial Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Trial Alert": {
+      "main": [
+        [
+          {
+            "node": "Mark Sent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Sent": {
+      "main": [
+        [
+          {
+            "node": "Log Activity",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": {}
+}

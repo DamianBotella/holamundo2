@@ -1,0 +1,325 @@
+{
+  "name": "cron_permit_review",
+  "_n8n_id": "0LK6VrMq5lHOFJaL",
+  "nodes": [
+    {
+      "id": "cpr-01",
+      "name": "Schedule Daily 9am",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -700,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "daysInterval": 1,
+              "triggerAtHour": 9,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "cpr-02",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -700,
+        500
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "trigger-permit-review",
+        "responseMode": "lastNode",
+        "authentication": "headerAuth"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "Ba643jvuElTgMawr",
+          "name": "Webhook API Key (entrante)"
+        }
+      },
+      "webhookId": "b2e1c9ad-ebb1-49f9-9734-203cf642fc60"
+    },
+    {
+      "id": "cpr-03",
+      "name": "Find Pending Permits",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -460,
+        400
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH active AS (\n  SELECT pa.id, pa.entity, pa.application_type, pa.expediente_id, pa.status,\n         pa.submitted_at, pa.expected_response_days, pa.last_checked_at, pa.status_url, pa.notes,\n         p.id AS project_id, p.name AS project_name,\n         CASE\n           WHEN pa.submitted_at IS NULL THEN NULL\n           ELSE pa.submitted_at + (pa.expected_response_days || ' days')::interval\n         END AS expected_resolution,\n         CASE\n           WHEN pa.last_checked_at IS NULL THEN 999\n           ELSE EXTRACT(EPOCH FROM (now() - pa.last_checked_at))/86400\n         END AS days_since_check,\n         CASE\n           WHEN pa.submitted_at IS NULL THEN NULL\n           ELSE EXTRACT(EPOCH FROM (now() - (pa.submitted_at + (pa.expected_response_days || ' days')::interval)))/86400\n         END AS days_overdue\n    FROM permit_applications pa\n    JOIN projects p ON p.id = pa.project_id\n   WHERE pa.status NOT IN ('approved','rejected','withdrawn','expired')\n     AND p.current_phase NOT IN ('completed','archived')\n)\nSELECT json_agg(json_build_object(\n  'permit_id', id, 'project_id', project_id, 'project_name', project_name,\n  'entity', entity, 'application_type', application_type, 'expediente_id', expediente_id,\n  'status', status, 'submitted_at', submitted_at, 'status_url', status_url,\n  'expected_resolution', expected_resolution, 'days_since_check', round(days_since_check::numeric, 1),\n  'days_overdue', round(days_overdue::numeric, 1),\n  'priority', CASE\n    WHEN days_overdue IS NOT NULL AND days_overdue > 0 THEN 'overdue'\n    WHEN days_overdue IS NOT NULL AND days_overdue > -7 THEN 'due_soon'\n    WHEN days_since_check > 14 THEN 'stale_check'\n    ELSE 'normal'\n  END\n) ORDER BY\n  CASE WHEN days_overdue IS NOT NULL AND days_overdue > 0 THEN 0\n       WHEN days_overdue IS NOT NULL AND days_overdue > -7 THEN 1\n       WHEN days_since_check > 14 THEN 2\n       ELSE 3 END,\n  days_overdue DESC NULLS LAST\n) AS pending\nFROM active;",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "id": "cpr-04",
+      "name": "Has Alerts?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -220,
+        400
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "h1",
+              "leftValue": "={{ ($('Find Pending Permits').first().json.pending && $('Find Pending Permits').first().json.pending.length) || 0 }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "cpr-05",
+      "name": "Build Email Body",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        20,
+        320
+      ],
+      "parameters": {
+        "jsCode": "const list = $('Find Pending Permits').first().json.pending || [];\nconst rows = list.map(p => {\n  const badge = {\n    overdue: '<span style=\"background:#dc2626;color:white;padding:2px 6px;border-radius:3px\">VENCIDO</span>',\n    due_soon: '<span style=\"background:#f59e0b;color:white;padding:2px 6px;border-radius:3px\">PROXIMO</span>',\n    stale_check: '<span style=\"background:#6b7280;color:white;padding:2px 6px;border-radius:3px\">SIN REVISAR</span>',\n    normal: '<span style=\"background:#10b981;color:white;padding:2px 6px;border-radius:3px\">OK</span>'\n  }[p.priority] || '';\n  const overdueText = p.days_overdue !== null && p.days_overdue !== undefined\n    ? (p.days_overdue > 0 ? '+' + Math.round(p.days_overdue) + 'd' : Math.round(-p.days_overdue) + 'd para vencer')\n    : '-';\n  const url = p.status_url ? '<a href=\"' + p.status_url + '\">sede</a>' : '-';\n  return '<tr><td>' + badge + '</td><td>' + (p.project_name || '?') + '</td><td>' + p.entity + '</td><td>' + p.application_type + '</td><td>' + (p.expediente_id || '-') + '</td><td>' + p.status + '</td><td>' + overdueText + '</td><td>' + Math.round(p.days_since_check || 0) + 'd</td><td>' + url + '</td></tr>';\n}).join('');\nconst html = '<h2>Expedientes administrativos pendientes</h2>' +\n  '<p>Total: ' + list.length + ' expedientes activos.</p>' +\n  '<table border=\"1\" cellpadding=\"6\" cellspacing=\"0\" style=\"border-collapse:collapse;font-family:sans-serif;font-size:13px\">' +\n  '<thead><tr style=\"background:#f3f4f6\"><th>Estado</th><th>Proyecto</th><th>Entidad</th><th>Tipo</th><th>Expediente</th><th>Estado actual</th><th>Vencimiento</th><th>Sin revisar</th><th>Sede</th></tr></thead>' +\n  '<tbody>' + rows + '</tbody></table>' +\n  '<p style=\"font-size:12px;color:#6b7280;margin-top:16px\">Actualiza un expediente: POST /webhook/permit-update con {permit_id, new_status, notes}</p>';\nreturn [{ json: { html_body: html, count: list.length } }];"
+      }
+    },
+    {
+      "id": "cpr-06",
+      "name": "Send Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        260,
+        320
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $('Load Architect Email').first().json.value }}",
+        "subject": "=ArquitAI — {{ $json.count }} expediente(s) pendiente(s) hoy",
+        "emailType": "html",
+        "message": "={{ $json.html_body }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "cIma8ntTjZvIfU3H",
+          "name": "damian2botella"
+        }
+      }
+    },
+    {
+      "id": "cpr-07",
+      "name": "Log Activity",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        500,
+        320
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, status, input_summary)\nVALUES (NULL, 'cron_permit_review', 'review_pending_permits', 'success', $1)\nRETURNING id;",
+        "options": {
+          "queryReplacement": "={{ [ ('count=' + $json.count) ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "cpr-08",
+      "name": "No Pending",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        20,
+        480
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "ad0eafd9-78d2-41a1-979b-1f8954f749a7",
+      "name": "Load Architect Email",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -340,
+        400
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT value FROM system_config WHERE key = 'architect_email'",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "5f75733b-6a7e-43d8-be23-0e30785f3dcb",
+      "name": "Init Super Admin Context",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -580,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT set_config('app.role', 'super_admin', false) AS role_set"
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Find Pending Permits",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Alerts?": {
+      "main": [
+        [
+          {
+            "node": "Build Email Body",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Pending",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Email Body": {
+      "main": [
+        [
+          {
+            "node": "Send Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Email": {
+      "main": [
+        [
+          {
+            "node": "Log Activity",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Pending Permits": {
+      "main": [
+        [
+          {
+            "node": "Load Architect Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Architect Email": {
+      "main": [
+        [
+          {
+            "node": "Has Alerts?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Daily 9am": {
+      "main": [
+        [
+          {
+            "node": "Init Super Admin Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Init Super Admin Context": {
+      "main": [
+        [
+          {
+            "node": "Find Pending Permits",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": {}
+}

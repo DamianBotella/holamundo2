@@ -1,0 +1,251 @@
+{
+  "name": "api_studio_pending_approvals",
+  "_n8n_id": "WGgPJz5OEMxZPy90",
+  "nodes": [
+    {
+      "id": "spa-001",
+      "name": "GET /studio/pending-approvals",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "api/v1/studio/pending-approvals",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "webhookId": "ca1d67e7-a34f-4345-b9d3-0c5969e0bc76"
+    },
+    {
+      "id": "spa-decode",
+      "name": "Decode JWT",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const auth = $input.first().json.headers?.authorization || '';\nif (!auth.startsWith('Bearer ')) return [{ json: { _error: 'AUTH_MISSING_TOKEN', _status: 401 } }];\nconst token = auth.slice(7);\ntry {\n  const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'));\n  if (!payload.sub) throw new Error('No sub');\n  if (payload.exp && Date.now()/1000 > payload.exp) throw new Error('JWT expired');\n  return [{ json: {\n    user_id:    payload.sub,\n    tenant_id:  payload.tenant_id || null,\n    role:       payload.role || 'architect',\n    request_id: 'req_' + Math.random().toString(36).slice(2, 10)\n  }}];\n} catch (e) {\n  return [{ json: { _error: 'AUTH_INVALID_TOKEN', _status: 401, _details: e.message } }];\n}"
+      }
+    },
+    {
+      "id": "spa-if-auth",
+      "name": "Auth OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        720,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "spa-c1",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "spa-respond-401",
+      "name": "Respond 401",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        960,
+        460
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details || $json._error, request_id: 'req_' + Date.now() } }) }}",
+        "options": {
+          "responseCode": "={{ $json._status || 401 }}"
+        }
+      }
+    },
+    {
+      "id": "spa-set-session",
+      "name": "Set Session Context",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        960,
+        200
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT set_session_context($1::uuid, $2::uuid, $3)",
+        "options": {
+          "queryReplacement": "={{ [$json.user_id, $json.tenant_id, $json.role] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "spa-query",
+      "name": "Query approvals",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1200,
+        200
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT a.id, a.project_id, a.approval_type, a.summary, a.requested_by, a.created_at, a.expires_at, p.name AS project_name, CASE a.approval_type WHEN 'briefing_review' THEN 'agent_briefing' WHEN 'design_review' THEN 'agent_design' WHEN 'proposal_review' THEN 'agent_proposal' WHEN 'proposal_send' THEN 'agent_proposal' WHEN 'trade_request_send' THEN 'agent_trades' WHEN 'external_contact' THEN 'main_orchestrator' WHEN 'project_close' THEN 'main_orchestrator' ELSE 'main_orchestrator' END AS agent_name FROM approvals a LEFT JOIN projects p ON p.id = a.project_id WHERE a.status = 'pending' ORDER BY a.created_at DESC LIMIT 100",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "spa-format",
+      "name": "Format Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1440,
+        200
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const items = $input.all().map(i => i.json);\nconst sess = $('Decode JWT').first().json;\nreturn [{ json: {\n  data: items.map(a => ({\n    approval_id:    a.id,\n    project_id:     a.project_id,\n    project_name:   a.project_name,\n    approval_type:  a.approval_type,\n    agent_name:     a.agent_name,\n    summary:        a.summary,\n    requested_by:   a.requested_by,\n    created_at:     a.created_at,\n    expires_at:     a.expires_at\n  })),\n  meta: {\n    request_id: sess.request_id,\n    timestamp:  new Date().toISOString(),\n    count:      items.length\n  }\n}}];"
+      }
+    },
+    {
+      "id": "spa-respond-200",
+      "name": "Respond 200",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1680,
+        200
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Cache-Control",
+                "value": "no-cache, no-store, must-revalidate"
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "GET /studio/pending-approvals": {
+      "main": [
+        [
+          {
+            "node": "Decode JWT",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decode JWT": {
+      "main": [
+        [
+          {
+            "node": "Auth OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Auth OK?": {
+      "main": [
+        [
+          {
+            "node": "Respond 401",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Set Session Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Session Context": {
+      "main": [
+        [
+          {
+            "node": "Query approvals",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Query approvals": {
+      "main": [
+        [
+          {
+            "node": "Format Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Response": {
+      "main": [
+        [
+          {
+            "node": "Respond 200",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": {}
+}

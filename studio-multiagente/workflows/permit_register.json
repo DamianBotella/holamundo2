@@ -1,0 +1,194 @@
+{
+  "name": "permit_register",
+  "_n8n_id": "4d4Js8Y5fuZI4W9Q",
+  "nodes": [
+    {
+      "id": "pr-01",
+      "name": "Webhook Register",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -700,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "permit-register",
+        "responseMode": "responseNode",
+        "authentication": "headerAuth"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "Ba643jvuElTgMawr",
+          "name": "Webhook API Key (entrante)"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "webhookId": "bad51e8c-ecd9-495c-ac25-d83049dbf70b"
+    },
+    {
+      "id": "pr-02",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -460,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || {};\nconst required = ['project_id','entity','application_type'];\nconst missing = required.filter(k => !body[k]);\nconst validTypes = ['licencia_obra_mayor','licencia_obra_menor','comunicacion_previa','declaracion_responsable','licencia_actividad','primera_ocupacion','cambio_uso','cedula_urbanistica','autorizacion_autonomica','otro'];\nif (missing.length > 0) {\n  return [{ json: { valid: false, error: 'Campos obligatorios faltantes: ' + missing.join(', ') } }];\n}\nif (!validTypes.includes(body.application_type)) {\n  return [{ json: { valid: false, error: 'application_type invalido. Permitidos: ' + validTypes.join(', ') } }];\n}\nconst out = {\n  valid: true,\n  project_id: body.project_id,\n  regulatory_task_id: body.regulatory_task_id || null,\n  entity: String(body.entity).trim(),\n  application_type: body.application_type,\n  expediente_id: body.expediente_id || null,\n  status: body.status || 'preparing',\n  submitted_at: body.submitted_at || null,\n  expected_response_days: Number(body.expected_response_days) || 30,\n  status_url: body.status_url || null,\n  notes: body.notes || null\n};\nreturn [{ json: out }];"
+      }
+    },
+    {
+      "id": "pr-03",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -220,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "v1",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "pr-04",
+      "name": "Insert Permit",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        20,
+        220
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO permit_applications (\n  project_id, regulatory_task_id, entity, application_type, expediente_id,\n  status, submitted_at, expected_response_days, status_url, notes, last_checked_at\n) VALUES (\n  $1::uuid,\n  NULLIF($2,'')::uuid,\n  $3,\n  $4,\n  $5,\n  $6,\n  NULLIF($7,'')::timestamptz,\n  $8::int,\n  $9,\n  $10,\n  CASE WHEN NULLIF($7,'') IS NOT NULL THEN NULLIF($7,'')::timestamptz ELSE NULL END\n) RETURNING id, status, expediente_id, submitted_at, expected_response_days;",
+        "options": {
+          "queryReplacement": "={{ [ $json.project_id, $json.regulatory_task_id || '', $json.entity, $json.application_type, $json.expediente_id || '', $json.status, $json.submitted_at || '', $json.expected_response_days, $json.status_url || '', $json.notes || '' ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "pr-05",
+      "name": "Respond 201",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        260,
+        220
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status: 'created', permit_id: $json.id, expediente_id: $json.expediente_id, submitted_at: $json.submitted_at, expected_response_days: $json.expected_response_days}) }}",
+        "options": {
+          "responseCode": 201
+        }
+      }
+    },
+    {
+      "id": "pr-06",
+      "name": "Respond 400",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        20,
+        400
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status: 'error', error: $json.error}) }}",
+        "options": {
+          "responseCode": 400
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook Register": {
+      "main": [
+        [
+          {
+            "node": "Validate Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Input": {
+      "main": [
+        [
+          {
+            "node": "Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid?": {
+      "main": [
+        [
+          {
+            "node": "Insert Permit",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 400",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Permit": {
+      "main": [
+        [
+          {
+            "node": "Respond 201",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": {}
+}

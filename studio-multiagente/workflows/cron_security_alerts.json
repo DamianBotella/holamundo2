@@ -1,0 +1,267 @@
+{
+  "name": "cron_security_alerts",
+  "_n8n_id": "A0MgvE97s3IRicmt",
+  "nodes": [
+    {
+      "id": "csa-01",
+      "name": "Schedule 15min",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -700,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 15
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "csa-02",
+      "name": "Find Blocked IPs",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -460,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH blocked_recent AS (\n  SELECT source_ip,\n         array_agg(DISTINCT endpoint) AS endpoints,\n         sum(request_count) AS total_requests,\n         max(last_request_at) AS last_seen,\n         count(*) AS minutes_blocked\n    FROM rate_limit_log\n   WHERE blocked = true\n     AND window_start > now() - INTERVAL '15 minutes'\n   GROUP BY source_ip\n), recently_alerted AS (\n  SELECT regexp_replace(input_summary, '^ip=', '') AS source_ip\n    FROM activity_log\n   WHERE agent_name = 'security_alert'\n     AND action = 'ip_blocked_alert'\n     AND created_at > now() - INTERVAL '1 hour'\n)\nSELECT br.source_ip,\n       br.endpoints,\n       br.total_requests,\n       br.last_seen,\n       br.minutes_blocked\n  FROM blocked_recent br\n  LEFT JOIN recently_alerted ra ON ra.source_ip = br.source_ip\n WHERE ra.source_ip IS NULL\n   AND br.minutes_blocked >= 1\n ORDER BY br.total_requests DESC;",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "id": "csa-03",
+      "name": "Has Alerts?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -220,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "h1",
+              "leftValue": "={{ $json.source_ip }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "csa-04",
+      "name": "Log Alert Sent",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        20,
+        220
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, status, source_ip, input_summary)\nVALUES (NULL, 'security_alert', 'ip_blocked_alert', 'warning', $1, $2)\nRETURNING id;",
+        "options": {
+          "queryReplacement": "={{ [ $json.source_ip, ('ip=' + $json.source_ip) ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "csa-05",
+      "name": "Send Alert Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        280,
+        220
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $('Load Architect Email').first().json.value }}",
+        "subject": "=ArquitAI ALERTA — IP bloqueada por rate limit: {{ $('Has Alerts?').item.json.source_ip }}",
+        "emailType": "html",
+        "message": "=<h3>Alerta de seguridad</h3>\n<p><strong>IP origen:</strong> {{ $('Has Alerts?').item.json.source_ip }}</p>\n<p><strong>Endpoints atacados:</strong> {{ JSON.stringify($('Has Alerts?').item.json.endpoints) }}</p>\n<p><strong>Total requests en últimos 15 min:</strong> {{ $('Has Alerts?').item.json.total_requests }}</p>\n<p><strong>Minutos con bloqueo activo:</strong> {{ $('Has Alerts?').item.json.minutes_blocked }}</p>\n<p><strong>Último hit:</strong> {{ $('Has Alerts?').item.json.last_seen }}</p>\n<hr>\n<p>El sistema ya está bloqueando esta IP. Revisa <code>rate_limit_log</code> para detalle. No se enviarán más alertas para esta IP en la próxima hora.</p>",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "cIma8ntTjZvIfU3H",
+          "name": "damian2botella"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "csa-06",
+      "name": "No Alerts",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        20,
+        380
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "86567df0-7c59-4e3c-9e5e-9c44341e46e2",
+      "name": "Load Architect Email",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -600,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT value FROM system_config WHERE key = 'architect_email'",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "69fa55bb-6763-4df4-86a7-43e6c5e4dec8",
+      "name": "Init Super Admin Context",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -580,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT set_config('app.role', 'super_admin', false) AS role_set"
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Find Blocked IPs": {
+      "main": [
+        [
+          {
+            "node": "Has Alerts?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Alerts?": {
+      "main": [
+        [
+          {
+            "node": "Log Alert Sent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Alerts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Alert Sent": {
+      "main": [
+        [
+          {
+            "node": "Send Alert Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Architect Email": {
+      "main": [
+        [
+          {
+            "node": "Find Blocked IPs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule 15min": {
+      "main": [
+        [
+          {
+            "node": "Init Super Admin Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Init Super Admin Context": {
+      "main": [
+        [
+          {
+            "node": "Load Architect Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": {}
+}

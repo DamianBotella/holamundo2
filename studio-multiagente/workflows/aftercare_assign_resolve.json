@@ -1,0 +1,519 @@
+{
+  "name": "aftercare_assign_resolve",
+  "_n8n_id": "xdkQuIdOwLZw68sK",
+  "nodes": [
+    {
+      "id": "ar-01",
+      "name": "Webhook Assign",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -700,
+        200
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "aftercare-assign",
+        "responseMode": "responseNode",
+        "authentication": "headerAuth"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "Ba643jvuElTgMawr",
+          "name": "Webhook API Key (entrante)"
+        }
+      },
+      "webhookId": "4cc09e07-9d2a-4b69-bb17-6abc9f2846c2"
+    },
+    {
+      "id": "ar-02",
+      "name": "Validate Assign",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -460,
+        200
+      ],
+      "parameters": {
+        "jsCode": "const body = $('Webhook Assign').first().json.body || {};\nif (!body.incident_id) { const e = { valid: false, error: 'incident_id obligatorio' }; return [{ json: e }]; }\nif (!body.assigned_to) { const e = { valid: false, error: 'assigned_to obligatorio' }; return [{ json: e }]; }\nconst emailMatch = (body.assigned_to || '').toString().match(/<([^>]+@[^>]+)>|^([^\\s@]+@[^\\s@]+\\.[^\\s@]+)$/);\nconst extractedEmail = emailMatch ? (emailMatch[1] || emailMatch[2]) : null;\nconst notifyEmail = body.notify_email_to || extractedEmail;\nconst out = {\n  valid: true,\n  incident_id: body.incident_id,\n  assigned_to: body.assigned_to.toString().slice(0, 200),\n  notify_email: notifyEmail,\n  notes: (body.notes || '').toString().slice(0, 1000)\n};\nreturn [{ json: out }];"
+      }
+    },
+    {
+      "id": "ar-03",
+      "name": "Assign Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -220,
+        200
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "v1",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ar-04",
+      "name": "Apply Assign",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        20,
+        120
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE aftercare_incidents\n   SET status = 'assigned',\n       assigned_to = $2,\n       assigned_at = now(),\n       notes = COALESCE(notes || E'\\n', '') || COALESCE(NULLIF($3,''), '')\n WHERE id = $1::uuid\nRETURNING id, status, assigned_to, responsible_trade, severity, description, photo_urls, vision_summary, vision_raw, project_id, loe_period, under_warranty;",
+        "options": {
+          "queryReplacement": "={{ [ $json.incident_id, $json.assigned_to, $json.notes || '' ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ar-05",
+      "name": "Respond Assign 200",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        240,
+        120
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'assigned', incident_id: $('Apply Assign').first().json.id, assigned_to: $('Apply Assign').first().json.assigned_to, incident_status: $('Apply Assign').first().json.status, severity: $('Apply Assign').first().json.severity, gremio_notified: ($('Validate Assign').first().json.notify_email || '').includes('@')}) }}",
+        "options": {
+          "responseCode": 200
+        }
+      }
+    },
+    {
+      "id": "ar-06",
+      "name": "Respond Assign 400",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        20,
+        280
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'error', error: $json.error}) }}",
+        "options": {
+          "responseCode": 400
+        }
+      }
+    },
+    {
+      "id": "ar-10",
+      "name": "Webhook Resolve",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -700,
+        600
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "aftercare-resolve",
+        "responseMode": "responseNode",
+        "authentication": "headerAuth"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "Ba643jvuElTgMawr",
+          "name": "Webhook API Key (entrante)"
+        }
+      },
+      "webhookId": "36db5db6-ab1d-4ea1-a207-259c6d1a2166"
+    },
+    {
+      "id": "ar-11",
+      "name": "Validate Resolve",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -460,
+        600
+      ],
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || {};\nif (!body.incident_id) { const e = { valid: false, error: 'incident_id obligatorio' }; return [{ json: e }]; }\nlet evidence = body.evidence_urls || (body.evidence_url ? [body.evidence_url] : []);\nif (!Array.isArray(evidence)) evidence = [];\nevidence = evidence.filter(u => typeof u === 'string' && u.startsWith('http')).slice(0, 5);\nconst out = {\n  valid: true,\n  incident_id: body.incident_id,\n  resolution_notes: (body.resolution_notes || '').toString().slice(0, 2000),\n  evidence_urls: evidence,\n  status: body.status === 'closed' ? 'closed' : 'resolved'\n};\nreturn [{ json: out }];"
+      }
+    },
+    {
+      "id": "ar-12",
+      "name": "Resolve Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -220,
+        600
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "v1",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ar-13",
+      "name": "Apply Resolve",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        20,
+        520
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE aftercare_incidents\n   SET status = $2,\n       resolution_notes = $3,\n       resolved_evidence = CASE WHEN array_length($4::text[], 1) IS NOT NULL THEN $4::text[] ELSE resolved_evidence END\n WHERE id = $1::uuid\nRETURNING id, status, severity, responsible_trade, resolved_at;",
+        "options": {
+          "queryReplacement": "={{ [ $json.incident_id, $json.status, $json.resolution_notes || '', '{' + ($json.evidence_urls || []).map(u => '\"' + u.replace(/\"/g, '\\\\\"') + '\"').join(',') + '}' ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ar-14",
+      "name": "Respond Resolve 200",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        240,
+        520
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'resolved', incident_id: $json.id, incident_status: $json.status, resolved_at: $json.resolved_at}) }}",
+        "options": {
+          "responseCode": 200
+        }
+      }
+    },
+    {
+      "id": "ar-15",
+      "name": "Respond Resolve 400",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        20,
+        680
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'error', error: $json.error}) }}",
+        "options": {
+          "responseCode": 400
+        }
+      }
+    },
+    {
+      "id": "ar-notify-if",
+      "name": "Notify Gremio?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        240,
+        120
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "n1",
+              "leftValue": "={{ ($('Validate Assign').first().json.notify_email || '').includes('@') }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ar-build-gremio",
+      "name": "Build Gremio Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        460,
+        60
+      ],
+      "parameters": {
+        "jsCode": "const inc = $input.first().json;\nconst input = $('Validate Assign').first().json;\nconst sevColor = { urgent: '#dc2626', high: '#ea580c', medium: '#f59e0b', low: '#10b981' }[inc.severity] || '#6b7280';\nconst photos = (inc.photo_urls || []).map(u => '<a href=\"' + u + '\">foto</a>').join(' &middot; ') || '(sin fotos)';\nconst raw = inc.vision_raw || {};\nconst action = raw.action_recommended || '';\nconst body = '<div style=\"font-family:Arial,sans-serif;max-width:600px;margin:0 auto\">' +\n  '<h2 style=\"color:#2c3e50\">Incidencia post-entrega asignada</h2>' +\n  '<p>Hola,</p>' +\n  '<p>Te asignamos esta incidencia post-entrega del cliente para que la atiendas:</p>' +\n  '<p><span style=\"background:' + sevColor + ';color:white;padding:2px 8px;border-radius:3px;font-weight:bold\">' + (inc.severity || '?').toUpperCase() + '</span>' +\n  (inc.under_warranty ? ' <span style=\"background:#10b981;color:white;padding:2px 8px;border-radius:3px;margin-left:6px\">EN GARANTIA LOE (' + (inc.loe_period || '?') + ' anios)</span>' : '') + '</p>' +\n  '<p><b>Descripcion del cliente:</b><br>' + (inc.description || '?') + '</p>' +\n  (inc.vision_summary ? '<p><b>Analisis tecnico automatico:</b><br>' + inc.vision_summary + '</p>' : '') +\n  (action ? '<p><b>Accion recomendada:</b> ' + action + '</p>' : '') +\n  (input.notes ? '<p><b>Notas adicionales del arquitecto:</b><br>' + input.notes + '</p>' : '') +\n  '<p><b>Fotos:</b> ' + photos + '</p>' +\n  '<hr>' +\n  '<p>Por favor, contacta con el cliente para programar la visita y nos avisas con la fecha prevista.</p>' +\n  '<p>Saludos,<br>Damian - Estudio</p>' +\n  '<p style=\"font-size:11px;color:#6b7280\">Ref incidencia: ' + inc.id + '</p>' +\n  '</div>';\nreturn [{ json: { html: body, to_email: input.notify_email, severity: inc.severity, incident_id: inc.id, description_preview: (inc.description || '').substring(0, 60) } }];"
+      }
+    },
+    {
+      "id": "ar-send-gremio",
+      "name": "Send to Gremio",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        680,
+        60
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $json.to_email }}",
+        "subject": "=Incidencia post-entrega - [{{ ($json.severity || 'medium').toUpperCase() }}] {{ $json.description_preview }}",
+        "emailType": "html",
+        "message": "={{ $json.html }}",
+        "options": {
+          "appendAttribution": false,
+          "ccList": "={{ $('Load Architect Email').first().json.value }}"
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "cIma8ntTjZvIfU3H",
+          "name": "damian2botella"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "d8811862-0035-4d66-8b39-78fcb1a5fc4f",
+      "name": "Load Architect Email",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -580,
+        200
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT value FROM system_config WHERE key = 'architect_email'",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Validate Assign": {
+      "main": [
+        [
+          {
+            "node": "Assign Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Assign Valid?": {
+      "main": [
+        [
+          {
+            "node": "Apply Assign",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond Assign 400",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook Resolve": {
+      "main": [
+        [
+          {
+            "node": "Validate Resolve",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Resolve": {
+      "main": [
+        [
+          {
+            "node": "Resolve Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resolve Valid?": {
+      "main": [
+        [
+          {
+            "node": "Apply Resolve",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond Resolve 400",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply Resolve": {
+      "main": [
+        [
+          {
+            "node": "Respond Resolve 200",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply Assign": {
+      "main": [
+        [
+          {
+            "node": "Notify Gremio?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify Gremio?": {
+      "main": [
+        [
+          {
+            "node": "Build Gremio Email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond Assign 200",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Gremio Email": {
+      "main": [
+        [
+          {
+            "node": "Send to Gremio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send to Gremio": {
+      "main": [
+        [
+          {
+            "node": "Respond Assign 200",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook Assign": {
+      "main": [
+        [
+          {
+            "node": "Load Architect Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Architect Email": {
+      "main": [
+        [
+          {
+            "node": "Validate Assign",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": {}
+}

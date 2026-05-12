@@ -1,0 +1,228 @@
+{
+  "name": "certification_register",
+  "_n8n_id": "eJhIqyn6AxnNmpeS",
+  "nodes": [
+    {
+      "id": "cr-01",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -700,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "certification-register",
+        "responseMode": "responseNode",
+        "authentication": "headerAuth"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "Ba643jvuElTgMawr",
+          "name": "Webhook API Key (entrante)"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "webhookId": "59c778bd-1318-40ee-a0ea-747fc6e4c28a"
+    },
+    {
+      "id": "cr-02",
+      "name": "Validate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -460,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || {};\nif (!body.project_id) { const e = { valid: false, error: 'project_id obligatorio' }; return [{ json: e }]; }\nif (!body.percentage || isNaN(Number(body.percentage)) || Number(body.percentage) <= 0 || Number(body.percentage) > 100) {\n  const e = { valid: false, error: 'percentage 0-100 obligatorio' };\n  return [{ json: e }];\n}\nconst out = {\n  valid: true,\n  project_id: body.project_id,\n  percentage: Number(body.percentage),\n  amount: body.amount ? Number(body.amount) : null,\n  description: (body.description || '').toString().slice(0, 500),\n  due_date: body.due_date || null\n};\nreturn [{ json: out }];"
+      }
+    },
+    {
+      "id": "cr-03",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -220,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "v1",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "cr-04",
+      "name": "Compute Amount",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        20,
+        220
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT json_build_object(\n  'next_version', COALESCE((SELECT max(version) FROM certifications WHERE project_id = $1::uuid AND status != 'cancelled'), 0) + 1,\n  'pct_so_far', COALESCE((SELECT sum(percentage) FROM certifications WHERE project_id = $1::uuid AND status != 'cancelled'), 0),\n  'amount_so_far', COALESCE((SELECT sum(amount) FROM certifications WHERE project_id = $1::uuid AND status != 'cancelled'), 0),\n  'cost_estimated', (SELECT total_estimated FROM cost_estimates WHERE project_id = $1::uuid ORDER BY version DESC LIMIT 1),\n  'computed_amount', CASE\n    WHEN NULLIF($2,'')::numeric IS NOT NULL THEN NULLIF($2,'')::numeric\n    ELSE ROUND(COALESCE((SELECT total_estimated FROM cost_estimates WHERE project_id = $1::uuid ORDER BY version DESC LIMIT 1), 0) * ($3::numeric/100), 2)\n  END\n) AS calc;",
+        "options": {
+          "queryReplacement": "={{ [ $json.project_id, $json.amount === null || $json.amount === undefined ? '' : String($json.amount), $json.percentage ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "cr-05",
+      "name": "Insert Certification",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        240,
+        220
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO certifications (project_id, version, percentage, amount, description, due_date)\nVALUES ($1::uuid, $2::int, $3::numeric, $4::numeric, $5, NULLIF($6,'')::date)\nRETURNING id, version, percentage, amount, status, issued_at;",
+        "options": {
+          "queryReplacement": "={{ [\n  $('Validate').first().json.project_id,\n  $json.calc.next_version,\n  $('Validate').first().json.percentage,\n  $json.calc.computed_amount,\n  $('Validate').first().json.description || '',\n  $('Validate').first().json.due_date || ''\n] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "cr-06",
+      "name": "Respond 201",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        460,
+        220
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'created', certification_id: $json.id, version: $json.version, percentage: $json.percentage, amount: $json.amount, certification_status: $json.status, issued_at: $json.issued_at}) }}",
+        "options": {
+          "responseCode": 201
+        }
+      }
+    },
+    {
+      "id": "cr-07",
+      "name": "Respond 400",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        20,
+        400
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status:'error', error: $json.error}) }}",
+        "options": {
+          "responseCode": 400
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate": {
+      "main": [
+        [
+          {
+            "node": "Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid?": {
+      "main": [
+        [
+          {
+            "node": "Compute Amount",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 400",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compute Amount": {
+      "main": [
+        [
+          {
+            "node": "Insert Certification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Certification": {
+      "main": [
+        [
+          {
+            "node": "Respond 201",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": {}
+}

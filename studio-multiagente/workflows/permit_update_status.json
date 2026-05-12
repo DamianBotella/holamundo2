@@ -1,0 +1,194 @@
+{
+  "name": "permit_update_status",
+  "_n8n_id": "QGiZjzrCeRcxWjqj",
+  "nodes": [
+    {
+      "id": "pus-01",
+      "name": "Webhook Update",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -700,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "permit-update",
+        "responseMode": "responseNode",
+        "authentication": "headerAuth"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "Ba643jvuElTgMawr",
+          "name": "Webhook API Key (entrante)"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "webhookId": "6737c4b3-108c-40bd-95fb-4ac35d0b8bd7"
+    },
+    {
+      "id": "pus-02",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -460,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || {};\nif (!body.permit_id) return [{ json: { valid: false, error: 'permit_id obligatorio' } }];\nif (!body.new_status) return [{ json: { valid: false, error: 'new_status obligatorio' } }];\nconst validStatuses = ['preparing','submitted','requires_subsanation','in_review','approved','rejected','withdrawn','expired'];\nif (!validStatuses.includes(body.new_status)) {\n  return [{ json: { valid: false, error: 'new_status invalido. Permitidos: ' + validStatuses.join(', ') } }];\n}\nconst out = {\n  valid: true,\n  permit_id: body.permit_id,\n  new_status: body.new_status,\n  notes: body.notes || null,\n  status_url: body.status_url || null\n};\nreturn [{ json: out }];"
+      }
+    },
+    {
+      "id": "pus-03",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -220,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "v1",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "pus-04",
+      "name": "Update Permit",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        20,
+        220
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE permit_applications\n  SET status          = $2,\n      notes           = COALESCE(NULLIF($3,''), notes),\n      status_url      = COALESCE(NULLIF($4,''), status_url),\n      last_checked_at = now()\n WHERE id = $1::uuid\nRETURNING id, status, expediente_id, project_id, resolved_at;",
+        "options": {
+          "queryReplacement": "={{ [ $json.permit_id, $json.new_status, $json.notes || '', $json.status_url || '' ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "pus-05",
+      "name": "Respond 200",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        260,
+        220
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status: 'updated', permit_id: $json.id, new_status: $json.status, resolved_at: $json.resolved_at}) }}",
+        "options": {
+          "responseCode": 200
+        }
+      }
+    },
+    {
+      "id": "pus-06",
+      "name": "Respond 400",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        20,
+        400
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({status: 'error', error: $json.error}) }}",
+        "options": {
+          "responseCode": 400
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook Update": {
+      "main": [
+        [
+          {
+            "node": "Validate Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Input": {
+      "main": [
+        [
+          {
+            "node": "Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid?": {
+      "main": [
+        [
+          {
+            "node": "Update Permit",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 400",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Permit": {
+      "main": [
+        [
+          {
+            "node": "Respond 200",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": {}
+}

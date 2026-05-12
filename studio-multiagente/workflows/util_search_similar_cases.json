@@ -1,0 +1,174 @@
+{
+  "name": "util_search_similar_cases",
+  "_n8n_id": "U9U5GPfuWi7DI4TW",
+  "nodes": [
+    {
+      "id": "us-01",
+      "name": "Receive Query",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    },
+    {
+      "id": "us-02",
+      "name": "Build Search Text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        250,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const q = $input.first().json;\nconst parts = [];\nif (q.project_type) parts.push('Tipo proyecto: ' + q.project_type);\nif (q.location_zone) parts.push('Zona: ' + q.location_zone);\nif (q.property_type) parts.push('Inmueble: ' + q.property_type);\nif (q.area_m2) parts.push('Area: ' + q.area_m2 + ' m2');\nif (q.summary) parts.push('Resumen: ' + q.summary);\nif (q.briefing_summary) parts.push('Briefing: ' + q.briefing_summary);\nif (q.tags && Array.isArray(q.tags)) parts.push('Tags: ' + q.tags.join(', '));\nconst text = parts.join('. ');\nconst topK = q.top_k || 5;\nreturn [{ json: { text: text || 'reforma vivienda generica', top_k: topK, exclude_project_id: q.exclude_project_id || null } }];"
+      }
+    },
+    {
+      "id": "us-03",
+      "name": "Call util_generate_embedding",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.1,
+      "position": [
+        500,
+        300
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "xZaguYuuTG0mXSf2",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "us-04",
+      "name": "Format Vector",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        750,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const r = $input.first().json;\nconst built = $('Build Search Text').first().json;\nif (r.status !== 'success' || !r.embedding) {\n  return [{ json: { error: 'embedding_failed', error_detail: r.error_message || 'unknown', similar_cases: [] } }];\n}\nconst vectorStr = '[' + r.embedding.join(',') + ']';\nreturn [{ json: { vector_str: vectorStr, top_k: built.top_k, exclude_project_id: built.exclude_project_id, search_text: built.text, dimensions: r.dimensions } }];"
+      }
+    },
+    {
+      "id": "us-05",
+      "name": "Search Similar",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1000,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, project_id, project_type, location_zone, property_type, area_m2, summary, scope_summary, decisions_made, lessons_learned, patterns, tags, cost_estimated, duration_estimated_days, 1 - (embedding <=> $1::vector) as similarity FROM memory_cases WHERE embedding IS NOT NULL AND ($3::uuid IS NULL OR project_id != $3::uuid) ORDER BY embedding <=> $1::vector LIMIT $2::int",
+        "options": {
+          "queryReplacement": "={{ [$json.vector_str, $json.top_k, $json.exclude_project_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "id": "us-06",
+      "name": "Aggregate Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1250,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const items = $input.all();\nconst format = $('Format Vector').first().json;\nconst cases = items.filter(i => i.json && i.json.id).map(i => ({\n  id: i.json.id,\n  similarity: parseFloat(i.json.similarity || 0),\n  project_type: i.json.project_type,\n  location_zone: i.json.location_zone,\n  property_type: i.json.property_type,\n  area_m2: i.json.area_m2,\n  summary: i.json.summary,\n  scope_summary: i.json.scope_summary,\n  cost_estimated: i.json.cost_estimated,\n  duration_estimated_days: i.json.duration_estimated_days,\n  lessons_learned: i.json.lessons_learned,\n  patterns: i.json.patterns,\n  decisions_made: i.json.decisions_made,\n  tags: i.json.tags\n}));\nreturn [{ json: { status: 'success', cases_found: cases.length, search_text: format.search_text, top_k: format.top_k, similar_cases: cases } }];"
+      }
+    }
+  ],
+  "connections": {
+    "Receive Query": {
+      "main": [
+        [
+          {
+            "node": "Build Search Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Search Text": {
+      "main": [
+        [
+          {
+            "node": "Call util_generate_embedding",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call util_generate_embedding": {
+      "main": [
+        [
+          {
+            "node": "Format Vector",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Vector": {
+      "main": [
+        [
+          {
+            "node": "Search Similar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Similar": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true,
+    "saveExecutionProgress": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": {}
+}

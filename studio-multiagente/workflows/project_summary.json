@@ -1,0 +1,285 @@
+{
+  "name": "project_summary",
+  "_n8n_id": "LuTpknJdwLwzUVqc",
+  "nodes": [
+    {
+      "id": "ps-01",
+      "name": "Webhook GET",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -700,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "project-summary",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "webhookId": "16ec3639-f268-4fee-8305-2274fd2c4181"
+    },
+    {
+      "id": "ps-02",
+      "name": "Validate Token",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -460,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT v.project_id, v.token_id, v.valid, v.reason FROM validate_client_token($1, 'project_view') v LIMIT 1;",
+        "options": {
+          "queryReplacement": "={{ [ ($json.query.token || '') ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "id": "ps-03",
+      "name": "Token Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -220,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "v1",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ps-04",
+      "name": "Load Snapshot",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        20,
+        220
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT json_build_object(\n  'project', (SELECT json_build_object('id', p.id, 'name', p.name, 'project_type', p.project_type, 'property_type', p.property_type, 'property_area_m2', p.property_area_m2, 'location', concat_ws(', ', p.location_address, p.location_city, p.location_province), 'budget_target', p.budget_target, 'current_phase', p.current_phase, 'created_at', p.created_at, 'handover_date', p.handover_date) FROM projects p WHERE p.id = $1::uuid),\n  'briefing', (SELECT json_build_object('summary', b.summary, 'objectives', b.objectives, 'client_needs', pii_decrypt(b.client_needs_enc)::jsonb, 'constraints', b.constraints, 'rooms_affected', b.rooms_affected, 'status', b.status, 'version', b.version) FROM briefings b WHERE b.project_id = $1::uuid AND b.status='approved' ORDER BY b.version DESC LIMIT 1),\n  'design', (SELECT json_build_object('title', d.title, 'description', d.description, 'option_number', d.option_number) FROM design_options d WHERE d.project_id = $1::uuid AND d.is_selected = true LIMIT 1),\n  'cost_estimate', (SELECT json_build_object('total_estimated', ce.total_estimated, 'version', ce.version, 'created_at', ce.created_at) FROM cost_estimates ce WHERE ce.project_id = $1::uuid ORDER BY ce.version DESC LIMIT 1),\n  'invoices', (SELECT json_agg(json_build_object('supplier', i.supplier_name, 'date', i.invoice_date, 'total', i.total_amount, 'status', i.status) ORDER BY i.invoice_date DESC NULLS LAST) FROM invoices i WHERE i.project_id = $1::uuid),\n  'invoices_summary', (SELECT json_build_object('total', COALESCE(sum(total_amount),0), 'count', count(*), 'pending', count(*) FILTER (WHERE status='pending_review'), 'paid', count(*) FILTER (WHERE paid_at IS NOT NULL)) FROM invoices WHERE project_id = $1::uuid),\n  'certifications', (SELECT json_agg(json_build_object('version', c.version, 'percentage', c.percentage, 'amount', c.amount, 'status', c.status, 'paid_amount', c.paid_amount) ORDER BY c.version) FROM certifications c WHERE c.project_id = $1::uuid),\n  'aftercare', (SELECT json_agg(json_build_object('reported_at', a.reported_at, 'severity', a.severity, 'category', a.category, 'description', LEFT(a.description, 200), 'status', a.status, 'assigned_to', a.assigned_to, 'resolved_at', a.resolved_at) ORDER BY a.reported_at DESC) FROM aftercare_incidents a WHERE a.project_id = $1::uuid),\n  'pathology', (SELECT json_agg(json_build_object('type', pf.pathology_type, 'severity', pf.severity, 'description', pf.description, 'recommended_action', pf.recommended_action, 'status', pf.status) ORDER BY CASE pf.severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END) FROM pathology_findings pf WHERE pf.project_id = $1::uuid AND pf.status NOT IN ('repaired','dismissed')),\n  'permits', (SELECT json_agg(json_build_object('entity', pa.entity, 'application_type', pa.application_type, 'expediente_id', pa.expediente_id, 'status', pa.status, 'submitted_at', pa.submitted_at) ORDER BY pa.created_at DESC) FROM permit_applications pa WHERE pa.project_id = $1::uuid)\n) AS snapshot;",
+        "options": {
+          "queryReplacement": "={{ [$json.project_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ps-05",
+      "name": "Build HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        220
+      ],
+      "parameters": {
+        "jsCode": "const s = $input.first().json.snapshot || {};\nconst p = s.project || {};\nconst b = s.briefing || {};\nconst d = s.design || {};\nconst ce = s.cost_estimate || {};\nconst invSum = s.invoices_summary || {};\nconst aftercare = s.aftercare || [];\nconst paths = s.pathology || [];\nconst permits = s.permits || [];\nconst certs = s.certifications || [];\nconst inv = s.invoices || [];\nconst fmt = n => Number(n || 0).toLocaleString('es-ES');\nconst sevColor = { urgent: '#dc2626', critical: '#7f1d1d', high: '#ea580c', medium: '#f59e0b', low: '#10b981' };\nconst pct = ce.total_estimated && invSum.total ? Math.round((invSum.total / ce.total_estimated) * 100) : 0;\n\nconst section = (title, body, count) => '<section style=\"margin:24px 0;padding:16px;background:#f9fafb;border-radius:8px\"><h2 style=\"margin:0 0 12px;color:#1f2937;font-size:18px\">' + title + (count !== undefined ? ' <span style=\"color:#6b7280;font-size:14px;font-weight:normal\">(' + count + ')</span>' : '') + '</h2>' + body + '</section>';\n\nconst briefingHtml = b.summary\n  ? '<p><b>Resumen:</b> ' + b.summary + '</p>' +\n    '<p><b>Objetivos:</b><br>' + (Array.isArray(b.objectives) ? b.objectives.map(o => typeof o === 'string' ? o : JSON.stringify(o)).join('<br>') : '—') + '</p>' +\n    '<p><b>Espacios afectados:</b> ' + (Array.isArray(b.rooms_affected) ? b.rooms_affected.length + ' espacios' : '—') + '</p>'\n  : '<p style=\"color:#6b7280\">Sin briefing aprobado todavía.</p>';\n\nconst designHtml = d.title\n  ? '<p><b>Opción ' + (d.option_number || '?') + ':</b> ' + d.title + '</p><p style=\"color:#374151\">' + (d.description || '').substring(0, 400) + '...</p>'\n  : '<p style=\"color:#6b7280\">Sin opción de diseño seleccionada.</p>';\n\nconst financialHtml = ce.total_estimated\n  ? '<table style=\"width:100%;border-collapse:collapse\">' +\n    '<tr><td style=\"padding:6px 0\"><b>Estimado</b></td><td style=\"padding:6px 0;text-align:right\">' + fmt(ce.total_estimated) + ' EUR</td></tr>' +\n    '<tr><td style=\"padding:6px 0\"><b>Facturado</b></td><td style=\"padding:6px 0;text-align:right\">' + fmt(invSum.total) + ' EUR (' + pct + '%)</td></tr>' +\n    '<tr><td style=\"padding:6px 0\"><b>Facturas pendientes revisión</b></td><td style=\"padding:6px 0;text-align:right\">' + (invSum.pending || 0) + '</td></tr>' +\n    '<tr><td style=\"padding:6px 0\"><b>Certificaciones emitidas</b></td><td style=\"padding:6px 0;text-align:right\">' + certs.length + '</td></tr>' +\n    '</table>' +\n    (certs.length > 0 ? '<p style=\"margin-top:12px\"><b>Certificaciones:</b><br>' + certs.map(c => 'v' + c.version + ': ' + c.percentage + '% → ' + fmt(c.amount) + ' EUR (' + c.status + ')').join('<br>') + '</p>' : '')\n  : '<p style=\"color:#6b7280\">Sin estimación de coste todavía.</p>';\n\nconst pathologyHtml = paths.length > 0\n  ? paths.map(p => '<li><span style=\"background:' + (sevColor[p.severity] || '#6b7280') + ';color:white;padding:1px 6px;border-radius:3px;font-size:11px\">' + (p.severity || '?').toUpperCase() + '</span> ' + (p.type || '?') + ' — ' + (p.description || '').substring(0, 150) + '</li>').join('')\n  : '<li style=\"color:#6b7280\">Sin patologías detectadas.</li>';\n\nconst aftercareHtml = aftercare.length > 0\n  ? aftercare.slice(0, 10).map(a => '<li><span style=\"background:' + (sevColor[a.severity] || '#6b7280') + ';color:white;padding:1px 6px;border-radius:3px;font-size:11px\">' + (a.severity || '?').toUpperCase() + '</span> ' + (a.category || '?') + ' — ' + (a.status || '?') + ' — ' + (a.description || '').substring(0, 120) + (a.assigned_to ? ' → ' + a.assigned_to : '') + '</li>').join('')\n  : '<li style=\"color:#6b7280\">Sin incidencias post-entrega.</li>';\n\nconst permitsHtml = permits.length > 0\n  ? permits.map(pe => '<li><b>' + (pe.application_type || '?') + '</b> en ' + (pe.entity || '?') + ' — status <code>' + (pe.status || '?') + '</code>' + (pe.expediente_id ? ' (exp. ' + pe.expediente_id + ')' : '') + '</li>').join('')\n  : '<li style=\"color:#6b7280\">Sin trámites administrativos registrados.</li>';\n\nconst html = '<!DOCTYPE html><html lang=\"es\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>' + (p.name || 'Proyecto') + ' — resumen</title>' +\n'<style>body{font-family:-apple-system,Arial,sans-serif;max-width:780px;margin:24px auto;padding:16px;color:#1f2937;background:white}h1{color:#0f172a;font-size:26px;margin:0}.meta{color:#64748b;font-size:14px;margin-top:4px}ul{padding-left:20px;line-height:1.7}li{margin-bottom:6px}.phase{display:inline-block;background:#1e3a8a;color:white;padding:4px 10px;border-radius:4px;font-size:13px;margin-top:8px}</style>' +\n'</head><body>' +\n'<h1>' + (p.name || 'Proyecto sin nombre') + '</h1>' +\n'<div class=\"meta\">' + (p.project_type || '—') + ' • ' + (p.property_type || '—') + ' ' + (p.property_area_m2 ? p.property_area_m2 + 'm²' : '') + ' • ' + (p.location || '—') + '</div>' +\n'<span class=\"phase\">Fase actual: ' + (p.current_phase || '?') + '</span>' +\n(p.handover_date ? '<div class=\"meta\">Entregado: ' + p.handover_date + '</div>' : '') +\nsection('Briefing', briefingHtml) +\nsection('Diseño seleccionado', designHtml) +\nsection('Resumen financiero', financialHtml) +\nsection('Patologías detectadas', '<ul>' + pathologyHtml + '</ul>', paths.length) +\nsection('Trámites administrativos', '<ul>' + permitsHtml + '</ul>', permits.length) +\nsection('Postventa LOE', '<ul>' + aftercareHtml + '</ul>', aftercare.length) +\n'<p style=\"text-align:center;color:#94a3b8;font-size:12px;margin-top:32px\">Generado por ArquitAI — ' + new Date().toLocaleString('es-ES') + '</p>' +\n'</body></html>';\nreturn [{ json: { html: html } }];"
+      }
+    },
+    {
+      "id": "ps-06",
+      "name": "Respond OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        460,
+        220
+      ],
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.html }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "text/html; charset=utf-8"
+              },
+              {
+                "name": "Strict-Transport-Security",
+                "value": "max-age=31536000; includeSubDomains"
+              },
+              {
+                "name": "X-Content-Type-Options",
+                "value": "nosniff"
+              },
+              {
+                "name": "X-Frame-Options",
+                "value": "DENY"
+              },
+              {
+                "name": "Referrer-Policy",
+                "value": "strict-origin-when-cross-origin"
+              },
+              {
+                "name": "Content-Security-Policy",
+                "value": "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:"
+              },
+              {
+                "name": "Permissions-Policy",
+                "value": "geolocation=(), microphone=(), camera=()"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "ps-07",
+      "name": "Respond Invalid",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        20,
+        420
+      ],
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "<!DOCTYPE html><html><body style=\"font-family:Arial;max-width:500px;margin:60px auto;padding:24px;text-align:center;color:#374151\"><h1 style=\"color:#dc2626\">Enlace no válido</h1><p>El enlace ha expirado o ha sido revocado.</p></body></html>",
+        "options": {
+          "responseCode": 404,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "text/html; charset=utf-8"
+              },
+              {
+                "name": "Strict-Transport-Security",
+                "value": "max-age=31536000; includeSubDomains"
+              },
+              {
+                "name": "X-Content-Type-Options",
+                "value": "nosniff"
+              },
+              {
+                "name": "X-Frame-Options",
+                "value": "DENY"
+              },
+              {
+                "name": "Referrer-Policy",
+                "value": "strict-origin-when-cross-origin"
+              },
+              {
+                "name": "Content-Security-Policy",
+                "value": "default-src 'self'; style-src 'unsafe-inline'"
+              },
+              {
+                "name": "Permissions-Policy",
+                "value": "geolocation=(), microphone=(), camera=()"
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook GET": {
+      "main": [
+        [
+          {
+            "node": "Validate Token",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Token": {
+      "main": [
+        [
+          {
+            "node": "Token Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Token Valid?": {
+      "main": [
+        [
+          {
+            "node": "Load Snapshot",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond Invalid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Snapshot": {
+      "main": [
+        [
+          {
+            "node": "Build HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build HTML": {
+      "main": [
+        [
+          {
+            "node": "Respond OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "qfQWaGSpyjgdeFt5",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": {}
+}

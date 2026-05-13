@@ -25,10 +25,19 @@
 
 import type { StudioAgent, StudioRoom } from '@/lib/types';
 import {
+  IDLE_POSITIONS,
   MEETING_POSITIONS,
   FAILED_POSITIONS,
   type WorldPosition,
 } from './data/agentPositions';
+
+// ADDENDUM 2 Bloque 2 — regla hibrida idle (decision Damian):
+//   idle desde menos de IDLE_THRESHOLD_MIN minutos -> mesa default
+//   idle desde mas tiempo                          -> cafeteria
+// "Tiempo idle" se mide desde last_started_at (= ultima activacion). Si nunca
+// se activo (null) consideramos que esta "esperando trabajo" en su mesa, NO
+// que lleva infinito ocioso.
+const IDLE_THRESHOLD_MIN = 5;
 
 export function getAgentWorldPosition(
   agent: StudioAgent,
@@ -50,8 +59,17 @@ export function getAgentWorldPosition(
     }
   }
 
-  // working sin reunion / waiting_approval / idle: SIEMPRE a su mesa.
-  // Es el comportamiento por defecto (los agentes "viven" en su sala).
+  // IDLE prolongado: cafeteria (si ya corrio alguna vez y lleva > umbral
+  // sin actividad). Si nunca corrio -> queda en su mesa esperando trabajo.
+  if (agent.state === 'idle' && agent.last_started_at) {
+    const idleMs = Date.now() - new Date(agent.last_started_at).getTime();
+    if (idleMs > IDLE_THRESHOLD_MIN * 60 * 1000) {
+      return IDLE_POSITIONS[agentIndex % IDLE_POSITIONS.length];
+    }
+  }
+
+  // working sin reunion / waiting_approval / idle reciente / idle sin
+  // historial: SIEMPRE a su mesa (sala asignada en agents_catalog).
   return getDefaultWorldPosition(agent, roomMap);
 }
 

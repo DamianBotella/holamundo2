@@ -1,13 +1,65 @@
-import { Container, Graphics, Text, TextStyle } from 'pixi.js';
+import { Assets, Container, Graphics, Matrix, Sprite, Text, TextStyle, Texture } from 'pixi.js';
 import type { StudioRoom } from '@/lib/types';
 import { PALETTE } from './palette';
 import { rectToIsoQuad, worldToIso } from './iso';
 import { ROOM_VISUAL_IDENTITY } from './data/roomVisualIdentity';
+import { ROOM_FLOOR_TILE } from './data/roomFloors';
+import { getFurnitureTexture } from './furnitureRegistry';
 
-// PASO 2 doc: suelo limpio (sin textura de tarima — los muebles densos +
-// las paredes son lo que dan ambiente). El color viene de ROOM_VISUAL_IDENTITY
-// (paleta coordinada con las paredes de cada sala). Fallback a room.floor_color
-// de la BD si la sala no esta en ROOM_VISUAL_IDENTITY.
+/**
+ * ADDENDUM 2 Bloque 1: fondos isometricos por habitacion generados con
+ * Gemini 2.5 flash image (script generate_room_backgrounds.mjs).
+ * Si el PNG no existe, drawRoom cae al rombo iso de siempre.
+ *
+ * Vite import.meta.glob carga todas las PNGs disponibles en build-time.
+ */
+const bgModules = import.meta.glob('./assets/rooms/*_bg.png', {
+  eager: true,
+  query: '?url',
+  import: 'default',
+}) as Record<string, string>;
+
+const ROOM_BG_URL: Record<string, string> = {};
+for (const [filePath, url] of Object.entries(bgModules)) {
+  const m = filePath.match(/\/([^/]+)_bg\.png$/);
+  if (m) ROOM_BG_URL[m[1]] = url;
+}
+
+// Cache de Textures cargadas (Pixi Assets.load es asincrono; cacheamos sync).
+const bgTextureCache: Map<string, Texture | null> = new Map();
+const bgLoadPromises: Map<string, Promise<Texture | null>> = new Map();
+
+function loadRoomBgTexture(roomId: string): Texture | null {
+  if (bgTextureCache.has(roomId)) return bgTextureCache.get(roomId)!;
+  const url = ROOM_BG_URL[roomId];
+  if (!url) {
+    bgTextureCache.set(roomId, null);
+    return null;
+  }
+  // Dispara la carga asincrona; el primer render no tendra textura, los
+  // siguientes useEffect de StudioCanvas (al cambiar agents/rooms) la
+  // pillaran del cache.
+  if (!bgLoadPromises.has(roomId)) {
+    bgLoadPromises.set(
+      roomId,
+      Assets.load<Texture>({ alias: `room_bg:${roomId}`, src: url })
+        .then((tex) => {
+          bgTextureCache.set(roomId, tex);
+          return tex;
+        })
+        .catch(() => {
+          bgTextureCache.set(roomId, null);
+          return null;
+        }),
+    );
+  }
+  return null;
+}
+
+// Escala de la textura del suelo. Validada visualmente en B72d: 0.0875 da
+// tablas de ~5-6px en pantalla, finas y proporcionadas a personajes (48x64)
+// y muebles. Ajustar aqui si se quiere mas/menos detalle.
+const FLOOR_TEXTURE_SCALE = 0.0875;
 
 /**
  * Dibuja una habitacion en proyeccion isometrica 2:1 (sec 1.1 del spec).
@@ -35,15 +87,42 @@ export function drawRoom(parent: Container, room: StudioRoom): Container {
   const { x, y, w, h } = room.bounding_box;
   const [tl, tr, br, bl] = rectToIsoQuad(x, y, w, h);
 
-  // Suelo: rombo plano con color de la identidad visual de la sala.
-  // Sin textura de tarima (PASO 2 doc) — el suelo limpio realza muebles
-  // y paredes en lugar de competir con ellos.
+  // Suelo: si hay tile de tarima cargado, lo usamos como textura del
+  // poligono iso (Pixi 8 fill({texture, matrix}) repite tileado y la matrix
+  // escala las tablas para que sean finas). Fallback a color plano de la
+  // identidad visual si no hay PNG de tarima.
+  const floorTileId = ROOM_FLOOR_TILE[room.room_id];
+  const floorTexture = floorTileId ? getFurnitureTexture(floorTileId) : null;
+
   const floor = new Graphics();
-  floor
-    .poly([tl.x, tl.y, tr.x, tr.y, br.x, br.y, bl.x, bl.y])
-    .fill({ color: fillColor, alpha: fillAlpha })
-    .stroke({ color: borderColor, width: 2 });
+  floor.poly([tl.x, tl.y, tr.x, tr.y, br.x, br.y, bl.x, bl.y]);
+  if (floorTexture) {
+    const matrix = new Matrix().scale(FLOOR_TEXTURE_SCALE, FLOOR_TEXTURE_SCALE);
+    floor.fill({ texture: floorTexture, matrix });
+  } else {
+    floor.fill({ color: fillColor, alpha: fillAlpha });
+  }
+  floor.stroke({ color: borderColor, width: 2 });
   node.addChild(floor);
+
+  // ADDENDUM 2 Bloque 1: sprite de fondo Gemini ENCIMA del rombo (alpha 0.95).
+  // Si la textura no esta cargada todavia (primer render) o no existe el PNG,
+  // se queda solo el rombo del floor. Idempotente: si re-renderiza con la
+  // textura ya cacheada, sprite real aparece.
+  const bgTex = loadRoomBgTexture(room.room_id);
+  if (bgTex) {
+    const sprite = new Sprite(bgTex);
+    sprite.anchor.set(0.5, 0.5);
+    // Centro del rombo iso = worldToIso del centro del bounding box ortogonal
+    const center = worldToIso(x + w / 2, y + h / 2);
+    sprite.x = center.x;
+    sprite.y = center.y;
+    // El rombo iso 2:1 tiene ancho (w+h) y alto (w+h)/2. Cubrimos eso.
+    sprite.width  = w + h;
+    sprite.height = (w + h) / 2;
+    sprite.alpha  = 0.95;
+    node.addChild(sprite);
+  }
 
   // Borde interior (rombo mas pequeno) — emula sensacion de papel/baldosa con margen
   const innerInset = 6;

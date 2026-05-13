@@ -1,0 +1,3 @@
+# ADDENDUM 2 Bloque 1: directorio destino de scripts/generate_room_backgrounds.mjs.
+# Vite import.meta.glob('./assets/rooms/*_bg.png') escanea esta carpeta.
+# Si no existe, el glob falla en algunas versiones de Vite -> mantener este archivo.

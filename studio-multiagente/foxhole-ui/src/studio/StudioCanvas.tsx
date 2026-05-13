@@ -6,7 +6,11 @@ import type { StudioAgent, StudioRoom } from '@/lib/types';
 import { PALETTE } from './palette';
 import { acquireStudio, releaseStudio, getStudio } from './pixiSingleton';
 import { drawRoom } from './StudioRoom';
-import { drawAgent } from './StudioAgent';
+// ADDENDUM 2 Bloque 1: drawAgent (sprites Kenney en StudioAgent.tsx) sustituido
+// por drawAgentFigure (figuras vectoriales) via alias para reversibilidad
+// trivial (cambiar el import si hay que revertir). StudioAgent.tsx se queda en
+// el repo pendiente de OK visual antes de borrar.
+import { drawAgentFigure as drawAgent } from './AgentFigure';
 import { drawFurnitureForRoom } from './StudioFurniture';
 import { drawWallsForRoom } from './drawRoomWalls';
 import { detectMeetingAgents, getAgentWorldPosition } from './agentPosition';

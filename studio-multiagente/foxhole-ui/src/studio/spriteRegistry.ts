@@ -1,4 +1,11 @@
 /**
+ * @deprecated ADDENDUM 2 Bloque 1: sustituido por AgentFigure.ts (figuras
+ * vectoriales). Se mantiene en el repo solo hasta confirmar visualmente que
+ * AgentFigure cubre todos los casos. StudioCanvas.tsx ya NO lo importa.
+ * Si nada lo consume despues del go/no-go visual, borrar este fichero +
+ * StudioAgent.tsx (su unico consumidor) + carpeta assets/sprites/.
+ *
+ * --- Documentacion original ---
  * Registro de sprites de agentes.
  *
  * Carga todos los PNGs de assets/sprites/*.png con Vite import.meta.glob (eager)

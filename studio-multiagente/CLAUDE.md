@@ -1,8 +1,9 @@
 # CLAUDE.md — ArquitAI / studio-multiagente
 
-> Última actualización: **2026-05-12**. Reemplaza la versión "MVP abril 2026"
-> (11 agentes / 16 tablas / 17 workflows) que era obsoleta tras 5 fases más.
-> Para foto completa con drift, riesgos y números reales, ver
+> Última actualización: **2026-05-13**. Tras cierre del backend ADDENDUM 2
+> (Bloques 3+4-backend+5+6+7 + B4.1 system prompt). UI estudio pausada
+> hasta el final, todo el resto del pre-launch operativo. Para foto
+> completa con drift, riesgos y números reales, ver
 > [`ESTADO_REAL_PROYECTO.md`](../ESTADO_REAL_PROYECTO.md) en la raíz del repo.
 
 ---
@@ -20,11 +21,12 @@
 | Capa | Tecnología |
 |---|---|
 | Orquestación | **n8n 2.12.x** self-hosted Docker (https://n8n-n8n.zzeluw.easypanel.host) |
-| BD negocio | **Supabase PostgreSQL 15+** (~75-80 tablas, 86 migraciones aplicadas) |
+| BD negocio | **Supabase PostgreSQL 15+** (~75-80 tablas, **89 migraciones aplicadas**) |
 | Frontend | **Vite + React + TypeScript + Tailwind + TanStack Query + PixiJS v8** (`studio-multiagente/foxhole-ui/`) |
 | Auth | **Supabase Auth** (JWT) — frontend obtiene token, backend decodifica inline (no verifica firma) |
-| LLM | **OpenAI gpt-4o** via HTTP Request + Header Auth (credencial `gE1jXO133xEHS5JJ`) |
-| Embeddings | OpenAI `text-embedding-3-small` (1536d) en `util_generate_embedding` |
+| LLM | **OpenAI gpt-4o** + `gpt-4o-mini` (chat) via HTTP Request + Header Auth (credencial `gE1jXO133xEHS5JJ`) |
+| Embeddings | OpenAI `text-embedding-3-small` (1536d) — embeddings sobre `materials_catalog` + **`municipal_pgou_rules` (108 reglas)** |
+| RAG normativa | **pgvector ivfflat** sobre `municipal_pgou_rules.embedding` + función `search_pgou_rules()` (top-k cosine) |
 | Billing | **Stripe Checkout + Customer Portal** + webhook HMAC SHA256 |
 | Archivos | **Google Drive + Google Docs + Sheets** (credenciales OAuth2) |
 | Email | **Gmail OAuth2** (`damian2botella@gmail.com`) |
@@ -121,6 +123,15 @@ Toda tabla de negocio tiene `tenant_id uuid REFERENCES tenants(id)`. RLS activa 
 
 `agent_municipal_precheck` (`SNG5lECKgZz3Twgd`) — Pre-check normativa PGOU top 5 ciudades (Madrid, BCN, Valencia, Sevilla, Bilbao). **94 reglas seed** en `municipal_pgou_rules`.
 
+### Agentes ADDENDUM 2 (mayo 2026)
+
+| Agente | n8n ID | Propósito |
+|---|---|---|
+| `agent_normativa_fetch` | `t0dI701fIWhG334y` | Onboarding automático de municipios nuevos. Carga 10-15 reglas via gpt-4o (LLM-only mientras Jina/Tavily key esté pendiente). **14 reglas** cargadas para Tres Cantos. Auto-trigger en `api_projects_create` cuando `location_city` no está en BD |
+| `api_regulatory_ask` | `ciYAceNDWZZYCaxw` | RAG semántico sobre PGOU. POST `{project_id, question}` → embedding → `search_pgou_rules()` top-5 → gpt-4o síntesis → respuesta + citas + confianza |
+| `api_bi_dashboard` | `TLOYYx89RDe7OZ3t` | GET 6 widgets de inteligencia de negocio en 1 query CTE: rentabilidad, fases (placeholder), conversion, agentes activos mes, alertas presupuesto, predicción carga |
+| `api_studio_agent_directive` | `9uui4HfAYxYXaCOd` | POST registra directiva del arquitecto a un agente. `{agent_name, project_id, directive, type}` → `architect_directives` + `activity_log` con `message_type='directive'` |
+
 ### Patrón estándar de un agente
 
 ```
@@ -170,12 +181,15 @@ Toda tabla de negocio tiene `tenant_id uuid REFERENCES tenants(id)`. RLS activa 
 | G | ✅ | Stripe billing 3 tiers TEST mode + Customer Portal + webhook HMAC + founder pass |
 | G+ | ✅ | Red triple de alertas trial (cron 7d/3d/1d + Stripe trial_will_end + founder pass) |
 | **Frontend billing** | ✅ | Página `/#billing` con tabla precios + redirect a Stripe |
+| **ADDENDUM 2 backend** | ✅ | Bloques 3 (trigger SQL) + 4-backend (directive) + 5 (normativa_fetch) + 6 (RAG) + 7 (BI) + 4.1 (system prompt agent_chat) |
+| **ADDENDUM 2 UI** | ⏸ | Studio apagado con placeholder. Bloques 1+2 (figuras vectoriales + fondos Gemini), 3-UI (ActivitySidebar), 4-UI (chat panel + coordination panel) PENDIENTES hasta el final |
 
-**Pendientes principales:**
+**Pendientes principales pre-launch:**
 - Stripe **LIVE mode** (KYC + repetir setup con `sk_live_`)
 - `agent_proposal_render` con URL real
-- Cambiar `billing_*_url` de `localhost:5173` a dominio prod
+- Cambiar `billing_*_url` de `localhost:5173` a dominio prod (`arquitai.studio`)
 - Auditar tablas no usadas (sospechas: `home_automation_proposals`)
+- **ADDENDUM 2 paquete UI final**: `git revert 2759839` + rediseñar fondos Gemini con `PIXI.Mesh` warp 4-vértices + construir `ActivitySidebar` + `AgentChatPanel` con botón directiva + `AgentCoordination` panel + INSERTs coordinación en `main_orchestrator` (92 nodos)
 
 ---
 
@@ -367,7 +381,18 @@ holamundo2/
 
 ## 9. BASE DE DATOS — TABLAS CRÍTICAS
 
-86 migraciones aplicadas (003 → 083). Última: `083_founder_plan_plus_trial_alert.sql`.
+89 migraciones aplicadas (003 → 089). Última: `089_agent_executions_natural_log_trigger.sql`.
+
+### ADDENDUM 2 migraciones (mayo 2026)
+
+| Mig | Qué hace |
+|---|---|
+| `084_activity_log_coordination` | `activity_log` gana `tenant_id`/`from_agent`/`to_agent`/`message_type`; vista `agent_registry` (alias sobre `agents_catalog`); vista `v_activity_feed_natural` |
+| `085_architect_directives_extension` | `architect_directives` gana `agent_name`/`project_id`/`directive_text`/`directive_type`/`applied_at`/`applied_in_execution_id`/`created_by`; `source` amplía con `'chat'` |
+| `086_municipal_pgou_embeddings` | `municipal_pgou_rules` gana `embedding vector(1536)` + `searchable_text` + ivfflat index + función `search_pgou_rules(municipio, vec, top_k)` |
+| `087_municipal_onboarding_queue` | Cola para `agent_normativa_fetch` con UNIQUE (tenant_id, municipio_slug) + RLS |
+| `088_business_intelligence_views` | 5 vistas BI mapeadas a columnas reales: `v_bi_project_profitability`, `v_bi_phase_duration` (placeholder), `v_bi_proposal_conversion`, `v_bi_agent_activity_month`, `v_bi_budget_alerts` |
+| `089_agent_executions_natural_log_trigger` | Función `agent_action_to_natural(agent_name, status)` + triggers AFTER INSERT/UPDATE en `agent_executions` → inserta automáticamente en `activity_log` con texto natural ES. Cubre 35+ agentes con fallback genérico. **Sin tocar workflows** |
 
 ### Tablas centrales del negocio
 
@@ -427,6 +452,10 @@ Todos viven en `https://n8n-n8n.zzeluw.easypanel.host/webhook/api/v1/...` salvo 
 | `/billing/checkout` | POST | Sí (roles architect/super_admin/owner) |
 | `/billing/portal` | POST | Sí |
 | `/webhook/stripe` | POST | **NO** (HMAC SHA256) |
+| `/agents/normativa-fetch/run` | POST | Sí (ADDENDUM 2 B5) |
+| `/regulatory/ask` | POST | Sí (ADDENDUM 2 B6 RAG) |
+| `/bi/dashboard` | GET | Sí (ADDENDUM 2 B7) |
+| `/studio/agent/directive` | POST | Sí (ADDENDUM 2 B4 directive) |
 
 ---
 

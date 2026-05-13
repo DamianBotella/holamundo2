@@ -159,9 +159,9 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "INSERT INTO activity_log (project_id, agent_name, action, status, output_summary)\nVALUES ($1::uuid, 'api_projects_create', 'project_created', 'success', $2)",
+        "query": "SELECT count(*)::int AS rules_count, COALESCE(lower(regexp_replace(unaccent($1::text), '[^a-zA-Z0-9]+', '_', 'g')), '') AS municipio_slug FROM municipal_pgou_rules WHERE municipio_slug = COALESCE(lower(regexp_replace(unaccent($1::text), '[^a-zA-Z0-9]+', '_', 'g')), '_none_')",
         "options": {
-          "queryReplacement": "={{ [$json.id, 'Proyecto ' + $json.name + ' creado desde wizard'] }}"
+          "queryReplacement": "={{ [$('Validate Input').first().json.location_city || ''] }}"
         }
       },
       "credentials": {
@@ -170,6 +170,93 @@
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
       "position": [2160, 100],
+      "id": "api-projcreate-check-municipio",
+      "name": "Check Municipio Loaded",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict", "version": 2 },
+          "conditions": [
+            {
+              "id": "check-muni-loaded",
+              "leftValue": "={{ ($json.rules_count || 0) }}",
+              "rightValue": 0,
+              "operator": { "type": "number", "operation": "equals", "singleValue": true }
+            },
+            {
+              "id": "check-muni-has-city",
+              "leftValue": "={{ ($('Validate Input').first().json.location_city || '').length }}",
+              "rightValue": 0,
+              "operator": { "type": "number", "operation": "gt", "singleValue": true }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [2400, 100],
+      "id": "api-projcreate-if-need-fetch",
+      "name": "Need Fetch Normativa?"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://n8n-n8n.zzeluw.easypanel.host/webhook/api/v1/agents/normativa-fetch/run",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "={{ $('POST /projects/create').first().json.headers.authorization }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ municipio: $('Validate Input').first().json.location_city, provincia: $('Validate Input').first().json.location_province, comunidad_autonoma: null, requested_by: $('Validate Input').first().json.user_id }) }}",
+        "options": { "timeout": 3000 }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2640, 40],
+      "id": "api-projcreate-trigger-normativa",
+      "name": "Trigger Normativa Fetch (async)",
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (tenant_id, project_id, agent_name, action, status, output_summary, message_type)\nVALUES ($1::uuid, $2::uuid, 'api_projects_create', $3, 'success', $4, 'system')",
+        "options": {
+          "queryReplacement": "={{ [$('Validate Input').first().json.tenant_id, $('Insert Project').first().json.id, 'Detectamos municipio nuevo: ' + $('Validate Input').first().json.location_city, 'Cargando normativa de ' + $('Validate Input').first().json.location_city + ' en segundo plano (~30-60s)'] }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [2880, 40],
+      "id": "api-projcreate-log-municipio-new",
+      "name": "Log Municipio New",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, status, output_summary)\nVALUES ($1::uuid, 'api_projects_create', 'project_created', 'success', $2)",
+        "options": {
+          "queryReplacement": "={{ [$('Insert Project').first().json.id, 'Proyecto ' + $('Insert Project').first().json.name + ' creado desde wizard'] }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [3120, 100],
       "id": "api-projcreate-log-activity",
       "name": "Log Activity"
     },
@@ -223,7 +310,14 @@
     ]},
     "Set Session Context": { "main": [[{ "node": "Upsert Client", "type": "main", "index": 0 }]] },
     "Upsert Client": { "main": [[{ "node": "Insert Project", "type": "main", "index": 0 }]] },
-    "Insert Project": { "main": [[{ "node": "Log Activity", "type": "main", "index": 0 }]] },
+    "Insert Project": { "main": [[{ "node": "Check Municipio Loaded", "type": "main", "index": 0 }]] },
+    "Check Municipio Loaded": { "main": [[{ "node": "Need Fetch Normativa?", "type": "main", "index": 0 }]] },
+    "Need Fetch Normativa?": { "main": [
+      [{ "node": "Trigger Normativa Fetch (async)", "type": "main", "index": 0 }],
+      [{ "node": "Log Activity", "type": "main", "index": 0 }]
+    ]},
+    "Trigger Normativa Fetch (async)": { "main": [[{ "node": "Log Municipio New", "type": "main", "index": 0 }]] },
+    "Log Municipio New": { "main": [[{ "node": "Log Activity", "type": "main", "index": 0 }]] },
     "Log Activity": { "main": [[{ "node": "Trigger Orchestrator", "type": "main", "index": 0 }]] },
     "Trigger Orchestrator": { "main": [[{ "node": "Respond 201", "type": "main", "index": 0 }]] }
   },

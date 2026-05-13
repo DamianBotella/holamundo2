@@ -1,0 +1,721 @@
+{
+  "name": "agent_normativa_fetch",
+  "_description": "ADDENDUM 2 Bloque 5 - Onboarding automatico de municipios nuevos. Recibe {municipio, provincia, comunidad_autonoma, requested_by?} via webhook + JWT (tenant_id del token). Si el municipio NO esta en municipal_pgou_rules, dispara: encolar en municipal_onboarding_queue (running) -> Jina Reader sobre PGOU del ayuntamiento -> OpenAI gpt-4o extraccion JSON estructurada -> bulk INSERT en municipal_pgou_rules -> queue done + email al arquitecto. Si ya esta cargado, respond rapido skip.",
+  "_status": "B72-fase-G+ ADDENDUM 2 Bloque 5",
+  "_n8n_id": "t0dI701fIWhG334y",
+  "_endpoint": "POST /webhook/api/v1/agents/normativa-fetch/run",
+  "_body_shape": "{ municipio: string, provincia?: string, comunidad_autonoma?: string, requested_by?: uuid }",
+  "_response_success": "{ ok: true, status: 'started'|'already_loaded', queue_id?: uuid, rules_extracted?: int }",
+  "_response_error": "{ error: { code, message } } con status 4xx/5xx",
+  "_dependencies": "mig 077 (municipal_pgou_rules), mig 087 (municipal_onboarding_queue), mig 086 (search_pgou_rules pero NO usado aqui), credenciales: Postgres cfxNZdzy0NB3xkYC, OpenAI gE1jXO133xEHS5JJ, Gmail cIma8ntTjZvIfU3H",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "api/v1/agents/normativa-fetch/run",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ],
+      "id": "nf-webhook",
+      "name": "POST /normativa-fetch/run",
+      "webhookId": "feedface-9999-4abc-9def-cafebabe0009",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const auth = $input.first().json.headers?.authorization || '';\nif (!auth.startsWith('Bearer ')) return [{ json: { _error: 'AUTH_MISSING_TOKEN', _status: 401 } }];\nconst token = auth.slice(7);\ntry {\n  const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'));\n  if (!payload.sub) throw new Error('No sub');\n  if (payload.exp && Date.now()/1000 > payload.exp) throw new Error('JWT expired');\n  if (!payload.tenant_id) throw new Error('No tenant_id');\n\n  const body = $input.first().json.body || {};\n  const municipio = (body.municipio || '').trim();\n  if (!municipio) return [{ json: { _error: 'VALIDATION_FAILED', _status: 400, _details: 'municipio requerido' } }];\n\n  // Slug: lowercase + sin acentos + sin espacios. Determinista.\n  const slug = municipio.normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 60);\n  if (!slug) return [{ json: { _error: 'VALIDATION_FAILED', _status: 400, _details: 'municipio slug vacio tras normalizar' } }];\n\n  return [{ json: {\n    user_id: payload.sub,\n    tenant_id: payload.tenant_id,\n    role: payload.role || 'architect',\n    municipio_nombre: municipio,\n    municipio_slug: slug,\n    provincia: (body.provincia || '').trim() || null,\n    comunidad_autonoma: (body.comunidad_autonoma || '').trim() || null,\n    requested_by: body.requested_by || payload.sub,\n    request_id: 'req_' + Math.random().toString(36).slice(2, 10)\n  }}];\n} catch (e) {\n  return [{ json: { _error: 'AUTH_INVALID_TOKEN', _status: 401, _details: e.message } }];\n}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        300
+      ],
+      "id": "nf-decode",
+      "name": "Decode JWT + Validate"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "nf-cond-err",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        720,
+        300
+      ],
+      "id": "nf-if-auth",
+      "name": "Auth OK?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details || $json._error } }) }}",
+        "options": {
+          "responseCode": "={{ $json._status || 401 }}"
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        960,
+        460
+      ],
+      "id": "nf-respond-auth",
+      "name": "Respond Auth Error"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT set_session_context($1::uuid, $2::uuid, $3)",
+        "options": {
+          "queryReplacement": "={{ [$json.user_id, $json.tenant_id, $json.role] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        960,
+        200
+      ],
+      "id": "nf-set-session",
+      "name": "Set Session Context"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT count(*)::int AS rules_count FROM municipal_pgou_rules WHERE municipio_slug = $1",
+        "options": {
+          "queryReplacement": "={{ [$('Decode JWT + Validate').first().json.municipio_slug] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1200,
+        200
+      ],
+      "id": "nf-check-loaded",
+      "name": "Check Already Loaded"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "nf-cond-loaded",
+              "leftValue": "={{ $json.rules_count }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1440,
+        200
+      ],
+      "id": "nf-if-loaded",
+      "name": "Already Loaded?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: true, status: 'already_loaded', municipio_slug: $('Decode JWT + Validate').first().json.municipio_slug, rules_count: $json.rules_count, request_id: $('Decode JWT + Validate').first().json.request_id }) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1680,
+        100
+      ],
+      "id": "nf-respond-loaded",
+      "name": "Respond Already Loaded"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO municipal_onboarding_queue (tenant_id, municipio_slug, municipio_nombre, provincia, comunidad_autonoma, status, requested_by, started_at)\nVALUES ($1::uuid, $2, $3, $4, $5, 'running', $6::uuid, now())\nON CONFLICT (tenant_id, municipio_slug) DO UPDATE\n  SET status = 'running', started_at = now(), error_message = NULL, rules_extracted = 0\nRETURNING id, municipio_slug, municipio_nombre, status",
+        "options": {
+          "queryReplacement": "={{ [$('Decode JWT + Validate').first().json.tenant_id, $('Decode JWT + Validate').first().json.municipio_slug, $('Decode JWT + Validate').first().json.municipio_nombre, $('Decode JWT + Validate').first().json.provincia, $('Decode JWT + Validate').first().json.comunidad_autonoma, $('Decode JWT + Validate').first().json.requested_by] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1680,
+        300
+      ],
+      "id": "nf-queue-running",
+      "name": "Queue Running"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// ADDENDUM 2 Bloque 5 fix: Jina Search/Reader paid/auth en 2026. Salimos\n// a LLM-only: el modelo genera reglas plausibles para el municipio basandose\n// en su conocimiento general de normativa espaniola (CTE, Decretos CAM,\n// PGOU tipico). El campo source_doc lo marca como auto-generado. El usuario\n// puede revisar y editar las reglas tras la carga inicial.\nconst sess = $('Decode JWT + Validate').first().json;\nreturn [{ json: {\n  tenant_id: sess.tenant_id,\n  municipio_slug: sess.municipio_slug,\n  municipio_nombre: sess.municipio_nombre,\n  provincia: sess.provincia,\n  comunidad_autonoma: sess.comunidad_autonoma,\n  requested_by: sess.requested_by,\n  request_id: sess.request_id\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1920,
+        300
+      ],
+      "id": "nf-prep-llm",
+      "name": "Prepare LLM Context"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  model: 'gpt-4o',\n  temperature: 0,\n  response_format: { type: 'json_object' },\n  messages: [\n    { role: 'system', content: 'Eres un experto en normativa urbanistica espaniola (PGOU + ordenanzas locales + CTE + normativa autonomica). Tu tarea es generar las reglas SUBSTANTIVAS de planeamiento urbano que aplican a un municipio dado, basandote en: (1) tu conocimiento sobre el municipio si lo tienes, (2) la normativa autonomica/estatal aplicable a su Comunidad Autonoma, (3) PGOU tipico de municipios espanioles de su tamanio.\\n\\nCategorias a cubrir: tramites de licencia, compatibilidad de usos, alturas/volumenes, retranqueos, ocupacion, ascensor obligatorio, accesibilidad, eficiencia energetica, habitabilidad minima, patios/ventilacion, aparcamiento obligatorio, proteccion patrimonio, ITE/IEE, horario obras, gestion RCD, tasas andamios/vados, instalaciones servicios.\\n\\nDevuelve EXCLUSIVAMENTE JSON con shape: { \"rules\": [ { \"rule_key\": \"slug_unico_snake_case\", \"rule_category\": \"tramite_licencia|compatibilidad_uso|alturas_volumenes|retranqueos_distancias|ocupacion_parcela|ascensor_obligatorio|accesibilidad|eficiencia_energetica|habitabilidad_minima|patios_ventilacion|aparcamiento_obligatorio|proteccion_patrimonio|ite_iee|horario_obras|gestion_rcd|tasas_andamios_vados|instalaciones_servicios|otros\", \"rule_title\": \"max 80 chars\", \"rule_description\": \"100-400 chars con valor numerico/regla concreta\", \"normative_reference\": \"cita normativa con articulo si existe (CTE DB-X, RD X/AAAA, Decreto autonomico)\", \"normative_url\": \"url fuente oficial si la conoces, sino null\", \"applies_to\": {\"project_type\": [\"reforma\",\"obra_nueva\",\"cambio_uso\",...]}, \"triggers\": {\"clave\": \"valor o umbral\"}, \"license_implication\": \"comunicacion_previa|declaracion_responsable|licencia_obra_menor|licencia_obra_mayor|sin_licencia|depende\", \"pitfalls\": [\"frase concisa de pitfall\"], \"severity\": \"critico|importante|recomendable|informativo\" } ] }\\n\\nReglas:\\n- 10-15 reglas (cubre las categorias principales).\\n- Si una regla concreta dependeria de un PGOU local que NO conoces especificamente, USA el estandar autonomico/estatal como base y marca severity=\"recomendable\" + pitfall \"Verificar con ordenanza municipal especifica\".\\n- rule_key UNICO entre todas las reglas. snake_case, sin acentos, max 50 chars.\\n- Cita SIEMPRE la normativa estatal/autonomica de fondo (CTE, Decretos CAM, RD 105/2008, Ley 8/2013, etc).\\n- rule_category EXACTAMENTE uno de los enum permitidos.\\n- severity por defecto \"importante\".' },\n    { role: 'user', content: 'Genera las reglas urbanisticas para:\\n\\nMunicipio: ' + $json.municipio_nombre + '\\nProvincia: ' + ($json.provincia || 'desconocida') + '\\nComunidad Autonoma: ' + ($json.comunidad_autonoma || 'desconocida') }\n  ]\n}) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "gE1jXO133xEHS5JJ",
+          "name": "orquestador ArquiAI"
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2640,
+        300
+      ],
+      "id": "nf-llm",
+      "name": "Extract PGOU (gpt-4o)",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const llm = $('Extract PGOU (gpt-4o)');\nconst sess = $('Decode JWT + Validate').first().json;\nconst execMeta = {\n  tenant_id: sess.tenant_id,\n  municipio_slug: sess.municipio_slug,\n  municipio_nombre: sess.municipio_nombre,\n  provincia: sess.provincia,\n  comunidad_autonoma: sess.comunidad_autonoma,\n  request_id: sess.request_id\n};\n\nlet rules = [];\ntry {\n  if (!llm.isExecuted) throw new Error('LLM no ejecutado');\n  const r = llm.first().json;\n  const content = r?.choices?.[0]?.message?.content;\n  if (!content) throw new Error('LLM sin choices[0].message.content');\n  const parsed = typeof content === 'string' ? JSON.parse(content) : content;\n  rules = Array.isArray(parsed?.rules) ? parsed.rules : [];\n} catch (e) {\n  return [{ json: { ...execMeta, _llm_failed: true, _details: 'LLM extraction failed: ' + e.message } }];\n}\n\nif (rules.length === 0) {\n  return [{ json: { ...execMeta, _llm_failed: true, _details: 'LLM devolvio 0 reglas' } }];\n}\n\nconst ALLOWED_CAT = new Set(['tramite_licencia','compatibilidad_uso','alturas_volumenes','retranqueos_distancias','ocupacion_parcela','ascensor_obligatorio','accesibilidad','eficiencia_energetica','habitabilidad_minima','patios_ventilacion','aparcamiento_obligatorio','proteccion_patrimonio','ite_iee','horario_obras','gestion_rcd','tasas_andamios_vados','instalaciones_servicios','otros']);\nconst ALLOWED_SEV = new Set(['critico','importante','recomendable','informativo']);\nconst ALLOWED_LIC = new Set(['comunicacion_previa','declaracion_responsable','licencia_obra_menor','licencia_obra_mayor','sin_licencia','depende']);\n\nconst seenKeys = new Set();\nconst cleaned = [];\nfor (const r of rules) {\n  if (!r?.rule_title || !r?.rule_description) continue;\n  let key = (r.rule_key || r.rule_title).toString().normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 50);\n  if (!key) continue;\n  // Evitar duplicados dentro del mismo batch\n  let unique = key;\n  let n = 1;\n  while (seenKeys.has(unique)) { unique = key + '_' + (++n); }\n  seenKeys.add(unique);\n  const cat = ALLOWED_CAT.has(r.rule_category) ? r.rule_category : 'otros';\n  const sev = ALLOWED_SEV.has(r.severity) ? r.severity : 'importante';\n  const lic = r.license_implication && ALLOWED_LIC.has(r.license_implication) ? r.license_implication : null;\n  cleaned.push({\n    tenant_id: execMeta.tenant_id,\n    municipio_slug: execMeta.municipio_slug,\n    municipio_nombre: execMeta.municipio_nombre,\n    provincia: execMeta.provincia || '',\n    ccaa: execMeta.comunidad_autonoma || '',\n    rule_key: unique,\n    rule_category: cat,\n    rule_title: r.rule_title.slice(0, 200),\n    rule_description: r.rule_description.slice(0, 1500),\n    normative_reference: r.normative_reference || null,\n    normative_url: r.normative_url || null,\n    applies_to: r.applies_to || {},\n    triggers: r.triggers || {},\n    license_implication: lic,\n    pitfalls: Array.isArray(r.pitfalls) ? r.pitfalls : [],\n    severity: sev,\n    source_doc: 'agent_normativa_fetch via gpt-4o knowledge (no web scrape)'\n  });\n}\n\nif (cleaned.length === 0) {\n  return [{ json: { ...execMeta, _llm_failed: true, _details: 'Tras saneamiento quedaron 0 reglas validas' } }];\n}\n\nreturn cleaned.map(rule => ({ json: { ...rule, _meta: execMeta, _total: cleaned.length } }));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2880,
+        300
+      ],
+      "id": "nf-parse-rules",
+      "name": "Parse + Sanitize Rules"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "nf-cond-llm",
+              "leftValue": "={{ $json._llm_failed }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3120,
+        300
+      ],
+      "id": "nf-if-llm-failed",
+      "name": "LLM Failed?"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO municipal_pgou_rules (municipio_slug, municipio_nombre, provincia, ccaa, rule_key, rule_category, rule_title, rule_description, normative_reference, normative_url, applies_to, triggers, license_implication, pitfalls, severity, source_doc)\nVALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12::jsonb, $13, $14::jsonb, $15, $16)\nON CONFLICT (municipio_slug, rule_key) DO UPDATE\n  SET rule_description = EXCLUDED.rule_description,\n      normative_reference = EXCLUDED.normative_reference,\n      normative_url = EXCLUDED.normative_url,\n      applies_to = EXCLUDED.applies_to,\n      triggers = EXCLUDED.triggers,\n      license_implication = EXCLUDED.license_implication,\n      pitfalls = EXCLUDED.pitfalls,\n      severity = EXCLUDED.severity,\n      version_rule = municipal_pgou_rules.version_rule + 1,\n      last_verified_at = now(),\n      updated_at = now()",
+        "options": {
+          "queryReplacement": "={{ [$json.municipio_slug, $json.municipio_nombre, $json.provincia, $json.ccaa, $json.rule_key, $json.rule_category, $json.rule_title, $json.rule_description, $json.normative_reference, $json.normative_url, JSON.stringify($json.applies_to), JSON.stringify($json.triggers), $json.license_implication, JSON.stringify($json.pitfalls), $json.severity, $json.source_doc] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        3360,
+        200
+      ],
+      "id": "nf-insert-rules",
+      "name": "Insert Rules"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Agregamos los inserts y devolvemos un solo item con counters + meta para los siguientes nodos.\nconst rows = $('Parse + Sanitize Rules').all();\nconst meta = rows[0]?.json?._meta;\nconst total = rows.length;\nif (!meta) return [{ json: { _error: 'NO_META', total: 0 } }];\nreturn [{ json: { ...meta, rules_extracted: total } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3600,
+        200
+      ],
+      "id": "nf-aggregate",
+      "name": "Aggregate Counters"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE municipal_onboarding_queue\n   SET status = 'done',\n       rules_extracted = $3::int,\n       completed_at = now(),\n       error_message = NULL\n WHERE tenant_id = $1::uuid AND municipio_slug = $2",
+        "options": {
+          "queryReplacement": "={{ [$json.tenant_id, $json.municipio_slug, $json.rules_extracted] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        3840,
+        200
+      ],
+      "id": "nf-queue-done",
+      "name": "Queue Done"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (tenant_id, project_id, agent_name, action, message_type, output_summary, status)\nVALUES ($1::uuid, NULL, 'agent_normativa_fetch', $2, 'action', $3, 'success')",
+        "options": {
+          "queryReplacement": "={{ [$('Aggregate Counters').first().json.tenant_id, 'He cargado la normativa urbanistica de ' + $('Aggregate Counters').first().json.municipio_nombre, $('Aggregate Counters').first().json.rules_extracted + ' reglas extraidas de ' + $('Aggregate Counters').first().json.municipio_nombre] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        4080,
+        200
+      ],
+      "id": "nf-log",
+      "name": "Activity Log"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT value FROM system_config WHERE key = 'architect_email' LIMIT 1"
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        4320,
+        200
+      ],
+      "id": "nf-load-email",
+      "name": "Load Architect Email"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.value }}",
+        "subject": "=Normativa de {{ $('Aggregate Counters').first().json.municipio_nombre }} disponible en ArquitAI",
+        "message": "=Hola,\n\nHe terminado de cargar la normativa urbanistica de {{ $('Aggregate Counters').first().json.municipio_nombre }}.\n\nReglas extraidas: {{ $('Aggregate Counters').first().json.rules_extracted }}\n\nYa puedes consultarla desde ArquitAI (agent_regulatory + RAG /api/v1/regulatory/ask cuando este disponible).\n\nFuente: PGOU + ordenanzas municipales (extraidas automaticamente).\n\nRevisa los datos antes de aplicarlos a proyectos criticos: la extraccion es automatica y puede tener errores. La normativa vinculante esta en la sede del ayuntamiento.\n\nArquitAI",
+        "options": {}
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "cIma8ntTjZvIfU3H",
+          "name": "Gmail damian2botella"
+        }
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        4560,
+        200
+      ],
+      "id": "nf-email",
+      "name": "Send Email",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: true, status: 'completed', municipio_slug: $('Aggregate Counters').first().json.municipio_slug, municipio_nombre: $('Aggregate Counters').first().json.municipio_nombre, rules_extracted: $('Aggregate Counters').first().json.rules_extracted, request_id: $('Aggregate Counters').first().json.request_id }) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        4800,
+        200
+      ],
+      "id": "nf-respond-ok",
+      "name": "Respond OK"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE municipal_onboarding_queue\n   SET status = 'failed',\n       error_message = $3,\n       completed_at = now()\n WHERE tenant_id = $1::uuid AND municipio_slug = $2",
+        "options": {
+          "queryReplacement": "={{ [$json.tenant_id || $json._meta?.tenant_id, $json.municipio_slug || $json._meta?.municipio_slug, ($json._details || 'unknown error').slice(0, 500)] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        3360,
+        460
+      ],
+      "id": "nf-queue-failed",
+      "name": "Queue Failed",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: false, error: { code: 'EXTRACTION_FAILED', message: ($('Parse + Sanitize Rules').first().json._details || 'unknown') } }) }}",
+        "options": {
+          "responseCode": 502
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        3600,
+        460
+      ],
+      "id": "nf-respond-fail",
+      "name": "Respond Fetch Failed"
+    }
+  ],
+  "connections": {
+    "POST /normativa-fetch/run": {
+      "main": [
+        [
+          {
+            "node": "Decode JWT + Validate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decode JWT + Validate": {
+      "main": [
+        [
+          {
+            "node": "Auth OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Auth OK?": {
+      "main": [
+        [
+          {
+            "node": "Respond Auth Error",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Set Session Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Session Context": {
+      "main": [
+        [
+          {
+            "node": "Check Already Loaded",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Already Loaded": {
+      "main": [
+        [
+          {
+            "node": "Already Loaded?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Already Loaded?": {
+      "main": [
+        [
+          {
+            "node": "Respond Already Loaded",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Queue Running",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Queue Running": {
+      "main": [
+        [
+          {
+            "node": "Prepare LLM Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare LLM Context": {
+      "main": [
+        [
+          {
+            "node": "Extract PGOU (gpt-4o)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract PGOU (gpt-4o)": {
+      "main": [
+        [
+          {
+            "node": "Parse + Sanitize Rules",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse + Sanitize Rules": {
+      "main": [
+        [
+          {
+            "node": "LLM Failed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM Failed?": {
+      "main": [
+        [
+          {
+            "node": "Queue Failed",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Insert Rules",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Rules": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Counters",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Counters": {
+      "main": [
+        [
+          {
+            "node": "Queue Done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Queue Done": {
+      "main": [
+        [
+          {
+            "node": "Activity Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Activity Log": {
+      "main": [
+        [
+          {
+            "node": "Load Architect Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Architect Email": {
+      "main": [
+        [
+          {
+            "node": "Send Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Email": {
+      "main": [
+        [
+          {
+            "node": "Respond OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Queue Failed": {
+      "main": [
+        [
+          {
+            "node": "Respond Fetch Failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

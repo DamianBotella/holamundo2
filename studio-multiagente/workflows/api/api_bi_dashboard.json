@@ -1,0 +1,230 @@
+{
+  "name": "api_bi_dashboard",
+  "_description": "ADDENDUM 2 Bloque 7 - Dashboard de Inteligencia de Negocio. GET /api/v1/bi/dashboard devuelve 6 widgets en una sola respuesta: rentabilidad, fases (placeholder), conversion, agentes_activos_mes, alertas_presupuesto, prediccion_carga. Multi-tenant via RLS + tenant_id del JWT.",
+  "_status": "B72-fase-G+ ADDENDUM 2 Bloque 7",
+  "_n8n_id": "TLOYYx89RDe7OZ3t",
+  "_endpoint": "GET /webhook/api/v1/bi/dashboard",
+  "_response_shape": "{ ok: true, data: { rentabilidad, fases, conversion, agentes_activos_mes, alertas_presupuesto, prediccion_carga } }",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "api/v1/bi/dashboard",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ],
+      "id": "bi-webhook",
+      "name": "GET /bi/dashboard",
+      "webhookId": "feedface-bbbb-4abc-9def-cafebabe000b"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const auth = $input.first().json.headers?.authorization || '';\nif (!auth.startsWith('Bearer ')) return [{ json: { _error: 'AUTH_MISSING_TOKEN', _status: 401 } }];\nconst token = auth.slice(7);\ntry {\n  const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'));\n  if (!payload.sub) throw new Error('No sub');\n  if (payload.exp && Date.now()/1000 > payload.exp) throw new Error('JWT expired');\n  if (!payload.tenant_id) throw new Error('No tenant_id');\n  return [{ json: {\n    user_id: payload.sub,\n    tenant_id: payload.tenant_id,\n    role: payload.role || 'architect',\n    request_id: 'req_' + Math.random().toString(36).slice(2, 10)\n  }}];\n} catch (e) {\n  return [{ json: { _error: 'AUTH_INVALID_TOKEN', _status: 401, _details: e.message } }];\n}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        300
+      ],
+      "id": "bi-decode",
+      "name": "Decode JWT"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "bi-cond-err",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        720,
+        300
+      ],
+      "id": "bi-if-auth",
+      "name": "Auth OK?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details || $json._error } }) }}",
+        "options": {
+          "responseCode": "={{ $json._status || 401 }}"
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        960,
+        460
+      ],
+      "id": "bi-respond-auth",
+      "name": "Respond Auth Error"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT set_session_context($1::uuid, $2::uuid, $3)",
+        "options": {
+          "queryReplacement": "={{ [$json.user_id, $json.tenant_id, $json.role] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        960,
+        200
+      ],
+      "id": "bi-set-session",
+      "name": "Set Session Context"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH\n  rentabilidad AS (\n    SELECT json_agg(row_to_json(t)) AS data FROM (\n      SELECT project_id, project_name, status, margen_eur, margen_pct\n        FROM v_bi_project_profitability\n       WHERE tenant_id = $1::uuid\n       ORDER BY margen_pct DESC NULLS LAST\n       LIMIT 10\n    ) t\n  ),\n  fases AS (\n    SELECT json_agg(row_to_json(t)) AS data FROM (\n      SELECT phase, n_proyectos, dias_medios\n        FROM v_bi_phase_duration\n       WHERE tenant_id = $1::uuid\n    ) t\n  ),\n  conversion AS (\n    SELECT json_agg(row_to_json(t) ORDER BY mes ASC) AS data FROM (\n      SELECT mes, enviadas, aceptadas, tasa_pct\n        FROM v_bi_proposal_conversion\n       WHERE tenant_id = $1::uuid\n       ORDER BY mes DESC\n       LIMIT 6\n    ) t\n  ),\n  agentes AS (\n    SELECT json_agg(row_to_json(t)) AS data FROM (\n      SELECT agent_name, ejecuciones\n        FROM v_bi_agent_activity_month\n       WHERE tenant_id = $1::uuid\n       ORDER BY ejecuciones DESC\n       LIMIT 10\n    ) t\n  ),\n  alertas AS (\n    SELECT json_agg(row_to_json(t)) AS data FROM (\n      SELECT project_id, name, desviacion_pct\n        FROM v_bi_budget_alerts\n       WHERE tenant_id = $1::uuid\n       ORDER BY desviacion_pct DESC\n       LIMIT 10\n    ) t\n  ),\n  carga AS (\n    SELECT json_agg(row_to_json(t) ORDER BY semana_iso ASC) AS data FROM (\n      SELECT date_trunc('week', s.day)::date AS semana_iso,\n             count(p.*)::int AS proyectos_activos\n        FROM generate_series(now()::date, (now() + interval '30 days')::date, '7 days') s(day)\n        LEFT JOIN projects p\n          ON p.tenant_id = $1::uuid\n         AND p.status IN ('active','paused','blocked')\n         AND p.started_at IS NOT NULL\n         AND p.started_at::date <= s.day\n         AND (p.completed_at IS NULL OR p.completed_at::date >= s.day)\n       GROUP BY s.day\n    ) t\n  )\nSELECT\n  COALESCE((SELECT data FROM rentabilidad), '[]'::json) AS rentabilidad,\n  COALESCE((SELECT data FROM fases),        '[]'::json) AS fases,\n  COALESCE((SELECT data FROM conversion),   '[]'::json) AS conversion,\n  COALESCE((SELECT data FROM agentes),      '[]'::json) AS agentes_activos_mes,\n  COALESCE((SELECT data FROM alertas),      '[]'::json) AS alertas_presupuesto,\n  COALESCE((SELECT data FROM carga),        '[]'::json) AS prediccion_carga",
+        "options": {
+          "queryReplacement": "={{ [$('Decode JWT').first().json.tenant_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1200,
+        200
+      ],
+      "id": "bi-query",
+      "name": "BI Query (6 widgets)",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: true, data: { rentabilidad: $json.rentabilidad || [], fases: $json.fases || [], conversion: $json.conversion || [], agentes_activos_mes: $json.agentes_activos_mes || [], alertas_presupuesto: $json.alertas_presupuesto || [], prediccion_carga: $json.prediccion_carga || [] }, meta: { request_id: $('Decode JWT').first().json.request_id, generated_at: new Date().toISOString() } }) }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Cache-Control",
+                "value": "private, max-age=60"
+              }
+            ]
+          }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1440,
+        200
+      ],
+      "id": "bi-respond-ok",
+      "name": "Respond OK"
+    }
+  ],
+  "connections": {
+    "GET /bi/dashboard": {
+      "main": [
+        [
+          {
+            "node": "Decode JWT",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decode JWT": {
+      "main": [
+        [
+          {
+            "node": "Auth OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Auth OK?": {
+      "main": [
+        [
+          {
+            "node": "Respond Auth Error",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Set Session Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Session Context": {
+      "main": [
+        [
+          {
+            "node": "BI Query (6 widgets)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "BI Query (6 widgets)": {
+      "main": [
+        [
+          {
+            "node": "Respond OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

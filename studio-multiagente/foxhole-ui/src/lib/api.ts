@@ -17,6 +17,7 @@ import type {
   CheckoutSessionResponse,
   PortalSessionResponse,
   BillingTier,
+  BIDashboardData,
 } from './types';
 import { mockProfile, mockProjects, mockMetrics, mockAlerts } from './mock-data';
 import { getAccessToken } from './session';
@@ -337,6 +338,14 @@ export const api = {
         '/billing/portal',
         { method: 'POST', body: JSON.stringify({}) },
       );
+      return r.data;
+    },
+  },
+
+  // ADDENDUM 2 Bloque 7 — Business Intelligence dashboard
+  bi: {
+    dashboard: async (): Promise<BIDashboardData> => {
+      const r = await fetchAPI<EnvelopeResponse<BIDashboardData>>('/bi/dashboard');
       return r.data;
     },
   },

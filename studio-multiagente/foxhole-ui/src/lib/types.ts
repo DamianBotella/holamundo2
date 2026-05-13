@@ -353,3 +353,44 @@ export interface PortalSessionResponse {
   portal_url: string;
   return_url: string;
 }
+
+// ADDENDUM 2 Bloque 7 — Business Intelligence Dashboard
+export interface BIRentabilidadRow {
+  project_id: string;
+  project_name: string;
+  status: string | null;
+  margen_eur: number | null;
+  margen_pct: number | null;
+}
+export interface BIFaseRow {
+  phase: string;
+  n_proyectos: number;
+  dias_medios: number;
+}
+export interface BIConversionRow {
+  mes: string;
+  enviadas: number;
+  aceptadas: number;
+  tasa_pct: number;
+}
+export interface BIAgentActivityRow {
+  agent_name: string;
+  ejecuciones: number;
+}
+export interface BIBudgetAlertRow {
+  project_id: string;
+  name: string;
+  desviacion_pct: number;
+}
+export interface BICargaRow {
+  semana_iso: string;
+  proyectos_activos: number;
+}
+export interface BIDashboardData {
+  rentabilidad: BIRentabilidadRow[];
+  fases: BIFaseRow[];
+  conversion: BIConversionRow[];
+  agentes_activos_mes: BIAgentActivityRow[];
+  alertas_presupuesto: BIBudgetAlertRow[];
+  prediccion_carga: BICargaRow[];
+}

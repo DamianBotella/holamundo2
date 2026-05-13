@@ -5,6 +5,7 @@ import { api } from '@/lib/api';
 import { DashboardKPIs } from '@/components/DashboardKPIs';
 import { PhaseColumnView } from '@/components/PhaseColumnView';
 import { ActivityFeed } from '@/components/ActivityFeed';
+import { BusinessIntelligence } from '@/components/BusinessIntelligence';
 
 interface Props {
   onProjectClick: (id: string) => void;
@@ -63,6 +64,9 @@ export function DashboardPage({ onProjectClick, onNewProject }: Props) {
         </div>
         <ActivityFeed alerts={alerts} />
       </div>
+
+      {/* ADDENDUM 2 Bloque 7 — Inteligencia de Negocio */}
+      <BusinessIntelligence />
     </div>
   );
 }

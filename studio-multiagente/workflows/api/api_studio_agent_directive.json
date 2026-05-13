@@ -1,0 +1,264 @@
+{
+  "name": "api_studio_agent_directive",
+  "_description": "ADDENDUM 2 Bloque 4.1 backend - POST /api/v1/studio/agent/directive. El arquitecto pulsa 'Aplicar como directiva' en el chat con un agente concreto. Persiste en architect_directives + activity_log. Multi-tenant via JWT.",
+  "_status": "B72-fase-G+ ADDENDUM 2 Bloque 4 (backend only, UI pospuesta)",
+  "_n8n_id": "9uui4HfAYxYXaCOd",
+  "_endpoint": "POST /webhook/api/v1/studio/agent/directive",
+  "_body_shape": "{ agent_name: string, project_id: uuid|null, directive: string (max 1500), type: 'correction'|'question'|'instruction'|'pause' }",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "api/v1/studio/agent/directive",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ],
+      "id": "ad-webhook",
+      "name": "POST /agent/directive",
+      "webhookId": "feedface-cccc-4abc-9def-cafebabe000c"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const auth = $input.first().json.headers?.authorization || '';\nif (!auth.startsWith('Bearer ')) return [{ json: { _error: 'AUTH_MISSING_TOKEN', _status: 401 } }];\nconst token = auth.slice(7);\ntry {\n  const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'));\n  if (!payload.sub) throw new Error('No sub');\n  if (payload.exp && Date.now()/1000 > payload.exp) throw new Error('JWT expired');\n  if (!payload.tenant_id) throw new Error('No tenant_id');\n  const body = $input.first().json.body || {};\n  const agentName = (body.agent_name || '').trim();\n  const directive = (body.directive || '').trim();\n  const projectId = body.project_id || null; // opcional: null = directiva global del estudio\n  const allowedTypes = ['correction','question','instruction','pause'];\n  const type = allowedTypes.includes(body.type) ? body.type : 'correction';\n  if (!agentName) return [{ json: { _error: 'VALIDATION_FAILED', _status: 400, _details: 'agent_name requerido' } }];\n  if (!directive) return [{ json: { _error: 'VALIDATION_FAILED', _status: 400, _details: 'directive requerida' } }];\n  if (directive.length > 1500) return [{ json: { _error: 'VALIDATION_FAILED', _status: 400, _details: 'directive demasiado larga (max 1500 chars)' } }];\n  const directiveShort = directive.length > 55 ? directive.slice(0, 52) + '...' : directive;\n  return [{ json: {\n    user_id: payload.sub,\n    tenant_id: payload.tenant_id,\n    role: payload.role || 'architect',\n    agent_name: agentName,\n    project_id: projectId,\n    directive_text: directive,\n    directive_short: directiveShort,\n    directive_type: type,\n    request_id: 'req_' + Math.random().toString(36).slice(2, 10)\n  }}];\n} catch (e) {\n  return [{ json: { _error: 'AUTH_INVALID_TOKEN', _status: 401, _details: e.message } }];\n}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        300
+      ],
+      "id": "ad-decode",
+      "name": "Decode JWT + Validate"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "ad-cond-err",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        720,
+        300
+      ],
+      "id": "ad-if-auth",
+      "name": "Auth OK?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details || $json._error } }) }}",
+        "options": {
+          "responseCode": "={{ $json._status || 401 }}"
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        960,
+        460
+      ],
+      "id": "ad-respond-auth",
+      "name": "Respond Auth Error"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT set_session_context($1::uuid, $2::uuid, $3)",
+        "options": {
+          "queryReplacement": "={{ [$json.user_id, $json.tenant_id, $json.role] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        960,
+        200
+      ],
+      "id": "ad-set-session",
+      "name": "Set Session Context"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO architect_directives (tenant_id, agent_name, project_id, directive_text, directiva, directive_type, source, created_by, categoria)\nVALUES ($1::uuid, $2, $3::uuid, $4, $4, $5, 'chat', $6::uuid, 'comunicacion_cliente')\nRETURNING id",
+        "options": {
+          "queryReplacement": "={{ [$('Decode JWT + Validate').first().json.tenant_id, $('Decode JWT + Validate').first().json.agent_name, $('Decode JWT + Validate').first().json.project_id, $('Decode JWT + Validate').first().json.directive_text, $('Decode JWT + Validate').first().json.directive_type, $('Decode JWT + Validate').first().json.user_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1200,
+        200
+      ],
+      "id": "ad-insert-directive",
+      "name": "Insert Directive"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (tenant_id, project_id, agent_name, action, message_type, from_agent, to_agent, output_summary, status)\nVALUES ($1::uuid, $2::uuid, $3, $4, 'directive', 'architect', $3, $5, 'success')",
+        "options": {
+          "queryReplacement": "={{ [$('Decode JWT + Validate').first().json.tenant_id, $('Decode JWT + Validate').first().json.project_id, $('Decode JWT + Validate').first().json.agent_name, 'El arquitecto me ha pedido: ' + $('Decode JWT + Validate').first().json.directive_short, $('Decode JWT + Validate').first().json.directive_text.slice(0, 500)] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1440,
+        200
+      ],
+      "id": "ad-log",
+      "name": "Activity Log",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: true, data: { directive_id: $('Insert Directive').first().json.id, agent_name: $('Decode JWT + Validate').first().json.agent_name, project_id: $('Decode JWT + Validate').first().json.project_id, directive_type: $('Decode JWT + Validate').first().json.directive_type }, meta: { request_id: $('Decode JWT + Validate').first().json.request_id } }) }}",
+        "options": {
+          "responseCode": 201,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Cache-Control",
+                "value": "no-store"
+              }
+            ]
+          }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1680,
+        200
+      ],
+      "id": "ad-respond-ok",
+      "name": "Respond OK"
+    }
+  ],
+  "connections": {
+    "POST /agent/directive": {
+      "main": [
+        [
+          {
+            "node": "Decode JWT + Validate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decode JWT + Validate": {
+      "main": [
+        [
+          {
+            "node": "Auth OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Auth OK?": {
+      "main": [
+        [
+          {
+            "node": "Respond Auth Error",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Set Session Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Session Context": {
+      "main": [
+        [
+          {
+            "node": "Insert Directive",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Directive": {
+      "main": [
+        [
+          {
+            "node": "Activity Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Activity Log": {
+      "main": [
+        [
+          {
+            "node": "Respond OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

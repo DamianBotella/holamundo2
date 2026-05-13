@@ -5,16 +5,11 @@ import { Maximize2, ZoomIn, ZoomOut } from 'lucide-react';
 import type { StudioAgent, StudioRoom } from '@/lib/types';
 import { PALETTE } from './palette';
 import { acquireStudio, releaseStudio, getStudio } from './pixiSingleton';
-import { drawRoom, preloadRoomBackgrounds } from './StudioRoom';
-// ADDENDUM 2 Bloque 1: drawAgent (sprites Kenney en StudioAgent.tsx) sustituido
-// por drawAgentFigure (figuras vectoriales) via alias para reversibilidad
-// trivial (cambiar el import si hay que revertir). StudioAgent.tsx se queda en
-// el repo pendiente de OK visual antes de borrar.
-import { drawAgentFigure as drawAgent } from './AgentFigure';
+import { drawRoom } from './StudioRoom';
+import { drawAgent } from './StudioAgent';
 import { drawFurnitureForRoom } from './StudioFurniture';
 import { drawWallsForRoom } from './drawRoomWalls';
 import { detectMeetingAgents, getAgentWorldPosition } from './agentPosition';
-import { AGENT_WALK_SPEED, ARRIVAL_THRESHOLD } from './data/agentPositions';
 import {
   WORLD_W,
   WORLD_H,
@@ -24,17 +19,6 @@ import {
   compareRoomsIso,
   isoZIndexFromWorld,
 } from './iso';
-
-// ADDENDUM 2 Bloque 2: tipo de Container con metadata de tweening + estado.
-// El ticker lee __targetX/Y para interpolar y __prevState para saber si hay
-// que re-dibujar la figura (cambio de estado -> halo distinto).
-type AgentNode = Container & {
-  __agentName: string;
-  __targetX: number;
-  __targetY: number;
-  __prevState: StudioAgent['state'];
-  __prevSelected: boolean;
-};
 
 interface Props {
   rooms: StudioRoom[];
@@ -97,65 +81,20 @@ export function StudioCanvas({
         }
       }
 
-      // Ticker (B70b orb pulsante + B72-mov tweening + bobbing).
-      //
-      // 1) Orb de estado: pulsa alpha + scale segun __pulseFreq/__baseAlpha.
-      // 2) Selection ring: parpadeo ambar ~0.8 Hz.
-      // 3) ADDENDUM 2 Bloque 2 — Tweening hacia __target a AGENT_WALK_SPEED
-      //    en world units/seg. Cuando dist <= ARRIVAL_THRESHOLD: snap + stop
-      //    bobbing. Cuando dist > umbral: marca __bobBody en figureBody.
-      // 4) ADDENDUM 2 Bloque 2 — Bobbing: figureBody.y oscila +/-2px a ~5 Hz
-      //    senoidal mientras __bobBody = true.
-      const handler = (tick: Ticker) => {
+      // Ticker para orb de estado pulsante y selection ring (B70b).
+      // Cada orb guarda __pulseFreq y __baseAlpha. El ticker:
+      //   - Pulsa alpha:  base * (0.5 + 0.5*sin(t*freq))
+      //   - Pulsa scale:  1.0 + 0.20*sin(t*freq)  (efecto "latido")
+      //   working  freq=2pi*0.6 -> respiracion ~1.6s
+      //   waiting  freq=2pi*1.0 -> parpadeo 1s (1 Hz docu Opus)
+      //   failed   freq=0       -> alpha y scale estaticos
+      // Selection ring sigue con frecuencia ~0.8 Hz ambar parpadeante.
+      const handler = (_t: Ticker) => {
         const layer = studio.layers.agents;
         const t = performance.now() / 1000;
         const ringAlpha = 0.45 + Math.sin(t * 5) * 0.45;
-        // Pixi v8: deltaMS es el tiempo real del frame (clamp a 100ms por si
-        // hubo pausa de pestania o GC pico).
-        const dtSec = Math.min(tick.deltaMS ?? 16.67, 100) / 1000;
-
-        for (const child of layer.children) {
-          const node = child as AgentNode;
-
-          // (3) Tweening del nodo hacia su target en world iso
-          if (
-            typeof node.__targetX === 'number' &&
-            typeof node.__targetY === 'number'
-          ) {
-            const dx = node.__targetX - node.x;
-            const dy = node.__targetY - node.y;
-            const dist = Math.hypot(dx, dy);
-            // Encontrar figureBody para activar/desactivar el bob
-            const figure = (node.children?.find(
-              (c) => (c as Container).label === 'figureBody',
-            ) as (Container & { __bobBody?: boolean; __baseY?: number }) | undefined);
-
-            if (dist <= ARRIVAL_THRESHOLD) {
-              node.x = node.__targetX;
-              node.y = node.__targetY;
-              if (figure) {
-                figure.__bobBody = false;
-                figure.y = figure.__baseY ?? 0;
-              }
-            } else {
-              // En iso el eje Y aparece comprimido a la mitad => velocidad
-              // visual mas natural si avanzamos en pantalla a AGENT_WALK_SPEED.
-              const step = AGENT_WALK_SPEED * dtSec;
-              const ratio = Math.min(1, step / dist);
-              node.x += dx * ratio;
-              node.y += dy * ratio;
-              if (figure) figure.__bobBody = true;
-            }
-
-            // (4) Bobbing: oscilar figure.y +/-2px @ 5 Hz si moviendo
-            if (figure?.__bobBody) {
-              const baseY = figure.__baseY ?? 0;
-              figure.y = baseY + Math.sin(t * 2 * Math.PI * 5) * 2;
-            }
-          }
-
-          // (1) Orb pulsante
-          const orb = node.children?.find(
+        for (const node of layer.children) {
+          const orb = (node as Container).children?.find(
             (c) => (c as Graphics).label === 'stateOrb',
           ) as (Graphics & { __pulseFreq?: number; __baseAlpha?: number }) | undefined;
           if (orb) {
@@ -170,8 +109,7 @@ export function StudioCanvas({
               orb.scale.set(1 + 0.22 * phase);
             }
           }
-          // (2) Selection ring parpadeante
-          const ring = node.children?.find(
+          const ring = (node as Container).children?.find(
             (c) => (c as Graphics).label === 'selectionRing',
           ) as Graphics | undefined;
           if (ring) ring.alpha = ringAlpha;
@@ -179,12 +117,6 @@ export function StudioCanvas({
       };
       studio.app.ticker.add(handler);
       tickerHandlerRef.current = handler;
-
-      // ADDENDUM 2 Bloque 1 followup: pre-cargar las 10 texturas de fondo
-      // Gemini ANTES de marcar pixiReady, asi el primer drawRoom las pinta
-      // directamente (sin esperar a un segundo re-render).
-      await preloadRoomBackgrounds();
-      if (cancelled) return;
 
       setPixiReady(true);
     })();
@@ -242,112 +174,46 @@ export function StudioCanvas({
     for (const r of rooms) drawWallsForRoom(wallsLayer, r);
   }, [pixiReady, rooms]);
 
-  // ADDENDUM 2 Bloque 2 — Render agents con Map estable in-place:
-  //   - Si el nodo existe y el state no cambio -> solo actualizar __targetX/Y
-  //     (el ticker anima el tweening).
-  //   - Si el state cambio (o isSelected) -> destruir el container y recrear
-  //     en la posicion ACTUAL (no en el target), preservando la animacion en
-  //     curso. Set new __targetX/Y para que siga animando hacia el destino.
-  //   - Si el agente desaparece de la lista -> destroy y remove del map.
-  //
-  //   Estado -> posicion (definido por getAgentWorldPosition):
-  //     working sin reunion / waiting_approval / idle <5min -> su mesa
-  //     working en reunion (2+ agentes mismo project)        -> meeting_room
-  //     idle >5min con historia                              -> IDLE_POSITIONS
-  //     failed                                                -> urgency_corridor
-  const agentNodesRef = useRef<Map<string, AgentNode>>(new Map());
-
+  // 3) Render agents en posicion segun ESTADO (B72-rediseno PASO 4):
+  //   working           -> su mesa (default_position)
+  //   waiting_approval  -> su mesa (orb amarillo pulsante indica espera)
+  //   idle              -> seat en terraza-cafe (asignado por indice estable)
+  //   failed            -> pos en corredor de urgencias
+  //   working+meeting   -> seat alrededor mesa de reuniones (si comparten proyecto)
+  // Sin animacion todavia: el agente se renderiza en destino directamente.
   useEffect(() => {
     if (!pixiReady) return;
     const studio = getStudio();
     if (!studio || agents.length === 0 || rooms.length === 0) return;
     const roomMap = new Map<string, StudioRoom>();
     for (const r of rooms) roomMap.set(r.room_id, r);
+    studio.layers.agents.removeChildren();
 
     const { meetingNames } = detectMeetingAgents(agents);
+
+    // Indice estable por nombre alfabetico para asignar seats deterministicamente
     const sortedAgents = [...agents].sort((a, b) =>
       a.agent_name.localeCompare(b.agent_name),
     );
 
-    // Calcular target iso para cada agente.
-    const targets = new Map<string, { iso: { x: number; y: number }; z: number }>();
-    sortedAgents.forEach((a, i) => {
-      const pos = getAgentWorldPosition(a, i, roomMap, meetingNames);
-      if (!pos) return;
-      const iso = worldToIso(pos.x, pos.y);
-      targets.set(a.agent_name, { iso, z: isoZIndexFromWorld(pos.x, pos.y) });
-    });
+    const placed = sortedAgents
+      .map((a, i) => {
+        const pos = getAgentWorldPosition(a, i, roomMap, meetingNames);
+        if (!pos) return null;
+        const iso = worldToIso(pos.x, pos.y);
+        return { a, wx: pos.x, wy: pos.y, iso, z: isoZIndexFromWorld(pos.x, pos.y) };
+      })
+      .filter((p): p is NonNullable<typeof p> => p !== null)
+      .sort((p, q) => p.z - q.z);
 
-    const map = agentNodesRef.current;
-    const seen = new Set<string>();
-
-    for (const a of sortedAgents) {
-      const tgt = targets.get(a.agent_name);
-      if (!tgt) continue;
-      seen.add(a.agent_name);
-      const isSelected = selectedAgentName === a.agent_name;
-      let node = map.get(a.agent_name);
-
-      const stateChanged   = node && node.__prevState   !== a.state;
-      const selectionFlip  = node && node.__prevSelected !== isSelected;
-
-      if (node && (stateChanged || selectionFlip)) {
-        // Destruir y recrear preservando la posicion actual del nodo viejo
-        // (asi la animacion arranca desde donde estaba, no salta al target).
-        const currentX = node.x;
-        const currentY = node.y;
-        studio.layers.agents.removeChild(node);
-        node.destroy({ children: true });
-        node = undefined;
-        // Crear nuevo y arrancarlo en currentX/currentY (el ticker movera al target)
-        drawAgent(studio.layers.agents, {
-          agent: a,
-          position: { x: currentX, y: currentY },
-          isSelected,
-          onSelect: onSelectAgent,
-        });
-        // Pixi.addChild devuelve el ultimo hijo agregado a la layer.
-        node = studio.layers.agents.children[
-          studio.layers.agents.children.length - 1
-        ] as AgentNode;
-      }
-
-      if (!node) {
-        // Primera vez: snap directamente al target (no animar desde 0,0)
-        drawAgent(studio.layers.agents, {
-          agent: a,
-          position: { x: tgt.iso.x, y: tgt.iso.y },
-          isSelected,
-          onSelect: onSelectAgent,
-        });
-        node = studio.layers.agents.children[
-          studio.layers.agents.children.length - 1
-        ] as AgentNode;
-      }
-
-      node.__agentName    = a.agent_name;
-      node.__targetX      = tgt.iso.x;
-      node.__targetY      = tgt.iso.y;
-      node.__prevState    = a.state;
-      node.__prevSelected = isSelected;
-      node.zIndex         = tgt.z;
-      map.set(a.agent_name, node);
+    for (const { a, iso } of placed) {
+      drawAgent(studio.layers.agents, {
+        agent: a,
+        position: { x: iso.x, y: iso.y },
+        isSelected: selectedAgentName === a.agent_name,
+        onSelect: onSelectAgent,
+      });
     }
-
-    // Destruir nodos de agentes que ya no estan en la lista
-    for (const [name, node] of map) {
-      if (!seen.has(name)) {
-        studio.layers.agents.removeChild(node);
-        node.destroy({ children: true });
-        map.delete(name);
-      }
-    }
-
-    // Sort children por zIndex iso (manualmente, los agent layers no usan
-    // sortableChildren por defecto en este singleton).
-    studio.layers.agents.children.sort(
-      (a, b) => (a as AgentNode).zIndex - (b as AgentNode).zIndex,
-    );
   }, [pixiReady, rooms, agents, selectedAgentName, onSelectAgent]);
 
   // 4) Aplicar zoom y pan al world (con offset iso para coords X negativas)

@@ -1,0 +1,565 @@
+{
+  "name": "api_regulatory_ask",
+  "_description": "ADDENDUM 2 Bloque 6 - RAG semantico sobre municipal_pgou_rules. Body: {project_id, question}. Pasos: embed pregunta (OpenAI text-embedding-3-small) -> search_pgou_rules(municipio, embedding, top_k=5) -> gpt-4o sintesis respuesta + citas -> activity_log -> respond. Multi-tenant: tenant_id del JWT.",
+  "_status": "B72-fase-G+ ADDENDUM 2 Bloque 6",
+  "_n8n_id": "ciYAceNDWZZYCaxw",
+  "_endpoint": "POST /webhook/api/v1/regulatory/ask",
+  "_body_shape": "{ project_id: uuid, question: string (max 1000 chars) }",
+  "_response_success": "{ ok: true, data: { respuesta: string, citas: [{rule_title, normative_reference, normative_url, severity}], confianza: 'alta'|'media'|'baja' } }",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "api/v1/regulatory/ask",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ],
+      "id": "ra-webhook",
+      "name": "POST /regulatory/ask",
+      "webhookId": "feedface-aaaa-4abc-9def-cafebabe000a"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const auth = $input.first().json.headers?.authorization || '';\nif (!auth.startsWith('Bearer ')) return [{ json: { _error: 'AUTH_MISSING_TOKEN', _status: 401 } }];\nconst token = auth.slice(7);\ntry {\n  const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'));\n  if (!payload.sub) throw new Error('No sub');\n  if (payload.exp && Date.now()/1000 > payload.exp) throw new Error('JWT expired');\n  if (!payload.tenant_id) throw new Error('No tenant_id');\n  const body = $input.first().json.body || {};\n  const projectId = (body.project_id || '').trim();\n  const question = (body.question || '').trim();\n  if (!projectId) return [{ json: { _error: 'VALIDATION_FAILED', _status: 400, _details: 'project_id requerido' } }];\n  if (!question) return [{ json: { _error: 'VALIDATION_FAILED', _status: 400, _details: 'question requerida' } }];\n  if (question.length > 1000) return [{ json: { _error: 'VALIDATION_FAILED', _status: 400, _details: 'question demasiado larga (max 1000 chars)' } }];\n  return [{ json: {\n    user_id: payload.sub,\n    tenant_id: payload.tenant_id,\n    role: payload.role || 'architect',\n    project_id: projectId,\n    question,\n    request_id: 'req_' + Math.random().toString(36).slice(2, 10)\n  }}];\n} catch (e) {\n  return [{ json: { _error: 'AUTH_INVALID_TOKEN', _status: 401, _details: e.message } }];\n}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        300
+      ],
+      "id": "ra-decode",
+      "name": "Decode JWT + Validate"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "ra-cond-err",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        720,
+        300
+      ],
+      "id": "ra-if-auth",
+      "name": "Auth OK?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details || $json._error } }) }}",
+        "options": {
+          "responseCode": "={{ $json._status || 401 }}"
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        960,
+        460
+      ],
+      "id": "ra-respond-auth",
+      "name": "Respond Auth Error"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT set_session_context($1::uuid, $2::uuid, $3)",
+        "options": {
+          "queryReplacement": "={{ [$json.user_id, $json.tenant_id, $json.role] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        960,
+        200
+      ],
+      "id": "ra-set-session",
+      "name": "Set Session Context"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, name, location_city, location_province FROM projects WHERE id = $1::uuid LIMIT 1",
+        "options": {
+          "queryReplacement": "={{ [$('Decode JWT + Validate').first().json.project_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1200,
+        200
+      ],
+      "id": "ra-load-project",
+      "name": "Load Project",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const sess = $('Decode JWT + Validate').first().json;\nconst rows = $('Load Project').all().map(i => i.json).filter(p => p && p.id);\nif (rows.length === 0) return [{ json: { _error: 'PROJECT_NOT_FOUND', _status: 404 } }];\nconst project = rows[0];\nconst city = (project.location_city || '').trim();\nif (!city) return [{ json: { _error: 'PROJECT_NO_CITY', _status: 400, _details: 'El proyecto no tiene location_city. No puedo consultar normativa municipal.' } }];\n// Slug determinista JS (sin depender de unaccent extension en Postgres)\nconst slug = city.normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 60);\nreturn [{ json: { ...sess, project_id: project.id, project_name: project.name, municipio_slug: slug, location_city: city, location_province: project.location_province } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1440,
+        200
+      ],
+      "id": "ra-resolve-project",
+      "name": "Resolve Project"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "ra-cond-proj",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1680,
+        200
+      ],
+      "id": "ra-if-proj",
+      "name": "Project OK?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details || $json._error } }) }}",
+        "options": {
+          "responseCode": "={{ $json._status || 400 }}"
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1920,
+        360
+      ],
+      "id": "ra-respond-proj-error",
+      "name": "Respond Project Error"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/embeddings",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'text-embedding-3-small', input: $json.question }) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "gE1jXO133xEHS5JJ",
+          "name": "orquestador ArquiAI"
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1920,
+        120
+      ],
+      "id": "ra-embed",
+      "name": "Embed Question"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const emb = $('Embed Question').first().json;\nconst sess = $('Resolve Project').first().json;\nconst vec = emb?.data?.[0]?.embedding;\nif (!Array.isArray(vec)) return [{ json: { ...sess, _error: 'EMBED_FAILED', _status: 502, _details: 'OpenAI no devolvio embedding valido' } }];\n// pgvector acepta el formato [0.1,0.2,...] como string castable a vector\nreturn [{ json: { ...sess, embedding_str: '[' + vec.join(',') + ']' } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2160,
+        120
+      ],
+      "id": "ra-prep-vector",
+      "name": "Prepare Vector"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, municipio_slug, municipio_nombre, rule_category, rule_title, rule_description, normative_reference, normative_url, severity, pitfalls, similarity FROM search_pgou_rules($1::text, $2::vector, 5)",
+        "options": {
+          "queryReplacement": "={{ [$json.municipio_slug, $json.embedding_str] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2400,
+        120
+      ],
+      "id": "ra-search",
+      "name": "Search PGOU Rules",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const sess = $('Resolve Project').first().json;\nconst rules = $input.all().map(i => i.json).filter(r => r && r.id);\nreturn [{ json: { ...sess, rules, rules_count: rules.length } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2640,
+        120
+      ],
+      "id": "ra-aggregate-rules",
+      "name": "Aggregate Rules"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  model: 'gpt-4o',\n  temperature: 0,\n  response_format: { type: 'json_object' },\n  messages: [\n    { role: 'system', content: 'Eres asesor de un arquitecto tecnico espaniol. Tienes acceso a reglas concretas de normativa urbanistica del municipio donde se desarrolla un proyecto. Responde la pregunta usando EXCLUSIVAMENTE las reglas proporcionadas. Si no tienes informacion suficiente, dilo claramente y propone consultar la sede electronica del ayuntamiento. NUNCA inventes valores numericos ni articulos.\\n\\nDevuelve JSON shape: { \"respuesta\": \"texto en espanol max 250 palabras\", \"citas\": [{ \"rule_title\": \"...\", \"normative_reference\": \"...\", \"normative_url\": \"...\", \"severity\": \"critico|importante|recomendable|informativo\" }], \"confianza\": \"alta|media|baja\" }\\n\\nReglas:\\n- confianza=\"alta\" si las reglas cubren directamente la pregunta y tienen similarity > 0.6.\\n- confianza=\"media\" si solo cubren parcialmente.\\n- confianza=\"baja\" si las reglas no son del todo relevantes o no responden.\\n- citas: incluye SOLO las reglas que realmente usaste para responder (max 3).' },\n    { role: 'user', content: 'Municipio: ' + $json.location_city + '\\nProyecto: ' + $json.project_name + '\\n\\nPregunta del arquitecto: ' + $json.question + '\\n\\nReglas PGOU recuperadas (top 5 por similarity):\\n' + JSON.stringify($json.rules, null, 2) }\n  ]\n}) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "gE1jXO133xEHS5JJ",
+          "name": "orquestador ArquiAI"
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2880,
+        120
+      ],
+      "id": "ra-llm",
+      "name": "Synthesize Answer (gpt-4o)"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const llm = $('Synthesize Answer (gpt-4o)').first().json;\nconst agg = $('Aggregate Rules').first().json;\nlet parsed = { respuesta: '', citas: [], confianza: 'baja' };\ntry {\n  const content = llm?.choices?.[0]?.message?.content;\n  const j = typeof content === 'string' ? JSON.parse(content) : content;\n  parsed = {\n    respuesta: j.respuesta || 'No tengo informacion suficiente.',\n    citas: Array.isArray(j.citas) ? j.citas.slice(0, 3) : [],\n    confianza: ['alta','media','baja'].includes(j.confianza) ? j.confianza : 'baja',\n  };\n} catch (e) {\n  parsed = { respuesta: 'Error al sintetizar respuesta. Revisa la pregunta o consulta la sede electronica del ayuntamiento.', citas: [], confianza: 'baja' };\n}\nreturn [{ json: {\n  tenant_id: agg.tenant_id,\n  project_id: agg.project_id,\n  question: agg.question,\n  rules_count: agg.rules_count,\n  ...parsed,\n  request_id: agg.request_id,\n  location_city: agg.location_city\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3120,
+        120
+      ],
+      "id": "ra-parse",
+      "name": "Parse Answer"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (tenant_id, project_id, agent_name, action, message_type, output_summary, status)\nVALUES ($1::uuid, $2::uuid, 'agent_regulatory', $3, 'action', $4, 'success')",
+        "options": {
+          "queryReplacement": "={{ [$json.tenant_id, $json.project_id, 'He respondido una consulta sobre normativa de ' + $json.location_city, ($json.respuesta || '').slice(0, 500)] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        3360,
+        120
+      ],
+      "id": "ra-log",
+      "name": "Activity Log",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: true, data: { respuesta: $('Parse Answer').first().json.respuesta, citas: $('Parse Answer').first().json.citas, confianza: $('Parse Answer').first().json.confianza, rules_used: $('Parse Answer').first().json.rules_count }, meta: { request_id: $('Parse Answer').first().json.request_id, municipio: $('Parse Answer').first().json.location_city } }) }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Cache-Control",
+                "value": "no-store"
+              }
+            ]
+          }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        3600,
+        120
+      ],
+      "id": "ra-respond-ok",
+      "name": "Respond OK"
+    }
+  ],
+  "connections": {
+    "POST /regulatory/ask": {
+      "main": [
+        [
+          {
+            "node": "Decode JWT + Validate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decode JWT + Validate": {
+      "main": [
+        [
+          {
+            "node": "Auth OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Auth OK?": {
+      "main": [
+        [
+          {
+            "node": "Respond Auth Error",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Set Session Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Session Context": {
+      "main": [
+        [
+          {
+            "node": "Load Project",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Project": {
+      "main": [
+        [
+          {
+            "node": "Resolve Project",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resolve Project": {
+      "main": [
+        [
+          {
+            "node": "Project OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Project OK?": {
+      "main": [
+        [
+          {
+            "node": "Respond Project Error",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Embed Question",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embed Question": {
+      "main": [
+        [
+          {
+            "node": "Prepare Vector",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Vector": {
+      "main": [
+        [
+          {
+            "node": "Search PGOU Rules",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search PGOU Rules": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Rules",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Rules": {
+      "main": [
+        [
+          {
+            "node": "Synthesize Answer (gpt-4o)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Synthesize Answer (gpt-4o)": {
+      "main": [
+        [
+          {
+            "node": "Parse Answer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Answer": {
+      "main": [
+        [
+          {
+            "node": "Activity Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Activity Log": {
+      "main": [
+        [
+          {
+            "node": "Respond OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

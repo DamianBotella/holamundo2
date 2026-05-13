@@ -159,9 +159,9 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT count(*)::int AS rules_count, COALESCE(lower(regexp_replace(unaccent($1::text), '[^a-zA-Z0-9]+', '_', 'g')), '') AS municipio_slug FROM municipal_pgou_rules WHERE municipio_slug = COALESCE(lower(regexp_replace(unaccent($1::text), '[^a-zA-Z0-9]+', '_', 'g')), '_none_')",
+        "query": "SELECT count(*)::int AS rules_count FROM municipal_pgou_rules WHERE municipio_slug = $1",
         "options": {
-          "queryReplacement": "={{ [$('Validate Input').first().json.location_city || ''] }}"
+          "queryReplacement": "={{ [($('Validate Input').first().json.location_city || '').normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 60) || '_none_'] }}"
         }
       },
       "credentials": {

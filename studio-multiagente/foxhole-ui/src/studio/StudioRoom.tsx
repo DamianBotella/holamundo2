@@ -25,35 +25,43 @@ for (const [filePath, url] of Object.entries(bgModules)) {
   if (m) ROOM_BG_URL[m[1]] = url;
 }
 
-// Cache de Textures cargadas (Pixi Assets.load es asincrono; cacheamos sync).
+// Cache de Textures cargadas. preloadRoomBackgrounds() llena este map antes
+// de que StudioCanvas renderice rooms, asi drawRoom() puede leer la textura
+// sync sin tener que re-disparar useEffects despues.
 const bgTextureCache: Map<string, Texture | null> = new Map();
-const bgLoadPromises: Map<string, Promise<Texture | null>> = new Map();
+let preloadPromise: Promise<void> | null = null;
 
-function loadRoomBgTexture(roomId: string): Texture | null {
-  if (bgTextureCache.has(roomId)) return bgTextureCache.get(roomId)!;
-  const url = ROOM_BG_URL[roomId];
-  if (!url) {
-    bgTextureCache.set(roomId, null);
-    return null;
+/**
+ * Pre-carga todas las texturas de fondo de habitacion en Pixi Assets cache.
+ * Idempotente: multiples llamadas reusan la misma promise.
+ *
+ * StudioCanvas la llama UNA vez al inicializar y espera el await antes de
+ * marcar pixiReady=true (asi el primer drawRoom() ya tiene texturas listas).
+ */
+export async function preloadRoomBackgrounds(): Promise<void> {
+  if (preloadPromise) return preloadPromise;
+  const entries = Object.entries(ROOM_BG_URL);
+  if (entries.length === 0) {
+    preloadPromise = Promise.resolve();
+    return preloadPromise;
   }
-  // Dispara la carga asincrona; el primer render no tendra textura, los
-  // siguientes useEffect de StudioCanvas (al cambiar agents/rooms) la
-  // pillaran del cache.
-  if (!bgLoadPromises.has(roomId)) {
-    bgLoadPromises.set(
-      roomId,
-      Assets.load<Texture>({ alias: `room_bg:${roomId}`, src: url })
-        .then((tex) => {
-          bgTextureCache.set(roomId, tex);
-          return tex;
-        })
-        .catch(() => {
-          bgTextureCache.set(roomId, null);
-          return null;
-        }),
-    );
-  }
-  return null;
+  preloadPromise = Promise.all(
+    entries.map(async ([roomId, url]) => {
+      try {
+        const tex = await Assets.load<Texture>({ alias: `room_bg:${roomId}`, src: url });
+        bgTextureCache.set(roomId, tex);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn(`[StudioRoom] preload bg "${roomId}" failed:`, err);
+        bgTextureCache.set(roomId, null);
+      }
+    }),
+  ).then(() => undefined);
+  return preloadPromise;
+}
+
+function getRoomBgTexture(roomId: string): Texture | null {
+  return bgTextureCache.get(roomId) ?? null;
 }
 
 // Escala de la textura del suelo. Validada visualmente en B72d: 0.0875 da
@@ -106,10 +114,10 @@ export function drawRoom(parent: Container, room: StudioRoom): Container {
   node.addChild(floor);
 
   // ADDENDUM 2 Bloque 1: sprite de fondo Gemini ENCIMA del rombo (alpha 0.95).
-  // Si la textura no esta cargada todavia (primer render) o no existe el PNG,
-  // se queda solo el rombo del floor. Idempotente: si re-renderiza con la
-  // textura ya cacheada, sprite real aparece.
-  const bgTex = loadRoomBgTexture(room.room_id);
+  // La textura debe estar pre-cargada via preloadRoomBackgrounds() antes de
+  // este render. Si falta el PNG (cache miss) o la pre-carga aun no termino,
+  // se queda solo el rombo del floor.
+  const bgTex = getRoomBgTexture(room.room_id);
   if (bgTex) {
     const sprite = new Sprite(bgTex);
     sprite.anchor.set(0.5, 0.5);

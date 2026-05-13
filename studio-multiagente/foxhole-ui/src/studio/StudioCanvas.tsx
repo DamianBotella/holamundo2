@@ -5,7 +5,7 @@ import { Maximize2, ZoomIn, ZoomOut } from 'lucide-react';
 import type { StudioAgent, StudioRoom } from '@/lib/types';
 import { PALETTE } from './palette';
 import { acquireStudio, releaseStudio, getStudio } from './pixiSingleton';
-import { drawRoom } from './StudioRoom';
+import { drawRoom, preloadRoomBackgrounds } from './StudioRoom';
 // ADDENDUM 2 Bloque 1: drawAgent (sprites Kenney en StudioAgent.tsx) sustituido
 // por drawAgentFigure (figuras vectoriales) via alias para reversibilidad
 // trivial (cambiar el import si hay que revertir). StudioAgent.tsx se queda en
@@ -179,6 +179,12 @@ export function StudioCanvas({
       };
       studio.app.ticker.add(handler);
       tickerHandlerRef.current = handler;
+
+      // ADDENDUM 2 Bloque 1 followup: pre-cargar las 10 texturas de fondo
+      // Gemini ANTES de marcar pixiReady, asi el primer drawRoom las pinta
+      // directamente (sin esperar a un segundo re-render).
+      await preloadRoomBackgrounds();
+      if (cancelled) return;
 
       setPixiReady(true);
     })();

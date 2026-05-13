@@ -61,7 +61,11 @@ export function drawAgentFigure(parent: Container, opts: DrawAgentFigureOptions)
   const isOrch = agent.category === 'orchestrator';
 
   const bodyColor = FIGURE_COLOR[agent.category] ?? FIGURE_COLOR.auxiliary;
-  const bodyAlpha = agent.state === 'idle' ? 0.7 : 1.0;
+  // Alpha siempre 1.0. El ADDENDUM literal proponia 0.7 para idle, pero como
+  // ~30 agentes arrancan idle todos a la vez, se veian "fantasma" todo el
+  // tiempo. La distincion working/idle se delega al halo verde alrededor de
+  // la cabeza (que solo aparece en working/waiting/failed).
+  const bodyAlpha = 1.0;
 
   const node = new Container();
   node.label = `agent:${agent.agent_name}`;

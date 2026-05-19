@@ -5,6 +5,7 @@ import type { ProjectSummary } from '@/lib/types';
 import type { TimelineEvent } from '@/lib/api';
 import { PHASE_LABELS_EXPORT } from '@/components/ProjectCard';
 import { ProjectDeliverablesPanel } from '@/components/ProjectDeliverablesPanel';
+import { MunicipalOnboardingBanner } from '@/components/MunicipalOnboardingBanner';
 
 interface Props {
   projectId: string;
@@ -64,6 +65,9 @@ export function ProjectDetailPage({ projectId, onBack, onOpenStudio }: Props) {
           </button>
         )}
       </div>
+
+      {/* PLAN V1.0 Bloque 2: banner onboarding municipal */}
+      <MunicipalOnboardingBanner locationCity={project.location_city ?? null} />
 
       <div className="foxhole-card p-6">
         <div className="flex items-start justify-between gap-4 mb-4">

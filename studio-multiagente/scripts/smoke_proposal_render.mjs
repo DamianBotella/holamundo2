@@ -58,14 +58,51 @@ function mintJwt() {
 // Polling DB para verificar render_data sin depender de respuesta HTTP sincrona.
 // El proxy EasyPanel/nginx delante de n8n puede cortar conexiones >30-60s,
 // pero n8n ejecuta el workflow hasta el final independiente del cliente.
+// Ademas, n8n devuelve a veces 502 con HTML "Not Found" cuando el workflow
+// responde con _status >=500: leemos directamente la ultima ejecucion del
+// workflow en n8n API para diagnosticar el ultimo nodo + error.
 const SUPA = 'https://xfeatkzordgnztigplwd.supabase.co';
 const SUPA_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhmZWF0a3pvcmRnbnp0aWdwbHdkIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NDY4MTc0NCwiZXhwIjoyMDkwMjU3NzQ0fQ.ywgupOdE6VfmW8i9ezNjrIVdeDDcRhPLI_W8yG_GzYg';
 const supaHeaders = { apikey: SUPA_KEY, Authorization: 'Bearer ' + SUPA_KEY };
+
+const N8N_API_BASE = 'https://n8n-n8n.zzeluw.easypanel.host';
+const N8N_API_KEY = process.env.N8N_API_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIyNTVhYzFkNS1iODJmLTQwMGEtYWQ3Yy0xMGZiZTE3ZDk5ZDQiLCJpc3MiOiJuOG4iLCJhdWQiOiJwdWJsaWMtYXBpIiwianRpIjoiZWYwMjE5YTAtYWE1OC00NjZjLTllYWMtOGY0NmNiMzkwOTFlIiwiaWF0IjoxNzc2Njk5ODA5fQ.KIqvcW3GnnJBhd4c8msctXgNxCVH_8pTkfTjFfMQxf8';
+const N8N_WORKFLOW_ID = '3C0IyRkz48VnFdky';
+const n8nHeaders = { 'X-N8N-API-KEY': N8N_API_KEY };
 
 async function getRenderData(proposalId) {
   const r = await fetch(`${SUPA}/rest/v1/proposals?id=eq.${proposalId}&select=render_data,updated_at`, { headers: supaHeaders });
   const rows = await r.json();
   return rows[0] || null;
+}
+
+async function getLastExecutionDiagnostic() {
+  // Recupera la ultima ejecucion del workflow con includeData=true y
+  // resume el ultimo nodo + error real.
+  const r = await fetch(`${N8N_API_BASE}/api/v1/executions?workflowId=${N8N_WORKFLOW_ID}&limit=1&includeData=true`, { headers: n8nHeaders });
+  const d = await r.json();
+  const exec = d.data?.[0];
+  if (!exec) return null;
+  const ran = exec.data?.resultData?.runData || {};
+  const names = Object.keys(ran);
+  const lastName = names[names.length - 1];
+  const lastRun = ran[lastName]?.[ran[lastName].length - 1] || {};
+  const out = lastRun.data?.main?.[0];
+  const j = out?.[0]?.json || {};
+  let errorDetail = '';
+  if (j._error)  errorDetail = `${j._error}: ${(j._details || '').slice(0, 300)}`;
+  else if (j.error) {
+    const e = typeof j.error === 'string' ? j.error : j.error.message || JSON.stringify(j.error);
+    errorDetail = String(e).slice(0, 300);
+  }
+  return {
+    execId: exec.id,
+    status: exec.status,
+    startedAt: exec.startedAt,
+    nodesExecuted: names.length,
+    lastNode: lastName,
+    lastNodeError: errorDetail,
+  };
 }
 
 async function main() {
@@ -85,33 +122,50 @@ async function main() {
 
   const t0 = Date.now();
   const jwt = mintJwt();
+  console.log('[jwt] iat:', JSON.parse(Buffer.from(jwt.split('.')[1],'base64url').toString()).iat,
+              'exp:', JSON.parse(Buffer.from(jwt.split('.')[1],'base64url').toString()).exp);
 
-  // Fire-and-forget con AbortSignal: aceptamos que el proxy corte, lo importante es disparar.
-  const ctrl = new AbortController();
-  const fetchPromise = fetch(ENDPOINT, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${jwt}` },
-    body: JSON.stringify({
-      proposal_id: proposalId,
-      source_image_url: SOURCE_IMAGE,
-      image_type: 'photo',
-      style: 'realistic',
-      renderspeed: 'fast',
-      scenario: 'precise',
-    }),
-    signal: ctrl.signal,
-  }).then(async r => {
+  // Llamada con timeout largo. El workflow ahora termina rapido (~1-3s) salvo
+  // que entre en polling mnml.ai real, que solo ocurre si mnml acepta el Submit.
+  let response = null;
+  try {
+    const r = await fetch(ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${jwt}` },
+      body: JSON.stringify({
+        proposal_id: proposalId,
+        source_image_url: SOURCE_IMAGE,
+        image_type: 'photo',
+        style: 'realistic',
+        renderspeed: 'fast',
+        scenario: 'precise',
+      }),
+      signal: AbortSignal.timeout(180_000),
+    });
     const txt = await r.text();
-    console.log('[response] status=' + r.status + ' (workflow respondio en ' + (Date.now()-t0) + 'ms)');
-    let body; try { body = JSON.parse(txt); } catch { body = { _raw: txt.slice(0,300) }; }
+    let body; try { body = JSON.parse(txt); } catch { body = { _raw: txt.slice(0,400) }; }
+    response = { status: r.status, body, ms: Date.now()-t0 };
+    console.log('[response] status=' + r.status + ' ms=' + response.ms);
+
+    // Detectar NO_CREDITS especificamente
+    const details = body?._details || body?.error?.message || JSON.stringify(body).slice(0,400);
+    if (typeof details === 'string' && details.includes('NO_CREDITS')) {
+      console.error('\n!!! mnml.ai cuenta sin creditos !!!');
+      console.error('   La key es valida, el workflow funciona, pero la cuenta esta sin saldo.');
+      console.error('   Accion humana: ir a dashboard mnml.ai y recargar creditos.');
+      console.error('   Detalles: ' + details.slice(0, 300));
+      process.exit(2);  // exit code 2 = NO_CREDITS especifico
+    }
+
     if (body?.data?.render_url || body?.render_url) {
       console.log('[response] render_url:', body.data?.render_url || body.render_url);
+    } else if (r.status !== 200 && r.status !== 201) {
+      console.log('[response] body preview:', JSON.stringify(body).slice(0, 400));
     }
-    return { status: r.status, body };
-  }).catch(e => {
-    console.log('[response] cliente HTTP cortado:', e.message + ' (workflow puede seguir ejecutando)');
-    return null;
-  });
+  } catch (e) {
+    console.log('[response] cliente HTTP cortado/timeout:', e.message);
+    response = { status: 0, body: null, ms: Date.now()-t0, err: e.message };
+  }
 
   // Polling DB cada 5s durante max 180s (renderspeed=fast tipicamente 30-90s, dejamos margen)
   console.log('[poll] esperando render_data en proposals (max 180s)...');
@@ -129,14 +183,27 @@ async function main() {
     }
     if (i % 3 === 2) console.log(`[poll] ${(i+1)*5}s -> render_data sigue NULL`);
   }
-  try { ctrl.abort(); } catch {}
-  await fetchPromise;
 
   const totalMs = Date.now() - t0;
 
   if (!renderUrl) {
     console.error('\nFAIL: render_data sigue NULL tras 180s.');
-    console.error('  Inspeccionar n8n executions UI para ver donde quedo.');
+    console.error('Diagnostico n8n executions:');
+    const diag = await getLastExecutionDiagnostic();
+    if (diag) {
+      console.error('  execId:        ' + diag.execId);
+      console.error('  status:        ' + diag.status);
+      console.error('  startedAt:     ' + diag.startedAt);
+      console.error('  nodesExecuted: ' + diag.nodesExecuted);
+      console.error('  lastNode:      ' + diag.lastNode);
+      console.error('  lastNodeError: ' + (diag.lastNodeError || '(sin error en output)'));
+      if (diag.lastNodeError && diag.lastNodeError.includes('NO_CREDITS')) {
+        console.error('\n  >>> mnml.ai SIN CREDITOS. Recarga cuenta en mnml.ai dashboard.');
+        process.exit(2);
+      }
+    } else {
+      console.error('  (no se pudo recuperar ultima ejecucion)');
+    }
     process.exit(1);
   }
 

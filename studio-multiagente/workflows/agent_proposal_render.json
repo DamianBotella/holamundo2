@@ -1,6 +1,6 @@
 {
   "name": "agent_proposal_render",
-  "_description": "Fase D.3 (2/3) - Genera render fotorrealista de la propuesta via mnml.ai Interior AI API. Lee proposal.moodboard_data.render_prompt + source_image_url (foto del espacio actual o sketch). POST a https://api.mnmlai.dev/v1/interior, poll GET /v1/status/{id} hasta success o timeout. Persiste render_data en proposals. Asincrono: el poll es interno al workflow con Wait nodes.",
+  "_description": "Fase D.3 (2/3) - Genera render fotorrealista de la propuesta via mnml.ai Interior AI API. Lee proposal.moodboard_data.render_prompt + source_image_url (foto del espacio actual o sketch). POST a https://api.mnmlai.dev/v1/interior, poll GET /v1/status/{id} hasta success o timeout. Persiste render_data en proposals. Asincrono: el poll es interno al workflow con Wait nodes. [PATCH 2026-05-19: multipart con file via Download Source Image]",
   "_status": "B72-fase-D.3 render via mnml.ai",
   "_n8n_id": "3C0IyRkz48VnFdky",
   "nodes": [
@@ -300,8 +300,9 @@
         "bodyParameters": {
           "parameters": [
             {
-              "name": "image_url",
-              "value": "={{ $('Prepare MNML Request').first().json.source_image_url }}"
+              "parameterType": "formBinaryData",
+              "name": "image",
+              "inputDataFieldName": "data"
             },
             {
               "name": "prompt",
@@ -336,7 +337,7 @@
         200
       ],
       "id": "rd-mnml-submit-url",
-      "name": "Submit MNML (URL form)",
+      "name": "Submit MNML (file)",
       "onError": "continueRegularOutput"
     },
     {
@@ -667,6 +668,30 @@
       ],
       "id": "rd-respond-fail",
       "name": "Respond Render Fail"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Prepare MNML Request').first().json.source_image_url }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "data"
+            }
+          },
+          "timeout": 20000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2160,
+        200
+      ],
+      "id": "rd-download-image",
+      "name": "Download Source Image",
+      "onError": "continueRegularOutput"
     }
   ],
   "connections": {
@@ -776,18 +801,7 @@
       "main": [
         [
           {
-            "node": "Submit MNML (URL form)",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Submit MNML (URL form)": {
-      "main": [
-        [
-          {
-            "node": "Parse Submit",
+            "node": "Download Source Image",
             "type": "main",
             "index": 0
           }
@@ -941,6 +955,28 @@
         [
           {
             "node": "Respond Render Fail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Submit MNML (file)": {
+      "main": [
+        [
+          {
+            "node": "Parse Submit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download Source Image": {
+      "main": [
+        [
+          {
+            "node": "Submit MNML (file)",
             "type": "main",
             "index": 0
           }

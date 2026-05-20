@@ -1,0 +1,723 @@
+{
+  "name": "agent_acta_obra",
+  "_description": "PLAN V1.0 Bloque 10 - Acta visita obra. Audio Drive URL -> OpenAI Whisper -> gpt-4o-mini categoriza por gremios + cruza con planning -> INSERT site_visit_acts draft + notify architect. Body acepta dev_transcript (bypass Whisper, testing/manual).",
+  "_status": "B10 (PLAN V1.0 ejecucion). PDF queda como null en V1.0 (V1.1 con Google Docs).",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "api/v1/agents/acta-obra/run",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        300
+      ],
+      "id": "ao-webhook",
+      "name": "POST /agents/acta-obra/run",
+      "webhookId": "a8b9c0d1-e2f3-4a4b-5c6d-7e8f9a0b1c2d"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const auth = $input.first().json.headers?.authorization || '';\nif (!auth.startsWith('Bearer ')) return [{ json: { _error: 'AUTH_MISSING_TOKEN', _status: 401 } }];\nconst token = auth.slice(7);\ntry {\n  const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'));\n  if (!payload.sub) throw new Error('No sub');\n  if (payload.exp && Date.now()/1000 > payload.exp) throw new Error('JWT expired');\n  if (!payload.tenant_id) throw new Error('No tenant_id');\n  const body = $input.first().json.body || {};\n  const projectId = (body.project_id || '').trim();\n  if (!projectId) return [{ json: { _error: 'VALIDATION_FAILED', _status: 400, _details: 'project_id requerido' } }];\n  const audioUrl = (body.audio_url || '').trim();\n  const devTranscript = (body.dev_transcript || '').trim();\n  if (!audioUrl && !devTranscript) return [{ json: { _error: 'VALIDATION_FAILED', _status: 400, _details: 'audio_url o dev_transcript requerido' } }];\n  const photos = Array.isArray(body.photos_urls) ? body.photos_urls.slice(0, 30) : [];\n  return [{ json: {\n    user_id: payload.sub,\n    tenant_id: payload.tenant_id,\n    role: payload.role || 'architect',\n    project_id: projectId,\n    audio_url: audioUrl,\n    dev_transcript: devTranscript,\n    use_dev_transcript: !!devTranscript,\n    photos_urls: photos,\n    visit_date_iso: body.visit_date || null,\n    request_id: 'req_' + Math.random().toString(36).slice(2, 10)\n  }}];\n} catch (e) {\n  return [{ json: { _error: 'AUTH_INVALID_TOKEN', _status: 401, _details: e.message } }];\n}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        300
+      ],
+      "id": "ao-decode",
+      "name": "Decode JWT + Body"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "ao-c1",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        680,
+        300
+      ],
+      "id": "ao-if-auth",
+      "name": "Auth OK?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details || $json._error } }) }}",
+        "options": {
+          "responseCode": "={{ $json._status || 401 }}"
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        920,
+        460
+      ],
+      "id": "ao-respond-error",
+      "name": "Respond Error"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH ctx AS (\n  SELECT set_session_context($1::uuid, $2::uuid, $3) AS ok\n),\nproj AS (\n  SELECT p.id, p.name, p.current_phase, p.location_city, p.tenant_id,\n         p.property_type, p.property_area_m2,\n         c.name AS client_name, c.email AS client_email\n  FROM projects p JOIN clients c ON c.id = p.client_id, ctx\n  WHERE p.id = $4::uuid LIMIT 1\n),\nplan AS (\n  SELECT id, version, COALESCE(phases, '[]'::jsonb) AS phases\n  FROM project_plans\n  WHERE project_id = $4::uuid\n  ORDER BY version DESC LIMIT 1\n)\nSELECT proj.*, plan.id AS plan_id, plan.version AS plan_version,\n       COALESCE(plan.phases, '[]'::jsonb) AS planning_phases\nFROM proj LEFT JOIN plan ON true;",
+        "options": {
+          "queryReplacement": "={{ [\n  $('Decode JWT + Body').first().json.user_id,\n  $('Decode JWT + Body').first().json.tenant_id,\n  $('Decode JWT + Body').first().json.role,\n  $('Decode JWT + Body').first().json.project_id\n] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        920,
+        200
+      ],
+      "id": "ao-load",
+      "name": "Load Project + Planning",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "ao-c-dev",
+              "leftValue": "={{ $('Decode JWT + Body').first().json.use_dev_transcript }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1160,
+        200
+      ],
+      "id": "ao-if-dev",
+      "name": "Use Dev Transcript?"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Decode JWT + Body').first().json.audio_url }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          },
+          "timeout": 60000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1400,
+        320
+      ],
+      "id": "ao-download-audio",
+      "name": "Download Audio"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/audio/transcriptions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "file",
+              "parameterType": "formBinaryData",
+              "inputDataFieldName": "data"
+            },
+            {
+              "name": "model",
+              "value": "whisper-1"
+            },
+            {
+              "name": "language",
+              "value": "es"
+            },
+            {
+              "name": "response_format",
+              "value": "json"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "gE1jXO133xEHS5JJ",
+          "name": "orquestador ArquiAI"
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1640,
+        320
+      ],
+      "id": "ao-whisper",
+      "name": "Submit Whisper"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const w = $input.first()?.json;\nconst transcript = String(w?.text || '').trim();\nif (!transcript || transcript.length < 20) return [{ json: { _error: 'WHISPER_EMPTY', _status: 502, _details: 'Whisper devolvio transcripcion vacia o muy corta' } }];\nreturn [{ json: { transcript_raw: transcript, transcript_source: 'whisper-1', audio_duration_seconds: w?.duration || null } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1880,
+        320
+      ],
+      "id": "ao-parse-whisper",
+      "name": "Parse Whisper"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const dev = $('Decode JWT + Body').first().json.dev_transcript;\nreturn [{ json: { transcript_raw: dev, transcript_source: 'dev_bypass', audio_duration_seconds: null } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1400,
+        100
+      ],
+      "id": "ao-from-dev",
+      "name": "Use Dev Transcript"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Conver. ambas ramas. Por gotcha 6.3 usamos isExecuted antes de tocar nodos.\nconst sess = $('Decode JWT + Body').first().json;\nconst proj = $('Load Project + Planning').first().json;\nconst input = $input.first().json;\nif (input._error) return [{ json: input }];\n\nconst transcript = String(input.transcript_raw || '').trim();\nif (!transcript) return [{ json: { _error: 'NO_TRANSCRIPT', _status: 502, _details: 'no se obtuvo transcripcion' } }];\n\nconst phases = Array.isArray(proj.planning_phases) ? proj.planning_phases : [];\nconst planningSummary = phases.length\n  ? phases.map((ph,i) => {\n      const titulo = ph.titulo || ph.name || ph.nombre || ph.title || '(fase sin titulo)';\n      const fIni = ph.fecha_inicio || ph.start_date || ph.start || '?';\n      const fFin = ph.fecha_fin || ph.end_date || ph.end || '?';\n      const gremios = Array.isArray(ph.gremios) ? ph.gremios.join(', ') : (ph.gremio || '?');\n      return `${i+1}. [${gremios}] ${titulo} (${fIni} -> ${fFin})`;\n    }).join('\\n')\n  : '(no hay planning vigente cargado para este proyecto)';\n\nconst photos = sess.photos_urls || [];\nconst photosBlock = photos.length\n  ? photos.map((u,i) => `${i+1}. ${u}`).join('\\n')\n  : '(sin fotos aportadas)';\n\nconst gremiosValidos = ['albanileria','fontaneria','electricidad','carpinteria','pintura','cubiertas','estructura','climatizacion','aislamiento','demolicion','otros'];\n\nconst systemPrompt = `Eres agent_acta_obra. El arquitecto ha grabado un audio durante una visita a una obra de reforma. Recibes la transcripcion bruta y la conviertes en un acta profesional estructurada.\\n\\nDevuelve SOLO JSON valido con la forma EXACTA:\\n{\\n  observaciones: [\\n    { gremio: string, texto: string, tipo: 'incidencia'|'avance'|'pendiente', fotos_referenciadas: number[] }\\n  ],\\n  acuerdos: string,\\n  proxima_visita_prevista: string|null\\n}\\n\\nREGLAS:\\n- gremio debe ser uno de: ${gremiosValidos.join(', ')}.\\n- Cada observacion en 1-2 frases concisas, profesionales.\\n- tipo: 'incidencia'=problema detectado, 'avance'=trabajo completado/progreso OK, 'pendiente'=tarea por hacer.\\n- fotos_referenciadas: indices 1-based de fotos mencionadas (ej. 'la foto 1', 'esta humedad'). [] si no menciona.\\n- acuerdos: resumen plano de los acuerdos tomados durante la visita (cliente, gremios, arquitecto). String vacio si no hay.\\n- proxima_visita_prevista: ISO 8601 (YYYY-MM-DD o YYYY-MM-DDTHH:MM:SS) si la transcripcion menciona fecha/hora. null si no.\\n- NO inventes datos que no esten en la transcripcion. Si el arquitecto no menciona algo, no lo pongas.\\n- Cruza con el PLANNING vigente para detectar avances/retrasos sobre tareas planificadas, pero SOLO si el arquitecto los menciona.`;\n\nconst userPrompt = `PROYECTO: ${proj.name}\\nFASE: ${proj.current_phase}\\nMUNICIPIO: ${proj.location_city || '?'}\\n\\nPLANNING VIGENTE (v${proj.plan_version || '?'}, tareas activas):\\n${planningSummary}\\n\\nFOTOS DISPONIBLES (indices 1..${photos.length}):\\n${photosBlock}\\n\\nTRANSCRIPCION AUDIO (fuente: ${input.transcript_source}${input.audio_duration_seconds ? ', ' + input.audio_duration_seconds + 's' : ''}):\\n\"\"\"\\n${transcript}\\n\"\"\"\\n\\nGenera el acta estructurada en JSON.`;\n\nreturn [{ json: {\n  ...sess,\n  project_id: proj.id,\n  project_name: proj.name,\n  current_phase: proj.current_phase,\n  client_name: proj.client_name,\n  client_email: proj.client_email,\n  plan_id: proj.plan_id,\n  plan_version: proj.plan_version,\n  transcript_raw: transcript,\n  transcript_source: input.transcript_source,\n  audio_duration_seconds: input.audio_duration_seconds,\n  llm_payload: {\n    model: 'gpt-4o-mini',\n    messages: [\n      { role: 'system', content: systemPrompt },\n      { role: 'user', content: userPrompt }\n    ],\n    temperature: 0.2,\n    max_tokens: 1800,\n    response_format: { type: 'json_object' }\n  }\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2120,
+        200
+      ],
+      "id": "ao-build",
+      "name": "Build Prompt"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "ao-c2",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2360,
+        200
+      ],
+      "id": "ao-if-build",
+      "name": "Build OK?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details || $json._error } }) }}",
+        "options": {
+          "responseCode": "={{ $json._status || 502 }}"
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        2600,
+        360
+      ],
+      "id": "ao-respond-502",
+      "name": "Respond 502"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO agent_executions (project_id, agent_name, status, started_at, input, metadata)\nVALUES ($1::uuid, 'agent_acta_obra', 'running', now(), $2::jsonb, $3::jsonb) RETURNING id",
+        "options": {
+          "queryReplacement": "={{ [\n  $('Build Prompt').first().json.project_id,\n  JSON.stringify({ transcript_source: $('Build Prompt').first().json.transcript_source, audio_duration_seconds: $('Build Prompt').first().json.audio_duration_seconds, photos_count: ($('Build Prompt').first().json.photos_urls || []).length }),\n  JSON.stringify({ request_id: $('Build Prompt').first().json.request_id, source: 'agent_acta_obra' })\n] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2600,
+        100
+      ],
+      "id": "ao-start-exec",
+      "name": "Start Execution",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($('Build Prompt').first().json.llm_payload) }}",
+        "options": {
+          "timeout": 90000
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "gE1jXO133xEHS5JJ",
+          "name": "orquestador ArquiAI"
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2840,
+        100
+      ],
+      "id": "ao-llm",
+      "name": "Call LLM"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const llm = $input.first()?.json;\nconst ctx = $('Build Prompt').first().json;\nconst raw = llm?.choices?.[0]?.message?.content || '{}';\nlet parsed;\ntry { parsed = JSON.parse(raw); } catch (e) {\n  return [{ json: { _error: 'LLM_INVALID_JSON', _status: 502, _details: e.message } }];\n}\nconst gremiosValidos = ['albanileria','fontaneria','electricidad','carpinteria','pintura','cubiertas','estructura','climatizacion','aislamiento','demolicion','otros'];\nconst rawObs = Array.isArray(parsed.observaciones) ? parsed.observaciones.slice(0, 40) : [];\nconst obs = [];\nfor (const o of rawObs) {\n  const texto = String(o.texto || '').slice(0, 600);\n  if (!texto) continue;\n  const grRaw = String(o.gremio || '').toLowerCase();\n  const tiRaw = String(o.tipo || '').toLowerCase();\n  const fotos = Array.isArray(o.fotos_referenciadas) ? o.fotos_referenciadas.map(n => Number(n)).filter(n => Number.isInteger(n) && n > 0) : [];\n  obs.push({\n    gremio: gremiosValidos.includes(grRaw) ? grRaw : 'otros',\n    texto,\n    tipo: ['incidencia','avance','pendiente'].includes(tiRaw) ? tiRaw : 'pendiente',\n    fotos_referenciadas: fotos\n  });\n}\nconst acuerdos = String(parsed.acuerdos || '').slice(0, 4000);\nconst proxima = parsed.proxima_visita_prevista && /^\\d{4}-\\d{2}-\\d{2}/.test(String(parsed.proxima_visita_prevista)) ? String(parsed.proxima_visita_prevista) : null;\nconst usage = llm?.usage || {};\nreturn [{ json: {\n  ...ctx,\n  transcript_categorized: { observaciones: obs, acuerdos, proxima_visita_prevista: proxima },\n  observations: obs,\n  acuerdos,\n  proxima_visita_prevista: proxima,\n  observation_count: obs.length,\n  model: llm?.model || 'gpt-4o-mini',\n  tokens_in: usage.prompt_tokens || 0,\n  tokens_out: usage.completion_tokens || 0\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3080,
+        100
+      ],
+      "id": "ao-format",
+      "name": "Format Response"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO site_visit_acts (\n  tenant_id, project_id, visit_date, audio_url, audio_duration_seconds,\n  transcript_raw, transcript_categorized, observations, photos, acuerdos,\n  proxima_visita_prevista, status\n) VALUES (\n  $1::uuid, $2::uuid, COALESCE($3::timestamptz, now()), $4, $5::int,\n  $6, $7::jsonb, $8::jsonb, $9::jsonb, $10,\n  $11::timestamptz, 'draft'\n)\nRETURNING id, visit_date, status, created_at;",
+        "options": {
+          "queryReplacement": "={{ [\n  $('Format Response').first().json.tenant_id,\n  $('Format Response').first().json.project_id,\n  $('Format Response').first().json.visit_date_iso,\n  $('Format Response').first().json.audio_url,\n  $('Format Response').first().json.audio_duration_seconds,\n  $('Format Response').first().json.transcript_raw,\n  JSON.stringify($('Format Response').first().json.transcript_categorized),\n  JSON.stringify($('Format Response').first().json.observations),\n  JSON.stringify(($('Format Response').first().json.photos_urls || []).map(u => ({ url: u }))),\n  $('Format Response').first().json.acuerdos,\n  $('Format Response').first().json.proxima_visita_prevista\n] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        3320,
+        100
+      ],
+      "id": "ao-insert",
+      "name": "Insert Act",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT value AS architect_email FROM system_config WHERE key='architect_email'",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        3560,
+        100
+      ],
+      "id": "ao-config",
+      "name": "Load Architect Email",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $('Load Architect Email').first().json.architect_email }}",
+        "subject": "=ArquitAI — Acta de obra borrador: {{ $('Format Response').first().json.project_name }} ({{ $('Format Response').first().json.observation_count }} observaciones)",
+        "emailType": "html",
+        "message": "=<div style=\"font-family:sans-serif;max-width:720px\"><h2>Acta de visita de obra (borrador)</h2><p><b>Proyecto:</b> {{ $('Format Response').first().json.project_name }}<br><b>Cliente:</b> {{ $('Format Response').first().json.client_name }}<br><b>Fase:</b> {{ $('Format Response').first().json.current_phase }}<br><b>Visita:</b> {{ $('Insert Act').first().json.visit_date }}<br><b>Transcripcion:</b> {{ $('Format Response').first().json.transcript_source }}{{ $('Format Response').first().json.audio_duration_seconds ? ' (' + $('Format Response').first().json.audio_duration_seconds + 's)' : '' }}</p><h3>Observaciones ({{ $('Format Response').first().json.observation_count }})</h3><table border=\"1\" cellpadding=\"6\" cellspacing=\"0\" style=\"border-collapse:collapse;font-size:12px;width:100%\"><tr style=\"background:#f3f4f6\"><th>Gremio</th><th>Tipo</th><th>Texto</th><th>Fotos</th></tr>{{ $('Format Response').first().json.observations.map(o => '<tr><td><b>' + o.gremio + '</b></td><td><span style=\"color:' + (o.tipo==='incidencia'?'#dc2626':o.tipo==='avance'?'#10b981':'#f59e0b') + '\">' + o.tipo + '</span></td><td>' + o.texto + '</td><td>' + (o.fotos_referenciadas.length ? o.fotos_referenciadas.join(', ') : '-') + '</td></tr>').join('') }}</table>{{ $('Format Response').first().json.acuerdos ? '<h3>Acuerdos</h3><div style=\"background:#f9fafb;padding:12px;border-left:4px solid #6366f1;white-space:pre-wrap\">' + $('Format Response').first().json.acuerdos + '</div>' : '' }}{{ $('Format Response').first().json.proxima_visita_prevista ? '<p><b>Proxima visita prevista:</b> ' + $('Format Response').first().json.proxima_visita_prevista + '</p>' : '' }}<h3>Transcripcion bruta</h3><details><summary style=\"cursor:pointer;color:#6b7280\">Mostrar transcripcion completa</summary><div style=\"background:#f9fafb;padding:12px;font-family:monospace;font-size:11px;white-space:pre-wrap;margin-top:8px\">{{ $('Format Response').first().json.transcript_raw }}</div></details><hr><p style=\"font-size:12px;color:#6b7280\">Para aprobar / firmar el acta:<br><code>POST /api/v1/site-visit-acts/approve</code><br>Body: <code>{\"act_id\":\"{{ $('Insert Act').first().json.id }}\",\"action\":\"approve\"}</code> -> approve<br>Body: <code>{\"act_id\":\"{{ $('Insert Act').first().json.id }}\",\"action\":\"sign\"}</code> -> firma definitiva (tras approve)</p><p style=\"font-size:11px;color:#9ca3af\">Generado por agent_acta_obra ({{ $('Format Response').first().json.model }}, {{ $('Format Response').first().json.tokens_in }} in / {{ $('Format Response').first().json.tokens_out }} out tokens). EU AI Act art.14: asistencia, no decision vinculante. PDF en V1.1.</p></div>",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "cIma8ntTjZvIfU3H",
+          "name": "damian2botella"
+        }
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        3800,
+        100
+      ],
+      "id": "ao-notify",
+      "name": "Notify Architect",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE agent_executions SET status='completed', finished_at=now(),\n  output=$2::jsonb,\n  duration_ms=EXTRACT(MILLISECONDS FROM (now() - started_at))::int\nWHERE id=$1::uuid",
+        "options": {
+          "queryReplacement": "={{ [\n  $('Start Execution').first().json.id,\n  JSON.stringify({ act_id: $('Insert Act').first().json.id, observation_count: $('Format Response').first().json.observation_count, tokens_in: $('Format Response').first().json.tokens_in, tokens_out: $('Format Response').first().json.tokens_out })\n] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        4040,
+        100
+      ],
+      "id": "ao-finish",
+      "name": "Finish Execution",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({\n  data: {\n    act_id: $('Insert Act').first().json.id,\n    project_id: $('Format Response').first().json.project_id,\n    status: 'draft',\n    visit_date: $('Insert Act').first().json.visit_date,\n    observation_count: $('Format Response').first().json.observation_count,\n    observations: $('Format Response').first().json.observations,\n    acuerdos: $('Format Response').first().json.acuerdos,\n    proxima_visita_prevista: $('Format Response').first().json.proxima_visita_prevista,\n    transcript_source: $('Format Response').first().json.transcript_source,\n    audio_duration_seconds: $('Format Response').first().json.audio_duration_seconds,\n    architect_notified: true\n  },\n  meta: {\n    request_id: $('Format Response').first().json.request_id,\n    model: $('Format Response').first().json.model,\n    tokens_in: $('Format Response').first().json.tokens_in,\n    tokens_out: $('Format Response').first().json.tokens_out,\n    timestamp: new Date().toISOString(),\n    eu_ai_act: 'asistencia, no decision vinculante'\n  }\n}) }}",
+        "options": {
+          "responseCode": 201
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        4280,
+        100
+      ],
+      "id": "ao-respond-201",
+      "name": "Respond 201"
+    }
+  ],
+  "connections": {
+    "POST /agents/acta-obra/run": {
+      "main": [
+        [
+          {
+            "node": "Decode JWT + Body",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decode JWT + Body": {
+      "main": [
+        [
+          {
+            "node": "Auth OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Auth OK?": {
+      "main": [
+        [
+          {
+            "node": "Respond Error",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Load Project + Planning",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Project + Planning": {
+      "main": [
+        [
+          {
+            "node": "Use Dev Transcript?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Use Dev Transcript?": {
+      "main": [
+        [
+          {
+            "node": "Use Dev Transcript",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Download Audio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download Audio": {
+      "main": [
+        [
+          {
+            "node": "Submit Whisper",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Submit Whisper": {
+      "main": [
+        [
+          {
+            "node": "Parse Whisper",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Whisper": {
+      "main": [
+        [
+          {
+            "node": "Build Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Use Dev Transcript": {
+      "main": [
+        [
+          {
+            "node": "Build Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Prompt": {
+      "main": [
+        [
+          {
+            "node": "Build OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build OK?": {
+      "main": [
+        [
+          {
+            "node": "Respond 502",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Start Execution",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Start Execution": {
+      "main": [
+        [
+          {
+            "node": "Call LLM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call LLM": {
+      "main": [
+        [
+          {
+            "node": "Format Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Response": {
+      "main": [
+        [
+          {
+            "node": "Insert Act",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Act": {
+      "main": [
+        [
+          {
+            "node": "Load Architect Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Architect Email": {
+      "main": [
+        [
+          {
+            "node": "Notify Architect",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify Architect": {
+      "main": [
+        [
+          {
+            "node": "Finish Execution",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Finish Execution": {
+      "main": [
+        [
+          {
+            "node": "Respond 201",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "_n8n_id": "qCjolYkt8UIYmka5"
+}

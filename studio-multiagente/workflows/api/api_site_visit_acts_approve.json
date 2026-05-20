@@ -1,0 +1,315 @@
+{
+  "name": "api_site_visit_acts_approve",
+  "_description": "PLAN V1.0 Bloque 10 - POST /api/v1/site-visit-acts/approve. action='approve' -> status='approved' approved_by/at. action='sign' -> requiere status='approved' -> status='signed' signed_at (definitivo, no editable).",
+  "_status": "B10 (PLAN V1.0 ejecucion).",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "api/v1/site-visit-acts/approve",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        300
+      ],
+      "id": "soa-webhook",
+      "name": "POST /site-visit-acts/approve",
+      "webhookId": "b9c0d1e2-f3a4-4b5c-6d7e-8f9a0b1c2d3e"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const auth = $input.first().json.headers?.authorization || '';\nif (!auth.startsWith('Bearer ')) return [{ json: { _error: 'AUTH_MISSING_TOKEN', _status: 401 } }];\nconst token = auth.slice(7);\ntry {\n  const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'));\n  if (!payload.sub) throw new Error('No sub');\n  if (payload.exp && Date.now()/1000 > payload.exp) throw new Error('JWT expired');\n  if (!payload.tenant_id) throw new Error('No tenant_id');\n  const role = payload.role || 'architect';\n  if (!['architect','super_admin'].includes(role)) return [{ json: { _error: 'FORBIDDEN', _status: 403, _details: 'Solo architect/super_admin pueden aprobar o firmar' } }];\n  const body = $input.first().json.body || {};\n  const actId = (body.act_id || '').trim();\n  const action = (body.action || '').trim();\n  if (!actId) return [{ json: { _error: 'VALIDATION_FAILED', _status: 400, _details: 'act_id requerido' } }];\n  if (!['approve','sign'].includes(action)) return [{ json: { _error: 'VALIDATION_FAILED', _status: 400, _details: \"action debe ser 'approve' o 'sign'\" } }];\n  return [{ json: {\n    user_id: payload.sub, tenant_id: payload.tenant_id, role,\n    act_id: actId, action,\n    request_id: 'req_' + Math.random().toString(36).slice(2, 10)\n  }}];\n} catch (e) {\n  return [{ json: { _error: 'AUTH_INVALID_TOKEN', _status: 401, _details: e.message } }];\n}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        300
+      ],
+      "id": "soa-decode",
+      "name": "Decode JWT + Body"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "soa-c1",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        680,
+        300
+      ],
+      "id": "soa-if-auth",
+      "name": "Auth OK?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details || $json._error } }) }}",
+        "options": {
+          "responseCode": "={{ $json._status || 401 }}"
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        920,
+        460
+      ],
+      "id": "soa-respond-error",
+      "name": "Respond Error"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH ctx AS (\n  SELECT set_session_context($1::uuid, $2::uuid, $3) AS ok\n),\nact AS (\n  SELECT s.id, s.project_id, s.tenant_id, s.status, s.visit_date,\n         s.approved_by, s.approved_at, s.signed_at,\n         p.name AS project_name\n  FROM site_visit_acts s JOIN projects p ON p.id = s.project_id, ctx\n  WHERE s.id = $4::uuid LIMIT 1\n),\nupd AS (\n  UPDATE site_visit_acts SET\n    status = CASE\n      WHEN $5 = 'approve' AND status = 'draft' THEN 'approved'\n      WHEN $5 = 'sign' AND status = 'approved' THEN 'signed'\n      ELSE status\n    END,\n    approved_by = CASE WHEN $5 = 'approve' AND status = 'draft' THEN $1::uuid ELSE approved_by END,\n    approved_at = CASE WHEN $5 = 'approve' AND status = 'draft' THEN now() ELSE approved_at END,\n    signed_at = CASE WHEN $5 = 'sign' AND status = 'approved' THEN now() ELSE signed_at END\n  WHERE id = $4::uuid\n  RETURNING id, status, approved_at, signed_at\n)\nSELECT act.id, act.status AS prev_status, act.project_id, act.project_name, act.visit_date,\n       upd.status AS new_status, upd.approved_at, upd.signed_at\nFROM act LEFT JOIN upd ON true;",
+        "options": {
+          "queryReplacement": "={{ [\n  $('Decode JWT + Body').first().json.user_id,\n  $('Decode JWT + Body').first().json.tenant_id,\n  $('Decode JWT + Body').first().json.role,\n  $('Decode JWT + Body').first().json.act_id,\n  $('Decode JWT + Body').first().json.action\n] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        920,
+        200
+      ],
+      "id": "soa-update",
+      "name": "Update Act CTE",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const r = $input.first()?.json;\nconst sess = $('Decode JWT + Body').first().json;\nif (!r || !r.id) return [{ json: { _error: 'ACT_NOT_FOUND', _status: 404, _details: 'act_id no existe o sin acceso por RLS' } }];\nconst expectedFrom = sess.action === 'approve' ? 'draft' : 'approved';\nif (r.prev_status !== expectedFrom) {\n  return [{ json: { _error: 'INVALID_TRANSITION', _status: 409, _details: 'Para ' + sess.action + ' el acta debe estar en ' + expectedFrom + ' (actual: ' + r.prev_status + ')' } }];\n}\nreturn [{ json: {\n  ...sess,\n  act_id: r.id, project_id: r.project_id, project_name: r.project_name,\n  visit_date: r.visit_date,\n  prev_status: r.prev_status, new_status: r.new_status,\n  approved_at: r.approved_at, signed_at: r.signed_at\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1160,
+        200
+      ],
+      "id": "soa-validate",
+      "name": "Validate Transition"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "soa-c2",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1400,
+        200
+      ],
+      "id": "soa-if-valid",
+      "name": "Valid Transition?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details || $json._error } }) }}",
+        "options": {
+          "responseCode": "={{ $json._status || 409 }}"
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1640,
+        360
+      ],
+      "id": "soa-respond-409",
+      "name": "Respond 409"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (tenant_id, project_id, agent_name, action, status, output_summary, message_type, from_agent, to_agent)\nVALUES ($1::uuid, $2::uuid, 'agent_acta_obra', $3, 'success', $4, 'execution', 'architect', 'agent_acta_obra')",
+        "options": {
+          "queryReplacement": "={{ [\n  $('Validate Transition').first().json.tenant_id,\n  $('Validate Transition').first().json.project_id,\n  $('Validate Transition').first().json.action === 'approve' ? 'act_approved' : 'act_signed',\n  'Acta ' + $('Validate Transition').first().json.act_id + ' ' + ($('Validate Transition').first().json.action === 'approve' ? 'aprobada por arquitecto' : 'firmada (definitiva)')\n] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1640,
+        100
+      ],
+      "id": "soa-log",
+      "name": "Log Activity",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({\n  data: {\n    act_id: $('Validate Transition').first().json.act_id,\n    project_id: $('Validate Transition').first().json.project_id,\n    prev_status: $('Validate Transition').first().json.prev_status,\n    new_status: $('Validate Transition').first().json.new_status,\n    approved_at: $('Validate Transition').first().json.approved_at,\n    signed_at: $('Validate Transition').first().json.signed_at,\n    action: $('Validate Transition').first().json.action\n  },\n  meta: { request_id: $('Validate Transition').first().json.request_id, timestamp: new Date().toISOString() }\n}) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1880,
+        100
+      ],
+      "id": "soa-respond-200",
+      "name": "Respond 200"
+    }
+  ],
+  "connections": {
+    "POST /site-visit-acts/approve": {
+      "main": [
+        [
+          {
+            "node": "Decode JWT + Body",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decode JWT + Body": {
+      "main": [
+        [
+          {
+            "node": "Auth OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Auth OK?": {
+      "main": [
+        [
+          {
+            "node": "Respond Error",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Update Act CTE",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Act CTE": {
+      "main": [
+        [
+          {
+            "node": "Validate Transition",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Transition": {
+      "main": [
+        [
+          {
+            "node": "Valid Transition?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid Transition?": {
+      "main": [
+        [
+          {
+            "node": "Respond 409",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Activity",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Activity": {
+      "main": [
+        [
+          {
+            "node": "Respond 200",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "_n8n_id": "j0ij1XviGXyVrqVg"
+}

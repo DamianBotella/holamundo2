@@ -13,6 +13,15 @@
 BEGIN;
 
 -- ============================================================
+-- 0. Ampliar CHECK constraint de agents_catalog.category para incluir 'execution'
+--    (descubierto en aplicacion 2026-05-20: el constraint original de mig 056
+--    solo permitia orchestrator/core/auxiliary/util)
+-- ============================================================
+ALTER TABLE agents_catalog DROP CONSTRAINT IF EXISTS agents_catalog_category_check;
+ALTER TABLE agents_catalog ADD CONSTRAINT agents_catalog_category_check
+  CHECK (category IN ('orchestrator','core','auxiliary','util','execution'));
+
+-- ============================================================
 -- 1. INSERT 3 agentes ejecucion en agents_catalog
 --    room_id: site_terrace (acta_obra, incident_handler) + reception (client_update)
 --    category: 'execution' (nuevo tipo)

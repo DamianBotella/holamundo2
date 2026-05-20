@@ -1,0 +1,525 @@
+{
+  "name": "api_client_updates_approve",
+  "_description": "PLAN V1.0 Bloque 8 - POST /api/v1/client-updates/approve. action='approve' -> envia Gmail al cliente y marca sent. action='reject' -> status='failed' con motivo. Requiere JWT con rol architect/owner/super_admin.",
+  "_status": "B8 (PLAN V1.0 ejecucion).",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "api/v1/client-updates/approve",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        300
+      ],
+      "id": "cua-webhook",
+      "name": "POST /client-updates/approve",
+      "webhookId": "b2c3d4e5-f6a7-4b8c-9d0e-1f2a3b4c5d6e"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const auth = $input.first().json.headers?.authorization || '';\nif (!auth.startsWith('Bearer ')) return [{ json: { _error: 'AUTH_MISSING_TOKEN', _status: 401 } }];\nconst token = auth.slice(7);\ntry {\n  const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'));\n  if (!payload.sub) throw new Error('No sub');\n  if (payload.exp && Date.now()/1000 > payload.exp) throw new Error('JWT expired');\n  if (!payload.tenant_id) throw new Error('No tenant_id');\n  const role = payload.role || 'architect';\n  if (!['architect','super_admin'].includes(role)) {\n    return [{ json: { _error: 'FORBIDDEN', _status: 403, _details: 'Solo architect/super_admin pueden aprobar' } }];\n  }\n  const body = $input.first().json.body || {};\n  const updateId = (body.update_id || '').trim();\n  const action = (body.action || '').trim();\n  if (!updateId) return [{ json: { _error: 'VALIDATION_FAILED', _status: 400, _details: 'update_id requerido' } }];\n  if (!['approve','reject'].includes(action)) return [{ json: { _error: 'VALIDATION_FAILED', _status: 400, _details: \"action debe ser 'approve' o 'reject'\" } }];\n  return [{ json: {\n    user_id: payload.sub,\n    tenant_id: payload.tenant_id,\n    role,\n    update_id: updateId,\n    action,\n    reject_reason: (body.reject_reason || '').slice(0, 500),\n    email_override: (body.email_override || '').trim(),\n    request_id: 'req_' + Math.random().toString(36).slice(2, 10)\n  }}];\n} catch (e) {\n  return [{ json: { _error: 'AUTH_INVALID_TOKEN', _status: 401, _details: e.message } }];\n}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        300
+      ],
+      "id": "cua-decode",
+      "name": "Decode JWT + Body"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cua-c1",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        680,
+        300
+      ],
+      "id": "cua-if-auth",
+      "name": "Auth OK?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details || $json._error } }) }}",
+        "options": {
+          "responseCode": "={{ $json._status || 401 }}"
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        920,
+        460
+      ],
+      "id": "cua-respond-error",
+      "name": "Respond Error"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH ctx AS (\n  SELECT set_session_context($1::uuid, $2::uuid, $3) AS ok\n)\nSELECT u.id, u.project_id, u.tenant_id, u.week_start, u.week_end, u.summary_text,\n       u.photos_referenced, u.status,\n       p.name AS project_name, p.current_phase, p.location_city,\n       c.name AS client_name, c.email AS client_email\nFROM client_weekly_updates u\nJOIN projects p ON p.id = u.project_id\nJOIN clients c ON c.id = p.client_id, ctx\nWHERE u.id = $4::uuid\nLIMIT 1;",
+        "options": {
+          "queryReplacement": "={{ [\n  $('Decode JWT + Body').first().json.user_id,\n  $('Decode JWT + Body').first().json.tenant_id,\n  $('Decode JWT + Body').first().json.role,\n  $('Decode JWT + Body').first().json.update_id\n] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        920,
+        200
+      ],
+      "id": "cua-load",
+      "name": "Load Update + Client",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const r = $input.first()?.json;\nconst sess = $('Decode JWT + Body').first().json;\nif (!r || !r.id) {\n  return [{ json: { _error: 'UPDATE_NOT_FOUND', _status: 404, _details: 'update_id no existe o sin acceso por RLS' } }];\n}\nif (r.status === 'sent') {\n  return [{ json: { _error: 'ALREADY_SENT', _status: 409, _details: 'Este resumen ya fue enviado al cliente' } }];\n}\nif (sess.action === 'reject') {\n  return [{ json: {\n    _branch: 'reject', ...sess,\n    update_id: r.id, project_id: r.project_id, project_name: r.project_name\n  }}];\n}\nconst toEmail = sess.email_override || r.client_email;\nif (!toEmail || !toEmail.includes('@')) {\n  return [{ json: { _error: 'NO_CLIENT_EMAIL', _status: 400, _details: 'Cliente sin email valido. Usa email_override en el body' } }];\n}\nlet photos = {};\ntry { photos = typeof r.photos_referenced === 'string' ? JSON.parse(r.photos_referenced) : (r.photos_referenced || {}); } catch (e) {}\nconst hitos = Array.isArray(photos.hitos_principales) ? photos.hitos_principales : [];\nconst proxima = photos.proxima_semana || '';\nreturn [{ json: {\n  _branch: 'approve', ...sess,\n  update_id: r.id, project_id: r.project_id, project_name: r.project_name,\n  current_phase: r.current_phase, location_city: r.location_city,\n  week_start: String(r.week_start).slice(0,10),\n  week_end: String(r.week_end).slice(0,10),\n  summary_text: r.summary_text, hitos_principales: hitos, proxima_semana: proxima,\n  client_name: r.client_name, client_email: toEmail\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1160,
+        200
+      ],
+      "id": "cua-format",
+      "name": "Validate + Branch"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cua-c2",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1400,
+        200
+      ],
+      "id": "cua-if-format",
+      "name": "Format OK?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details || $json._error } }) }}",
+        "options": {
+          "responseCode": "={{ $json._status || 404 }}"
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1640,
+        360
+      ],
+      "id": "cua-respond-400",
+      "name": "Respond 400"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cua-c3",
+              "leftValue": "={{ $json._branch }}",
+              "rightValue": "approve",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1640,
+        100
+      ],
+      "id": "cua-if-branch",
+      "name": "Approve?"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE client_weekly_updates SET status = 'failed', approved_by = $2::uuid, approved_at = now()\nWHERE id = $1::uuid AND status IN ('draft','approved')\nRETURNING id, status;",
+        "options": {
+          "queryReplacement": "={{ [\n  $('Validate + Branch').first().json.update_id,\n  $('Validate + Branch').first().json.user_id\n] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1880,
+        280
+      ],
+      "id": "cua-reject",
+      "name": "Mark Rejected",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({\n  data: { update_id: $('Validate + Branch').first().json.update_id, status: 'rejected', reject_reason: $('Validate + Branch').first().json.reject_reason },\n  meta: { request_id: $('Validate + Branch').first().json.request_id, timestamp: new Date().toISOString() }\n}) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        2120,
+        280
+      ],
+      "id": "cua-respond-rej",
+      "name": "Respond Rejected 200"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE client_weekly_updates SET status = 'approved', approved_by = $2::uuid, approved_at = now()\nWHERE id = $1::uuid AND status = 'draft'\nRETURNING id;",
+        "options": {
+          "queryReplacement": "={{ [\n  $('Validate + Branch').first().json.update_id,\n  $('Validate + Branch').first().json.user_id\n] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1880,
+        100
+      ],
+      "id": "cua-mark-approved",
+      "name": "Mark Approved",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $('Validate + Branch').first().json.client_email }}",
+        "subject": "=Resumen semanal de tu obra: {{ $('Validate + Branch').first().json.project_name }} ({{ $('Validate + Branch').first().json.week_start }} a {{ $('Validate + Branch').first().json.week_end }})",
+        "emailType": "html",
+        "message": "=<div style=\"font-family:sans-serif;max-width:640px;color:#1f2937\"><h2>Hola {{ $('Validate + Branch').first().json.client_name }},</h2><p>Aqui tienes el resumen de la semana del <b>{{ $('Validate + Branch').first().json.week_start }}</b> al <b>{{ $('Validate + Branch').first().json.week_end }}</b> sobre tu proyecto <b>{{ $('Validate + Branch').first().json.project_name }}</b>{{ $('Validate + Branch').first().json.location_city ? ' en ' + $('Validate + Branch').first().json.location_city : '' }}.</p><div style=\"background:#f9fafb;padding:20px;border-left:4px solid #6366f1;margin:16px 0;white-space:pre-wrap;line-height:1.5\">{{ $('Validate + Branch').first().json.summary_text }}</div>{{ ($('Validate + Branch').first().json.hitos_principales && $('Validate + Branch').first().json.hitos_principales.length) ? '<h3 style=\"margin-top:24px\">Hitos principales</h3><ul>' + $('Validate + Branch').first().json.hitos_principales.map(h => '<li>' + h + '</li>').join('') + '</ul>' : '' }}{{ $('Validate + Branch').first().json.proxima_semana ? '<h3 style=\"margin-top:24px\">Proxima semana</h3><p>' + $('Validate + Branch').first().json.proxima_semana + '</p>' : '' }}<p style=\"margin-top:32px\">Cualquier duda, respondenos a este correo.<br>Un saludo,<br><b>El equipo de tu estudio de arquitectura</b></p><hr style=\"margin-top:32px;border:0;border-top:1px solid #e5e7eb\"><p style=\"font-size:11px;color:#9ca3af\">Resumen revisado y aprobado por el arquitecto antes del envio. Generado con asistencia de IA (EU AI Act art.14).</p></div>",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "cIma8ntTjZvIfU3H",
+          "name": "damian2botella"
+        }
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        2120,
+        100
+      ],
+      "id": "cua-gmail",
+      "name": "Send To Client"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE client_weekly_updates SET status = 'sent', sent_at = now(), email_message_id = $2\nWHERE id = $1::uuid AND status = 'approved'\nRETURNING id, status, sent_at, email_message_id;",
+        "options": {
+          "queryReplacement": "={{ [\n  $('Validate + Branch').first().json.update_id,\n  $('Send To Client').first().json.id || $('Send To Client').first().json.messageId || ('gmail_' + Date.now())\n] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2360,
+        100
+      ],
+      "id": "cua-mark-sent",
+      "name": "Mark Sent",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (tenant_id, project_id, agent_name, action, status, output_summary, message_type, from_agent, to_agent)\nVALUES ($1::uuid, $2::uuid, 'agent_client_update', 'weekly_update_sent', 'success', $3, 'execution', 'agent_client_update', 'cliente')",
+        "options": {
+          "queryReplacement": "={{ [\n  $('Validate + Branch').first().json.tenant_id,\n  $('Validate + Branch').first().json.project_id,\n  'Resumen semanal enviado al cliente ' + $('Validate + Branch').first().json.client_email + ' (semana ' + $('Validate + Branch').first().json.week_start + ')'\n] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2600,
+        100
+      ],
+      "id": "cua-log",
+      "name": "Log Activity",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({\n  data: {\n    update_id: $('Validate + Branch').first().json.update_id,\n    project_id: $('Validate + Branch').first().json.project_id,\n    status: 'sent',\n    sent_to: $('Validate + Branch').first().json.client_email,\n    sent_at: $('Mark Sent').first().json.sent_at,\n    email_message_id: $('Mark Sent').first().json.email_message_id\n  },\n  meta: { request_id: $('Validate + Branch').first().json.request_id, timestamp: new Date().toISOString() }\n}) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        2840,
+        100
+      ],
+      "id": "cua-respond-200",
+      "name": "Respond Sent 200"
+    }
+  ],
+  "connections": {
+    "POST /client-updates/approve": {
+      "main": [
+        [
+          {
+            "node": "Decode JWT + Body",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decode JWT + Body": {
+      "main": [
+        [
+          {
+            "node": "Auth OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Auth OK?": {
+      "main": [
+        [
+          {
+            "node": "Respond Error",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Load Update + Client",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Update + Client": {
+      "main": [
+        [
+          {
+            "node": "Validate + Branch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate + Branch": {
+      "main": [
+        [
+          {
+            "node": "Format OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format OK?": {
+      "main": [
+        [
+          {
+            "node": "Respond 400",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Approve?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Approve?": {
+      "main": [
+        [
+          {
+            "node": "Mark Approved",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mark Rejected",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Approved": {
+      "main": [
+        [
+          {
+            "node": "Send To Client",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send To Client": {
+      "main": [
+        [
+          {
+            "node": "Mark Sent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Sent": {
+      "main": [
+        [
+          {
+            "node": "Log Activity",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Activity": {
+      "main": [
+        [
+          {
+            "node": "Respond Sent 200",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Rejected": {
+      "main": [
+        [
+          {
+            "node": "Respond Rejected 200",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "_n8n_id": "4qEULZs1qdrMYeM4"
+}

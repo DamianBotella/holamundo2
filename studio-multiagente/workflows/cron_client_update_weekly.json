@@ -1,0 +1,334 @@
+{
+  "name": "cron_client_update_weekly",
+  "_description": "PLAN V1.0 Bloque 8 - Cron lunes 09:00 Europe/Madrid. Recorre projects activos por tenant, mintea JWT founder unsigned (decode-only), llama POST /api/v1/agents/client-update/run para cada proyecto. Idempotente por UNIQUE(project_id, week_start).",
+  "_status": "B8 (PLAN V1.0 ejecucion).",
+  "nodes": [
+    {
+      "id": "ccu-01",
+      "name": "Schedule Mon 09:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -700,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks",
+              "weeksInterval": 1,
+              "triggerAtDay": [
+                1
+              ],
+              "triggerAtHour": 9,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "ccu-02",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -700,
+        480
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "trigger-client-update-weekly",
+        "responseMode": "lastNode",
+        "authentication": "headerAuth"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "Ba643jvuElTgMawr",
+          "name": "Webhook API Key (entrante)"
+        }
+      },
+      "webhookId": "c3d4e5f6-a7b8-4c9d-0e1f-2a3b4c5d6e7f"
+    },
+    {
+      "id": "ccu-03",
+      "name": "Init Super Admin Context",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -460,
+        380
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT set_config('app.role', 'super_admin', false) AS role_set"
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "id": "ccu-04",
+      "name": "Load Active Projects",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -220,
+        380
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT p.id AS project_id, p.tenant_id, p.name AS project_name,\n       COALESCE(\n         (SELECT up.user_id::text FROM user_profiles up\n           WHERE up.tenant_id = p.tenant_id AND up.active = true\n           ORDER BY (CASE up.role WHEN 'super_admin' THEN 1 WHEN 'architect' THEN 2 ELSE 3 END), up.created_at\n           LIMIT 1),\n         '00000000-0000-0000-0000-000000000000'\n       ) AS founder_user_id\nFROM projects p\nWHERE p.current_phase NOT IN ('completed','archived','intake')\nORDER BY p.tenant_id, p.created_at DESC",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "id": "ccu-05",
+      "name": "Has Projects?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        20,
+        380
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "h1",
+              "leftValue": "={{ $json.project_id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "ccu-06",
+      "name": "No Projects",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        260,
+        540
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "ccu-07",
+      "name": "Mint JWT + URL",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        280
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Mintea JWT unsigned (decode-only, sin firma). Backend solo decodifica.\nconst item = $input.item.json;\nconst now = Math.floor(Date.now() / 1000);\nconst header = { alg: 'none', typ: 'JWT' };\nconst payload = {\n  sub: item.founder_user_id,\n  tenant_id: item.tenant_id,\n  role: 'super_admin',\n  iat: now - 60,\n  exp: now + 3600\n};\nconst b64u = o => Buffer.from(JSON.stringify(o)).toString('base64')\n  .replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=/g, '');\nconst jwt = b64u(header) + '.' + b64u(payload) + '.cron-unsigned';\nreturn { json: { ...item, jwt } };"
+      }
+    },
+    {
+      "id": "ccu-08",
+      "name": "Call agent_client_update",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        500,
+        280
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://n8n-n8n.zzeluw.easypanel.host/webhook/api/v1/agents/client-update/run",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.jwt }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ project_id: $json.project_id }) }}",
+        "options": {
+          "timeout": 90000,
+          "response": {
+            "response": {
+              "fullResponse": false
+            }
+          }
+        }
+      },
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "id": "ccu-09",
+      "name": "Aggregate Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        740,
+        280
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const items = $input.all();\nlet ok = 0, fail = 0;\nconst failures = [];\nfor (const it of items) {\n  const j = it.json || {};\n  if (j.data && j.data.update_id) ok++;\n  else { fail++; failures.push({ project_id: j.project_id || '?', error: j.error?.code || j._error || 'unknown' }); }\n}\nreturn [{ json: { total: items.length, ok, fail, failures: failures.slice(0, 10), timestamp: new Date().toISOString() } }];"
+      }
+    },
+    {
+      "id": "ccu-10",
+      "name": "Log Cron Run",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        980,
+        280
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (project_id, agent_name, action, status, input_summary)\nVALUES (NULL, 'cron_client_update_weekly', 'weekly_run', $2, $1)\nRETURNING id;",
+        "options": {
+          "queryReplacement": "={{ [\n  'proyectos=' + $json.total + ', ok=' + $json.ok + ', fail=' + $json.fail,\n  $json.fail === 0 ? 'success' : ($json.ok > 0 ? 'partial' : 'failed')\n] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Schedule Mon 09:00": {
+      "main": [
+        [
+          {
+            "node": "Init Super Admin Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Init Super Admin Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Init Super Admin Context": {
+      "main": [
+        [
+          {
+            "node": "Load Active Projects",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Active Projects": {
+      "main": [
+        [
+          {
+            "node": "Has Projects?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Projects?": {
+      "main": [
+        [
+          {
+            "node": "Mint JWT + URL",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Projects",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mint JWT + URL": {
+      "main": [
+        [
+          {
+            "node": "Call agent_client_update",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call agent_client_update": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Results": {
+      "main": [
+        [
+          {
+            "node": "Log Cron Run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "_n8n_id": "48aT3kh1j3FLvGNv"
+}

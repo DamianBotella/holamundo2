@@ -1,0 +1,539 @@
+{
+  "name": "agent_client_update",
+  "_description": "PLAN V1.0 Bloque 8 - Resumen semanal automatizado al cliente. Webhook POST /api/v1/agents/client-update/run con JWT. Carga activity+visits+incidents de la semana, llama gpt-4o-mini, INSERT client_weekly_updates (draft), notifica al arquitecto por Gmail con link de approve.",
+  "_status": "B8 (PLAN V1.0 ejecucion).",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "api/v1/agents/client-update/run",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        300
+      ],
+      "id": "cu-webhook",
+      "name": "POST /agents/client-update/run",
+      "webhookId": "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const auth = $input.first().json.headers?.authorization || '';\nif (!auth.startsWith('Bearer ')) return [{ json: { _error: 'AUTH_MISSING_TOKEN', _status: 401 } }];\nconst token = auth.slice(7);\ntry {\n  const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'));\n  if (!payload.sub) throw new Error('No sub');\n  if (payload.exp && Date.now()/1000 > payload.exp) throw new Error('JWT expired');\n  if (!payload.tenant_id) throw new Error('No tenant_id');\n  const body = $input.first().json.body || {};\n  const projectId = (body.project_id || '').trim();\n  if (!projectId) return [{ json: { _error: 'VALIDATION_FAILED', _status: 400, _details: 'project_id requerido' } }];\n  // week_start: ISO YYYY-MM-DD opcional. Si null, calcula lunes pasado en SQL.\n  const weekStartIso = body.week_start ? String(body.week_start).slice(0,10) : null;\n  return [{ json: {\n    user_id: payload.sub,\n    tenant_id: payload.tenant_id,\n    role: payload.role || 'architect',\n    project_id: projectId,\n    week_start_iso: weekStartIso,\n    request_id: 'req_' + Math.random().toString(36).slice(2, 10)\n  }}];\n} catch (e) {\n  return [{ json: { _error: 'AUTH_INVALID_TOKEN', _status: 401, _details: e.message } }];\n}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        300
+      ],
+      "id": "cu-decode",
+      "name": "Decode JWT + Body"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cu-c1",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        680,
+        300
+      ],
+      "id": "cu-if-auth",
+      "name": "Auth OK?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details || $json._error } }) }}",
+        "options": {
+          "responseCode": "={{ $json._status || 401 }}"
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        920,
+        460
+      ],
+      "id": "cu-respond-error",
+      "name": "Respond Error"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH ctx AS (\n  SELECT set_session_context($1::uuid, $2::uuid, $3) AS ok\n),\ndefaults AS (\n  SELECT\n    COALESCE($4::date, (date_trunc('week', now())::date - INTERVAL '7 days')::date) AS ws,\n    COALESCE($4::date, (date_trunc('week', now())::date - INTERVAL '7 days')::date) + INTERVAL '6 days' AS we\n),\nproj AS (\n  SELECT p.id, p.name, p.current_phase, p.location_city, p.tenant_id,\n         c.name AS client_name, c.email AS client_email\n  FROM projects p\n  JOIN clients c ON c.id = p.client_id, ctx\n  WHERE p.id = $5::uuid\n  LIMIT 1\n),\nact AS (\n  SELECT COALESCE(json_agg(json_build_object(\n    'agent_name', al.agent_name, 'action', al.action,\n    'created_at', al.created_at, 'message_type', al.message_type\n  ) ORDER BY al.created_at), '[]'::json) AS items\n  FROM activity_log al, defaults d\n  WHERE al.project_id = $5::uuid\n    AND al.created_at >= d.ws::timestamptz\n    AND al.created_at < (d.we + INTERVAL '1 day')::timestamptz\n),\nvisits AS (\n  SELECT COALESCE(json_agg(json_build_object(\n    'visit_date', svh.visit_date, 'acuerdos', svh.acuerdos,\n    'observations', svh.observations\n  ) ORDER BY svh.visit_date), '[]'::json) AS items\n  FROM site_visit_acts svh, defaults d\n  WHERE svh.project_id = $5::uuid\n    AND svh.visit_date::date BETWEEN d.ws AND d.we\n    AND svh.status IN ('approved','signed')\n),\nincs AS (\n  SELECT COALESCE(json_agg(json_build_object(\n    'description', pi.description, 'severity', pi.severity, 'status', pi.status,\n    'cost_delta_eur', pi.cost_delta_eur, 'time_delta_days', pi.time_delta_days\n  ) ORDER BY pi.detected_at), '[]'::json) AS items\n  FROM project_incidents pi, defaults d\n  WHERE pi.project_id = $5::uuid\n    AND pi.detected_at::date BETWEEN d.ws AND d.we\n)\nSELECT\n  proj.id AS project_id, proj.name AS project_name, proj.current_phase,\n  proj.location_city, proj.client_name, proj.client_email, proj.tenant_id,\n  d.ws AS week_start, d.we AS week_end,\n  act.items AS activity, visits.items AS visits, incs.items AS incidents\nFROM proj, defaults d, act, visits, incs;",
+        "options": {
+          "queryReplacement": "={{ [\n  $('Decode JWT + Body').first().json.user_id,\n  $('Decode JWT + Body').first().json.tenant_id,\n  $('Decode JWT + Body').first().json.role,\n  $('Decode JWT + Body').first().json.week_start_iso,\n  $('Decode JWT + Body').first().json.project_id\n] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        920,
+        200
+      ],
+      "id": "cu-load",
+      "name": "Load Project + Week Data",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const r = $input.first()?.json;\nconst sess = $('Decode JWT + Body').first().json;\nif (!r || !r.project_id) {\n  return [{ json: { _error: 'PROJECT_NOT_FOUND', _status: 404, _details: 'project_id no existe o sin acceso por RLS' } }];\n}\nconst weekStartStr = String(r.week_start).slice(0,10);\nconst weekEndStr = String(r.week_end).slice(0,10);\nconst activity = Array.isArray(r.activity) ? r.activity : [];\nconst visits = Array.isArray(r.visits) ? r.visits : [];\nconst incidents = Array.isArray(r.incidents) ? r.incidents : [];\n\n// Resumen humano de actividad para meter en prompt\nconst activityByAgent = {};\nfor (const a of activity) {\n  if (a.message_type === 'coordination') continue; // ruido\n  activityByAgent[a.agent_name] = (activityByAgent[a.agent_name] || 0) + 1;\n}\nconst activitySummary = Object.entries(activityByAgent)\n  .map(([k,v]) => `${k}: ${v} acciones`).join('; ') || 'sin actividad relevante';\n\nconst visitsSummary = visits.length\n  ? visits.map(v => `- ${String(v.visit_date).slice(0,10)}: ${v.acuerdos || '(sin acuerdos)'}`).join('\\n')\n  : '(sin visitas de obra esta semana)';\n\nconst incidentsSummary = incidents.length\n  ? incidents.map(i => `- [${i.severity}] ${i.description} (${i.status}${i.cost_delta_eur ? `, +${i.cost_delta_eur}EUR` : ''}${i.time_delta_days ? `, +${i.time_delta_days}d` : ''})`).join('\\n')\n  : '(sin imprevistos esta semana)';\n\nconst systemPrompt = `Eres un asistente del estudio de arquitectura redactando un email semanal al cliente ${r.client_name} sobre su obra \"${r.project_name}\" en ${r.location_city || 'su domicilio'}. Tono: profesional, cercano, claro, sin jerga tecnica innecesaria. Idioma: castellano de Espana. Longitud objetivo del summary_text: 150-200 palabras. Devuelve SOLO JSON valido con la forma { summary_text: string, hitos_principales: string[], proxima_semana: string }. No inventes datos, fechas ni cifras que no aparezcan en el contexto. Si la semana ha sido tranquila, di la verdad de forma profesional (estamos avanzando en X, sin novedades urgentes). Saluda y despide cordialmente. Firma como \"El equipo de tu estudio de arquitectura\".`;\n\nconst userPrompt = `CONTEXTO DE LA SEMANA (${weekStartStr} a ${weekEndStr})\\n\\nFASE ACTUAL DEL PROYECTO: ${r.current_phase}\\nMUNICIPIO: ${r.location_city || '(no especificado)'}\\n\\nACTIVIDAD DE AGENTES IA:\\n${activitySummary}\\n\\nVISITAS DE OBRA (actas firmadas):\\n${visitsSummary}\\n\\nIMPREVISTOS DETECTADOS:\\n${incidentsSummary}\\n\\nGenera el email semanal para el cliente.`;\n\nreturn [{ json: {\n  ...sess,\n  project_id: r.project_id,\n  project_name: r.project_name,\n  client_name: r.client_name,\n  client_email: r.client_email,\n  location_city: r.location_city,\n  current_phase: r.current_phase,\n  week_start: weekStartStr,\n  week_end: weekEndStr,\n  has_activity: activity.length > 0 || visits.length > 0 || incidents.length > 0,\n  activity_count: activity.length,\n  visits_count: visits.length,\n  incidents_count: incidents.length,\n  llm_payload: {\n    model: 'gpt-4o-mini',\n    messages: [\n      { role: 'system', content: systemPrompt },\n      { role: 'user', content: userPrompt }\n    ],\n    temperature: 0.4,\n    max_tokens: 700,\n    response_format: { type: 'json_object' }\n  }\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1160,
+        200
+      ],
+      "id": "cu-build",
+      "name": "Build Prompt"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cu-c2",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1400,
+        200
+      ],
+      "id": "cu-if-build",
+      "name": "Has project?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details || $json._error } }) }}",
+        "options": {
+          "responseCode": "={{ $json._status || 404 }}"
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1640,
+        360
+      ],
+      "id": "cu-respond-404",
+      "name": "Respond 404"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO agent_executions (project_id, agent_name, status, started_at, input, metadata)\nVALUES ($1::uuid, 'agent_client_update', 'running', now(), $2::jsonb, $3::jsonb) RETURNING id",
+        "options": {
+          "queryReplacement": "={{ [\n  $('Build Prompt').first().json.project_id,\n  JSON.stringify({ week_start: $('Build Prompt').first().json.week_start, week_end: $('Build Prompt').first().json.week_end, has_activity: $('Build Prompt').first().json.has_activity }),\n  JSON.stringify({ request_id: $('Build Prompt').first().json.request_id, source: 'agent_client_update' })\n] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1640,
+        100
+      ],
+      "id": "cu-start-exec",
+      "name": "Start Execution",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($('Build Prompt').first().json.llm_payload) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "gE1jXO133xEHS5JJ",
+          "name": "orquestador ArquiAI"
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1880,
+        100
+      ],
+      "id": "cu-llm",
+      "name": "Call LLM"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const llm = $input.first()?.json;\nconst ctx = $('Build Prompt').first().json;\nconst raw = llm?.choices?.[0]?.message?.content || '{}';\nlet parsed;\ntry { parsed = JSON.parse(raw); } catch (e) {\n  return [{ json: { _error: 'LLM_INVALID_JSON', _status: 502, _details: e.message } }];\n}\nconst summary = String(parsed.summary_text || '').trim();\nif (!summary || summary.length < 50) {\n  return [{ json: { _error: 'LLM_EMPTY_SUMMARY', _status: 502, _details: 'summary_text vacio o demasiado corto' } }];\n}\nconst hitos = Array.isArray(parsed.hitos_principales) ? parsed.hitos_principales.slice(0, 6) : [];\nconst proxima = String(parsed.proxima_semana || '').trim();\nconst usage = llm?.usage || {};\nreturn [{ json: {\n  ...ctx,\n  summary_text: summary,\n  hitos_principales: hitos,\n  proxima_semana: proxima,\n  model: llm?.model || 'gpt-4o-mini',\n  tokens_in: usage.prompt_tokens || 0,\n  tokens_out: usage.completion_tokens || 0\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2120,
+        100
+      ],
+      "id": "cu-format",
+      "name": "Format Response"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO client_weekly_updates (\n  tenant_id, project_id, week_start, week_end, summary_text, photos_referenced, status, created_at\n) VALUES (\n  $1::uuid, $2::uuid, $3::date, $4::date, $5, $6::jsonb, 'draft', now()\n)\nON CONFLICT (project_id, week_start) DO UPDATE SET\n  summary_text = EXCLUDED.summary_text,\n  photos_referenced = EXCLUDED.photos_referenced,\n  week_end = EXCLUDED.week_end,\n  status = 'draft',\n  approved_by = NULL,\n  approved_at = NULL,\n  sent_at = NULL,\n  email_message_id = NULL\nRETURNING id, week_start, week_end, status, created_at;",
+        "options": {
+          "queryReplacement": "={{ [\n  $('Format Response').first().json.tenant_id,\n  $('Format Response').first().json.project_id,\n  $('Format Response').first().json.week_start,\n  $('Format Response').first().json.week_end,\n  $('Format Response').first().json.summary_text,\n  JSON.stringify({ hitos_principales: $('Format Response').first().json.hitos_principales, proxima_semana: $('Format Response').first().json.proxima_semana })\n] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2360,
+        100
+      ],
+      "id": "cu-insert",
+      "name": "Insert Draft",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT (SELECT value FROM system_config WHERE key='architect_email') AS architect_email,\n       (SELECT value FROM system_config WHERE key='ui_base_url') AS ui_base_url",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2600,
+        100
+      ],
+      "id": "cu-config",
+      "name": "Load Architect Config",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $('Load Architect Config').first().json.architect_email }}",
+        "subject": "=ArquitAI — Borrador resumen semanal: {{ $('Format Response').first().json.project_name }} ({{ $('Format Response').first().json.week_start }})",
+        "emailType": "html",
+        "message": "=<div style=\"font-family:sans-serif;max-width:640px\"><h2 style=\"color:#1f2937\">Borrador resumen semanal</h2><p><b>Proyecto:</b> {{ $('Format Response').first().json.project_name }}<br><b>Cliente:</b> {{ $('Format Response').first().json.client_name }} &lt;{{ $('Format Response').first().json.client_email }}&gt;<br><b>Semana:</b> {{ $('Format Response').first().json.week_start }} a {{ $('Format Response').first().json.week_end }}<br><b>Fase:</b> {{ $('Format Response').first().json.current_phase }}</p><hr><div style=\"background:#f9fafb;padding:16px;border-left:4px solid #6366f1;white-space:pre-wrap\">{{ $('Format Response').first().json.summary_text }}</div><hr><p style=\"font-size:12px;color:#6b7280\">Para aprobar y enviar al cliente:<br><code>POST /api/v1/client-updates/approve</code><br>Body: <code>{\"update_id\":\"{{ $('Insert Draft').first().json.id }}\",\"action\":\"approve\"}</code></p><p style=\"font-size:11px;color:#9ca3af\">Borrador generado por agent_client_update ({{ $('Format Response').first().json.model }}, {{ $('Format Response').first().json.tokens_in }} in / {{ $('Format Response').first().json.tokens_out }} out tokens). EU AI Act art.14: asistencia, no decision vinculante.</p></div>",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "cIma8ntTjZvIfU3H",
+          "name": "damian2botella"
+        }
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        2840,
+        100
+      ],
+      "id": "cu-notify",
+      "name": "Notify Architect",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE agent_executions SET status = 'completed', finished_at = now(),\n  output = $2::jsonb,\n  duration_ms = EXTRACT(MILLISECONDS FROM (now() - started_at))::int\nWHERE id = $1::uuid",
+        "options": {
+          "queryReplacement": "={{ [\n  $('Start Execution').first().json.id,\n  JSON.stringify({ update_id: $('Insert Draft').first().json.id, summary_length: ($('Format Response').first().json.summary_text || '').length, tokens_in: $('Format Response').first().json.tokens_in, tokens_out: $('Format Response').first().json.tokens_out })\n] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        3080,
+        100
+      ],
+      "id": "cu-finish",
+      "name": "Finish Execution",
+      "alwaysOutputData": true,
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({\n  data: {\n    update_id: $('Insert Draft').first().json.id,\n    project_id: $('Format Response').first().json.project_id,\n    week_start: $('Format Response').first().json.week_start,\n    week_end: $('Format Response').first().json.week_end,\n    status: 'draft',\n    summary_text: $('Format Response').first().json.summary_text,\n    hitos_principales: $('Format Response').first().json.hitos_principales,\n    proxima_semana: $('Format Response').first().json.proxima_semana,\n    architect_notified: true\n  },\n  meta: {\n    request_id: $('Format Response').first().json.request_id,\n    model: $('Format Response').first().json.model,\n    tokens_in: $('Format Response').first().json.tokens_in,\n    tokens_out: $('Format Response').first().json.tokens_out,\n    timestamp: new Date().toISOString(),\n    eu_ai_act: 'asistencia, no decision vinculante'\n  }\n}) }}",
+        "options": {
+          "responseCode": 201,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Cache-Control",
+                "value": "no-cache"
+              }
+            ]
+          }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        3320,
+        100
+      ],
+      "id": "cu-respond-201",
+      "name": "Respond 201"
+    }
+  ],
+  "connections": {
+    "POST /agents/client-update/run": {
+      "main": [
+        [
+          {
+            "node": "Decode JWT + Body",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decode JWT + Body": {
+      "main": [
+        [
+          {
+            "node": "Auth OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Auth OK?": {
+      "main": [
+        [
+          {
+            "node": "Respond Error",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Load Project + Week Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Project + Week Data": {
+      "main": [
+        [
+          {
+            "node": "Build Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Prompt": {
+      "main": [
+        [
+          {
+            "node": "Has project?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has project?": {
+      "main": [
+        [
+          {
+            "node": "Respond 404",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Start Execution",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Start Execution": {
+      "main": [
+        [
+          {
+            "node": "Call LLM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call LLM": {
+      "main": [
+        [
+          {
+            "node": "Format Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Response": {
+      "main": [
+        [
+          {
+            "node": "Insert Draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Draft": {
+      "main": [
+        [
+          {
+            "node": "Load Architect Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Architect Config": {
+      "main": [
+        [
+          {
+            "node": "Notify Architect",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify Architect": {
+      "main": [
+        [
+          {
+            "node": "Finish Execution",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Finish Execution": {
+      "main": [
+        [
+          {
+            "node": "Respond 201",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "_n8n_id": "pAozBIq2tSvAQyxf"
+}

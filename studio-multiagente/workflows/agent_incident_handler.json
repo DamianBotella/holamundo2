@@ -1,0 +1,530 @@
+{
+  "name": "agent_incident_handler",
+  "_description": "PLAN V1.0 Bloque 9 - Detecta imprevisto en obra, gpt-4o-mini genera 2 opciones {coste,dias,ventajas,desventajas} + comunicacion al cliente. POST /api/v1/agents/incident-handler/run con JWT. INSERT project_incidents status=proposed + notify architect.",
+  "_status": "B9 (PLAN V1.0 ejecucion). Text-only V1 (vision en V1.1).",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "api/v1/agents/incident-handler/run",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        300
+      ],
+      "id": "ih-webhook",
+      "name": "POST /agents/incident-handler/run",
+      "webhookId": "d4e5f6a7-b8c9-4d0e-1f2a-3b4c5d6e7f8a"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const auth = $input.first().json.headers?.authorization || '';\nif (!auth.startsWith('Bearer ')) return [{ json: { _error: 'AUTH_MISSING_TOKEN', _status: 401 } }];\nconst token = auth.slice(7);\ntry {\n  const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'));\n  if (!payload.sub) throw new Error('No sub');\n  if (payload.exp && Date.now()/1000 > payload.exp) throw new Error('JWT expired');\n  if (!payload.tenant_id) throw new Error('No tenant_id');\n  const body = $input.first().json.body || {};\n  const projectId = (body.project_id || '').trim();\n  const description = (body.description || '').trim();\n  if (!projectId) return [{ json: { _error: 'VALIDATION_FAILED', _status: 400, _details: 'project_id requerido' } }];\n  if (!description || description.length < 10) return [{ json: { _error: 'VALIDATION_FAILED', _status: 400, _details: 'description requerida (min 10 chars)' } }];\n  const sev = (body.severity || 'media').toLowerCase();\n  const validSev = ['baja','media','alta','critica'];\n  return [{ json: {\n    user_id: payload.sub,\n    tenant_id: payload.tenant_id,\n    role: payload.role || 'architect',\n    project_id: projectId,\n    description,\n    location: (body.location || '').slice(0, 200),\n    severity: validSev.includes(sev) ? sev : 'media',\n    photos_urls: Array.isArray(body.photos_urls) ? body.photos_urls.slice(0, 10) : [],\n    request_id: 'req_' + Math.random().toString(36).slice(2, 10)\n  }}];\n} catch (e) {\n  return [{ json: { _error: 'AUTH_INVALID_TOKEN', _status: 401, _details: e.message } }];\n}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        300
+      ],
+      "id": "ih-decode",
+      "name": "Decode JWT + Body"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "ih-c1",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        680,
+        300
+      ],
+      "id": "ih-if-auth",
+      "name": "Auth OK?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details || $json._error } }) }}",
+        "options": {
+          "responseCode": "={{ $json._status || 401 }}"
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        920,
+        460
+      ],
+      "id": "ih-respond-error",
+      "name": "Respond Error"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH ctx AS (\n  SELECT set_session_context($1::uuid, $2::uuid, $3) AS ok\n),\nproj AS (\n  SELECT p.id, p.name, p.current_phase, p.location_city, p.location_address, p.tenant_id,\n         p.property_type, p.property_area_m2, p.project_type,\n         c.name AS client_name, c.email AS client_email\n  FROM projects p\n  JOIN clients c ON c.id = p.client_id, ctx\n  WHERE p.id = $4::uuid\n  LIMIT 1\n),\ncost AS (\n  SELECT total_estimated, version\n  FROM cost_estimates\n  WHERE project_id = $4::uuid\n  ORDER BY version DESC LIMIT 1\n)\nSELECT proj.*, cost.total_estimated AS cost_baseline_eur, cost.version AS cost_version\nFROM proj LEFT JOIN cost ON true;",
+        "options": {
+          "queryReplacement": "={{ [\n  $('Decode JWT + Body').first().json.user_id,\n  $('Decode JWT + Body').first().json.tenant_id,\n  $('Decode JWT + Body').first().json.role,\n  $('Decode JWT + Body').first().json.project_id\n] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        920,
+        200
+      ],
+      "id": "ih-load",
+      "name": "Load Project Context",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const r = $input.first()?.json;\nconst sess = $('Decode JWT + Body').first().json;\nif (!r || !r.id) {\n  return [{ json: { _error: 'PROJECT_NOT_FOUND', _status: 404, _details: 'project_id no existe o sin acceso por RLS' } }];\n}\n\nconst photosBlock = sess.photos_urls.length\n  ? `\\nFOTOS APORTADAS POR EL ARQUITECTO:\\n${sess.photos_urls.map((u,i) => `${i+1}. ${u}`).join('\\n')}\\n(NOTA: no puedes ver las fotos en V1, asume que el arquitecto las ha revisado y describe lo que se ve en \"description\".)`\n  : '';\n\nconst systemPrompt = `Eres agent_incident_handler. El arquitecto reporta un imprevisto en una obra de reforma. Tu trabajo:\\n1. Inferir CAUSA PROBABLE en 1-2 frases tecnicas (humedad capilar, fallo estructural, instalacion vieja, etc.).\\n2. Generar EXACTAMENTE 2 opciones de solucion (opcion_a y opcion_b). Una mas ECONOMICA y otra mas COMPLETA/DEFINITIVA. Cada una con: descripcion (2-3 frases), materiales (lista corta), coste_eur (numero realista en EUR), dias (entero), ventajas (3 max), desventajas (2-3).\\n3. Redactar BORRADOR de comunicacion al cliente: profesional, claro, sin alarmismo. 100-150 palabras. Tono: explicar el imprevisto, presentar las 2 opciones, pedir decision.\\n\\nREGLAS:\\n- Devuelve SOLO JSON valido con la forma EXACTA: { causa_probable: string, options: [{descripcion, materiales:[string], coste_eur:number, dias:number, ventajas:[string], desventajas:[string]}], comunicacion_cliente_draft: string }.\\n- options DEBE tener exactamente 2 elementos: [0]=economica, [1]=completa.\\n- coste_eur en EUR Espana, realista para reforma (no inventes cifras absurdas).\\n- NO uses tecnicismos excesivos en comunicacion_cliente_draft.\\n- Decision final es del cliente + arquitecto. Tu solo propones.`;\n\nconst userPrompt = `PROYECTO:\\n- Nombre: ${r.name}\\n- Direccion: ${r.location_address || '?'}, ${r.location_city || '?'}\\n- Tipologia: ${r.property_type || r.project_type || '?'}, ${r.property_area_m2 || '?'} m2\\n- Fase actual: ${r.current_phase}\\n- Presupuesto vigente: ${r.cost_baseline_eur ? r.cost_baseline_eur + ' EUR (v' + r.cost_version + ')' : '(no calculado aun)'}\\n\\nIMPREVISTO REPORTADO:\\n- Ubicacion: ${sess.location || '(no especificada)'}\\n- Severidad inicial: ${sess.severity}\\n- Descripcion del arquitecto: ${sess.description}${photosBlock}\\n\\nGenera el JSON con causa probable, 2 opciones y borrador de comunicacion al cliente.`;\n\nreturn [{ json: {\n  ...sess,\n  project_id: r.id,\n  project_name: r.name,\n  client_name: r.client_name,\n  client_email: r.client_email,\n  location_city: r.location_city,\n  current_phase: r.current_phase,\n  cost_baseline_eur: r.cost_baseline_eur,\n  llm_payload: {\n    model: 'gpt-4o-mini',\n    messages: [\n      { role: 'system', content: systemPrompt },\n      { role: 'user', content: userPrompt }\n    ],\n    temperature: 0.3,\n    max_tokens: 1400,\n    response_format: { type: 'json_object' }\n  }\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1160,
+        200
+      ],
+      "id": "ih-build",
+      "name": "Build Prompt"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "ih-c2",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1400,
+        200
+      ],
+      "id": "ih-if-build",
+      "name": "Has project?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details || $json._error } }) }}",
+        "options": {
+          "responseCode": "={{ $json._status || 404 }}"
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1640,
+        360
+      ],
+      "id": "ih-respond-404",
+      "name": "Respond 404"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO agent_executions (project_id, agent_name, status, started_at, input, metadata)\nVALUES ($1::uuid, 'agent_incident_handler', 'running', now(), $2::jsonb, $3::jsonb) RETURNING id",
+        "options": {
+          "queryReplacement": "={{ [\n  $('Build Prompt').first().json.project_id,\n  JSON.stringify({ description: $('Build Prompt').first().json.description, severity: $('Build Prompt').first().json.severity, location: $('Build Prompt').first().json.location, photos_count: $('Build Prompt').first().json.photos_urls.length }),\n  JSON.stringify({ request_id: $('Build Prompt').first().json.request_id, source: 'agent_incident_handler' })\n] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1640,
+        100
+      ],
+      "id": "ih-start-exec",
+      "name": "Start Execution",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($('Build Prompt').first().json.llm_payload) }}",
+        "options": {
+          "timeout": 90000
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "gE1jXO133xEHS5JJ",
+          "name": "orquestador ArquiAI"
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1880,
+        100
+      ],
+      "id": "ih-llm",
+      "name": "Call LLM"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const llm = $input.first()?.json;\nconst ctx = $('Build Prompt').first().json;\nconst raw = llm?.choices?.[0]?.message?.content || '{}';\nlet parsed;\ntry { parsed = JSON.parse(raw); } catch (e) {\n  return [{ json: { _error: 'LLM_INVALID_JSON', _status: 502, _details: e.message } }];\n}\nconst causa = String(parsed.causa_probable || '').trim();\nconst options = Array.isArray(parsed.options) ? parsed.options.slice(0, 4) : [];\nif (options.length < 2) {\n  return [{ json: { _error: 'LLM_INSUFFICIENT_OPTIONS', _status: 502, _details: 'LLM devolvio menos de 2 opciones' } }];\n}\n// Sanea cada opcion\nconst clean = options.slice(0, 2).map(o => ({\n  descripcion: String(o.descripcion || '').slice(0, 800),\n  materiales: Array.isArray(o.materiales) ? o.materiales.slice(0, 12).map(String) : [],\n  coste_eur: Number(o.coste_eur) || 0,\n  dias: Math.max(0, Math.round(Number(o.dias) || 0)),\n  ventajas: Array.isArray(o.ventajas) ? o.ventajas.slice(0, 5).map(String) : [],\n  desventajas: Array.isArray(o.desventajas) ? o.desventajas.slice(0, 5).map(String) : []\n}));\nconst comunicacion = String(parsed.comunicacion_cliente_draft || '').trim();\nif (!comunicacion || comunicacion.length < 50) {\n  return [{ json: { _error: 'LLM_NO_COMMUNICATION', _status: 502, _details: 'borrador comunicacion cliente vacio' } }];\n}\nconst usage = llm?.usage || {};\nreturn [{ json: {\n  ...ctx,\n  causa_probable: causa,\n  options: clean,\n  comunicacion_cliente_draft: comunicacion,\n  model: llm?.model || 'gpt-4o-mini',\n  tokens_in: usage.prompt_tokens || 0,\n  tokens_out: usage.completion_tokens || 0\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2120,
+        100
+      ],
+      "id": "ih-format",
+      "name": "Format Response"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO project_incidents (\n  tenant_id, project_id, detected_at, description, location, severity,\n  causa_probable, options, client_communication_draft, photos, status\n) VALUES (\n  $1::uuid, $2::uuid, now(), $3, $4, $5,\n  $6, $7::jsonb, $8, $9::jsonb, 'proposed'\n)\nRETURNING id, detected_at, status;",
+        "options": {
+          "queryReplacement": "={{ [\n  $('Format Response').first().json.tenant_id,\n  $('Format Response').first().json.project_id,\n  $('Format Response').first().json.description,\n  $('Format Response').first().json.location,\n  $('Format Response').first().json.severity,\n  $('Format Response').first().json.causa_probable,\n  JSON.stringify($('Format Response').first().json.options),\n  $('Format Response').first().json.comunicacion_cliente_draft,\n  JSON.stringify($('Format Response').first().json.photos_urls.map(u => ({ url: u })))\n] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2360,
+        100
+      ],
+      "id": "ih-insert",
+      "name": "Insert Incident",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT value AS architect_email FROM system_config WHERE key='architect_email'",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2600,
+        100
+      ],
+      "id": "ih-config",
+      "name": "Load Architect Email",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $('Load Architect Email').first().json.architect_email }}",
+        "subject": "=ArquitAI — Imprevisto detectado en {{ $('Format Response').first().json.project_name }} [{{ $('Format Response').first().json.severity }}]",
+        "emailType": "html",
+        "message": "=<div style=\"font-family:sans-serif;max-width:680px\"><h2 style=\"color:#dc2626\">Imprevisto en obra</h2><p><b>Proyecto:</b> {{ $('Format Response').first().json.project_name }}<br><b>Cliente:</b> {{ $('Format Response').first().json.client_name }}<br><b>Ubicacion:</b> {{ $('Format Response').first().json.location || '(no especificada)' }}<br><b>Severidad:</b> {{ $('Format Response').first().json.severity }}</p><h3>Descripcion</h3><div style=\"background:#fef2f2;padding:12px;border-left:4px solid #dc2626;white-space:pre-wrap\">{{ $('Format Response').first().json.description }}</div><h3>Causa probable (inferida)</h3><p>{{ $('Format Response').first().json.causa_probable }}</p><h3>2 opciones propuestas</h3><table border=\"1\" cellpadding=\"8\" cellspacing=\"0\" style=\"border-collapse:collapse;width:100%;font-size:13px\"><tr style=\"background:#f3f4f6\"><th>Opcion</th><th>Descripcion</th><th>Coste</th><th>Dias</th></tr>{{ $('Format Response').first().json.options.map((o,i) => '<tr><td><b>' + (i===0?'A (economica)':'B (completa)') + '</b></td><td>' + o.descripcion + '<br><small>Ventajas: ' + (o.ventajas||[]).join(', ') + '</small><br><small>Desventajas: ' + (o.desventajas||[]).join(', ') + '</small></td><td>' + o.coste_eur + ' EUR</td><td>' + o.dias + 'd</td></tr>').join('') }}</table><h3>Borrador comunicacion al cliente</h3><div style=\"background:#f9fafb;padding:12px;border-left:4px solid #6366f1;white-space:pre-wrap\">{{ $('Format Response').first().json.comunicacion_cliente_draft }}</div><hr><p style=\"font-size:12px;color:#6b7280\">Para elegir opcion y comunicar al cliente:<br><code>POST /api/v1/incidents/select-option</code><br>Body: <code>{\"incident_id\":\"{{ $('Insert Incident').first().json.id }}\",\"selected_option_index\":0,\"action\":\"communicate\"}</code></p><p style=\"font-size:11px;color:#9ca3af\">EU AI Act art.14: asistencia, no decision vinculante. Decide tu y aprueba antes de enviar.</p></div>",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "cIma8ntTjZvIfU3H",
+          "name": "damian2botella"
+        }
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        2840,
+        100
+      ],
+      "id": "ih-notify",
+      "name": "Notify Architect",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE agent_executions SET status='completed', finished_at=now(),\n  output=$2::jsonb,\n  duration_ms=EXTRACT(MILLISECONDS FROM (now() - started_at))::int\nWHERE id=$1::uuid",
+        "options": {
+          "queryReplacement": "={{ [\n  $('Start Execution').first().json.id,\n  JSON.stringify({ incident_id: $('Insert Incident').first().json.id, options_count: $('Format Response').first().json.options.length, tokens_in: $('Format Response').first().json.tokens_in, tokens_out: $('Format Response').first().json.tokens_out })\n] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        3080,
+        100
+      ],
+      "id": "ih-finish",
+      "name": "Finish Execution",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({\n  data: {\n    incident_id: $('Insert Incident').first().json.id,\n    project_id: $('Format Response').first().json.project_id,\n    status: 'proposed',\n    severity: $('Format Response').first().json.severity,\n    causa_probable: $('Format Response').first().json.causa_probable,\n    options: $('Format Response').first().json.options,\n    comunicacion_cliente_draft: $('Format Response').first().json.comunicacion_cliente_draft,\n    architect_notified: true\n  },\n  meta: {\n    request_id: $('Format Response').first().json.request_id,\n    model: $('Format Response').first().json.model,\n    tokens_in: $('Format Response').first().json.tokens_in,\n    tokens_out: $('Format Response').first().json.tokens_out,\n    timestamp: new Date().toISOString(),\n    eu_ai_act: 'asistencia, no decision vinculante'\n  }\n}) }}",
+        "options": {
+          "responseCode": 201
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        3320,
+        100
+      ],
+      "id": "ih-respond-201",
+      "name": "Respond 201"
+    }
+  ],
+  "connections": {
+    "POST /agents/incident-handler/run": {
+      "main": [
+        [
+          {
+            "node": "Decode JWT + Body",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decode JWT + Body": {
+      "main": [
+        [
+          {
+            "node": "Auth OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Auth OK?": {
+      "main": [
+        [
+          {
+            "node": "Respond Error",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Load Project Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Project Context": {
+      "main": [
+        [
+          {
+            "node": "Build Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Prompt": {
+      "main": [
+        [
+          {
+            "node": "Has project?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has project?": {
+      "main": [
+        [
+          {
+            "node": "Respond 404",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Start Execution",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Start Execution": {
+      "main": [
+        [
+          {
+            "node": "Call LLM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call LLM": {
+      "main": [
+        [
+          {
+            "node": "Format Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Response": {
+      "main": [
+        [
+          {
+            "node": "Insert Incident",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Incident": {
+      "main": [
+        [
+          {
+            "node": "Load Architect Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Architect Email": {
+      "main": [
+        [
+          {
+            "node": "Notify Architect",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify Architect": {
+      "main": [
+        [
+          {
+            "node": "Finish Execution",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Finish Execution": {
+      "main": [
+        [
+          {
+            "node": "Respond 201",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "_n8n_id": "ivIoGt9wVRlDfJo6"
+}

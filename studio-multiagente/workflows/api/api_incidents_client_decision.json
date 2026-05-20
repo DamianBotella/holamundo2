@@ -1,0 +1,387 @@
+{
+  "name": "api_incidents_client_decision",
+  "_description": "PLAN V1.0 Bloque 9 - POST /api/v1/incidents/client-decision (PUBLIC, sin JWT). Cliente aprueba/rechaza la opcion seleccionada usando incident_id (UUID v4 = token). UPDATE status=approved|rejected + INSERT client_decisions (anti scope-creep) + Gmail al architect.",
+  "_status": "B9 (PLAN V1.0 ejecucion). Endpoint publico tipo proposals/public.",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "api/v1/incidents/client-decision",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        300
+      ],
+      "id": "icd-webhook",
+      "name": "POST /incidents/client-decision",
+      "webhookId": "f6a7b8c9-d0e1-4f2a-3b4c-5d6e7f8a9b0c"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// PUBLIC endpoint: sin JWT. incident_id (UUID v4) = token (128 bits entropia).\nconst body = $input.first().json.body || {};\nconst incidentId = (body.incident_id || '').trim();\nconst decision = (body.decision || '').trim();\nconst comment = (body.comment || '').slice(0, 1000);\nif (!incidentId || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(incidentId)) {\n  return [{ json: { _error: 'INVALID_INCIDENT_ID', _status: 400, _details: 'incident_id debe ser UUID valido' } }];\n}\nif (!['approve','reject'].includes(decision)) {\n  return [{ json: { _error: 'INVALID_DECISION', _status: 400, _details: \"decision debe ser 'approve' o 'reject'\" } }];\n}\nreturn [{ json: {\n  incident_id: incidentId, decision, comment,\n  request_id: 'req_' + Math.random().toString(36).slice(2, 10)\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        300
+      ],
+      "id": "icd-validate",
+      "name": "Validate Input"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "icd-c1",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        680,
+        300
+      ],
+      "id": "icd-if-validate",
+      "name": "Input OK?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details || $json._error } }) }}",
+        "options": {
+          "responseCode": "={{ $json._status || 400 }}"
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        920,
+        460
+      ],
+      "id": "icd-respond-error",
+      "name": "Respond Error"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- super_admin bypassa RLS - este endpoint es publico\nWITH ctx AS (SELECT set_config('app.role', 'super_admin', false) AS r)\nSELECT i.id, i.project_id, i.tenant_id, i.description, i.location, i.severity,\n       i.options, i.selected_option_index, i.cost_delta_eur, i.time_delta_days,\n       i.status, i.client_communication_draft,\n       p.name AS project_name, c.name AS client_name, c.email AS client_email\nFROM project_incidents i\nJOIN projects p ON p.id = i.project_id\nJOIN clients c ON c.id = p.client_id, ctx\nWHERE i.id = $1::uuid\nLIMIT 1;",
+        "options": {
+          "queryReplacement": "={{ [ $('Validate Input').first().json.incident_id ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        920,
+        200
+      ],
+      "id": "icd-load",
+      "name": "Load Incident",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const r = $input.first()?.json;\nconst inp = $('Validate Input').first().json;\nif (!r || !r.id) return [{ json: { _error: 'INCIDENT_NOT_FOUND', _status: 404, _details: 'token invalido o incident inexistente' } }];\nif (r.status === 'approved' || r.status === 'rejected' || r.status === 'closed') {\n  return [{ json: { _error: 'ALREADY_DECIDED', _status: 409, _details: 'Este imprevisto ya fue decidido (' + r.status + ')' } }];\n}\nif (r.status !== 'communicated') {\n  return [{ json: { _error: 'NOT_COMMUNICATED', _status: 409, _details: 'El imprevisto aun no fue comunicado al cliente' } }];\n}\nlet options = [];\ntry { options = typeof r.options === 'string' ? JSON.parse(r.options) : (r.options || []); } catch (e) {}\nconst selectedOpt = options[r.selected_option_index] || {};\nreturn [{ json: {\n  ...inp,\n  tenant_id: r.tenant_id, project_id: r.project_id,\n  project_name: r.project_name, client_name: r.client_name, client_email: r.client_email,\n  selected_option: selectedOpt, selected_option_index: r.selected_option_index,\n  cost_delta_eur: r.cost_delta_eur, time_delta_days: r.time_delta_days,\n  description: r.description, location: r.location, severity: r.severity,\n  new_status: inp.decision === 'approve' ? 'approved' : 'rejected'\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1160,
+        200
+      ],
+      "id": "icd-format",
+      "name": "Validate State"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "icd-c2",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1400,
+        200
+      ],
+      "id": "icd-if-state",
+      "name": "State OK?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details || $json._error } }) }}",
+        "options": {
+          "responseCode": "={{ $json._status || 404 }}"
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1640,
+        360
+      ],
+      "id": "icd-respond-404",
+      "name": "Respond 404"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH upd AS (\n  UPDATE project_incidents\n     SET status = $2\n   WHERE id = $1::uuid AND status = 'communicated'\n  RETURNING id, status\n),\ndec AS (\n  INSERT INTO client_decisions (\n    project_id, tenant_id, decision_tipo, decision_descripcion,\n    contexto_propuesta, impacto_economico, impacto_plazo_dias,\n    confirmada_cliente, metodo_confirmacion, evidencia_url, fecha_decision\n  )\n  SELECT $3::uuid, $4::uuid, 'otro',\n         'Imprevisto en obra: ' || $5 || ' (decision cliente: ' || $2 || ')',\n         $6::jsonb, $7::numeric, $8::int,\n         true, 'email', NULL, now()\n  WHERE EXISTS (SELECT 1 FROM upd)\n  RETURNING id\n)\nSELECT (SELECT id FROM upd) AS incident_updated_id,\n       (SELECT id FROM dec) AS decision_id;",
+        "options": {
+          "queryReplacement": "={{ [\n  $('Validate State').first().json.incident_id,\n  $('Validate State').first().json.new_status,\n  $('Validate State').first().json.project_id,\n  $('Validate State').first().json.tenant_id,\n  $('Validate State').first().json.description,\n  JSON.stringify({ selected_option_index: $('Validate State').first().json.selected_option_index, selected_option: $('Validate State').first().json.selected_option, comment: $('Validate State').first().json.comment }),\n  $('Validate State').first().json.cost_delta_eur || 0,\n  $('Validate State').first().json.time_delta_days || 0\n] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1640,
+        100
+      ],
+      "id": "icd-update",
+      "name": "Update + Log Decision",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT value AS architect_email FROM system_config WHERE key='architect_email'",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1880,
+        100
+      ],
+      "id": "icd-config",
+      "name": "Load Architect Email",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $('Load Architect Email').first().json.architect_email }}",
+        "subject": "=ArquitAI — Cliente {{ $('Validate State').first().json.decision === 'approve' ? 'APROBO' : 'RECHAZO' }} imprevisto en {{ $('Validate State').first().json.project_name }}",
+        "emailType": "html",
+        "message": "=<div style=\"font-family:sans-serif;max-width:680px\"><h2 style=\"color:{{ $('Validate State').first().json.decision === 'approve' ? '#10b981' : '#dc2626' }}\">Decision del cliente: {{ $('Validate State').first().json.decision === 'approve' ? 'APROBADA' : 'RECHAZADA' }}</h2><p><b>Proyecto:</b> {{ $('Validate State').first().json.project_name }}<br><b>Cliente:</b> {{ $('Validate State').first().json.client_name }} &lt;{{ $('Validate State').first().json.client_email }}&gt;<br><b>Imprevisto:</b> {{ $('Validate State').first().json.description }}<br><b>Severidad:</b> {{ $('Validate State').first().json.severity }}<br><b>Opcion {{ $('Validate State').first().json.selected_option_index === 0 ? 'A' : 'B' }}:</b> {{ $('Validate State').first().json.selected_option.descripcion }}<br><b>Impacto:</b> +{{ $('Validate State').first().json.cost_delta_eur }} EUR, +{{ $('Validate State').first().json.time_delta_days }} dias</p>{{ $('Validate State').first().json.comment ? '<h3>Comentario del cliente</h3><div style=\"background:#f9fafb;padding:12px;border-left:4px solid #6366f1;white-space:pre-wrap\">' + $('Validate State').first().json.comment + '</div>' : '' }}<hr><p style=\"font-size:12px;color:#6b7280\">{{ $('Validate State').first().json.decision === 'approve' ? 'Proximos pasos: generar modificado de obra (V1.1 con agent_documents).' : 'Considera generar nueva propuesta o reunirte con el cliente.' }}<br>Decision_id: {{ $('Update + Log Decision').first().json.decision_id || '(no-insertada)' }} — incident_id: {{ $('Validate State').first().json.incident_id }}</p></div>",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "cIma8ntTjZvIfU3H",
+          "name": "damian2botella"
+        }
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        2120,
+        100
+      ],
+      "id": "icd-notify",
+      "name": "Notify Architect",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({\n  data: {\n    incident_id: $('Validate State').first().json.incident_id,\n    status: $('Validate State').first().json.new_status,\n    decision: $('Validate State').first().json.decision,\n    decision_id: $('Update + Log Decision').first().json.decision_id,\n    architect_notified: true\n  },\n  meta: { request_id: $('Validate State').first().json.request_id, timestamp: new Date().toISOString() }\n}) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        2360,
+        100
+      ],
+      "id": "icd-respond-200",
+      "name": "Respond 200"
+    }
+  ],
+  "connections": {
+    "POST /incidents/client-decision": {
+      "main": [
+        [
+          {
+            "node": "Validate Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Input": {
+      "main": [
+        [
+          {
+            "node": "Input OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Input OK?": {
+      "main": [
+        [
+          {
+            "node": "Respond Error",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Load Incident",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Incident": {
+      "main": [
+        [
+          {
+            "node": "Validate State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate State": {
+      "main": [
+        [
+          {
+            "node": "State OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "State OK?": {
+      "main": [
+        [
+          {
+            "node": "Respond 404",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Update + Log Decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update + Log Decision": {
+      "main": [
+        [
+          {
+            "node": "Load Architect Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Architect Email": {
+      "main": [
+        [
+          {
+            "node": "Notify Architect",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify Architect": {
+      "main": [
+        [
+          {
+            "node": "Respond 200",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "_n8n_id": "HOvfUNL2YZ2jLaBm"
+}

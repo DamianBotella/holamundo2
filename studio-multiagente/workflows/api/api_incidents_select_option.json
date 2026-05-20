@@ -1,0 +1,490 @@
+{
+  "name": "api_incidents_select_option",
+  "_description": "PLAN V1.0 Bloque 9 - POST /api/v1/incidents/select-option. Arquitecto elige opcion 0|1 + action='communicate'|'reject'. Si communicate: UPDATE incidents (selected_option_index, cost_delta, time_delta, status=communicated), envia Gmail al cliente con tabla comparativa + link decision publica.",
+  "_status": "B9 (PLAN V1.0 ejecucion).",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "api/v1/incidents/select-option",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        300
+      ],
+      "id": "iso-webhook",
+      "name": "POST /incidents/select-option",
+      "webhookId": "e5f6a7b8-c9d0-4e1f-2a3b-4c5d6e7f8a9b"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const auth = $input.first().json.headers?.authorization || '';\nif (!auth.startsWith('Bearer ')) return [{ json: { _error: 'AUTH_MISSING_TOKEN', _status: 401 } }];\nconst token = auth.slice(7);\ntry {\n  const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'));\n  if (!payload.sub) throw new Error('No sub');\n  if (payload.exp && Date.now()/1000 > payload.exp) throw new Error('JWT expired');\n  if (!payload.tenant_id) throw new Error('No tenant_id');\n  const role = payload.role || 'architect';\n  if (!['architect','super_admin'].includes(role)) return [{ json: { _error: 'FORBIDDEN', _status: 403 } }];\n  const body = $input.first().json.body || {};\n  const incidentId = (body.incident_id || '').trim();\n  const idx = body.selected_option_index;\n  const action = (body.action || '').trim();\n  if (!incidentId) return [{ json: { _error: 'VALIDATION_FAILED', _status: 400, _details: 'incident_id requerido' } }];\n  if (idx !== 0 && idx !== 1) return [{ json: { _error: 'VALIDATION_FAILED', _status: 400, _details: 'selected_option_index debe ser 0 o 1' } }];\n  if (!['communicate','reject'].includes(action)) return [{ json: { _error: 'VALIDATION_FAILED', _status: 400, _details: \"action debe ser 'communicate' o 'reject'\" } }];\n  return [{ json: {\n    user_id: payload.sub,\n    tenant_id: payload.tenant_id,\n    role,\n    incident_id: incidentId,\n    selected_option_index: idx,\n    action,\n    custom_message: (body.custom_message || '').slice(0, 2000),\n    email_override: (body.email_override || '').trim(),\n    request_id: 'req_' + Math.random().toString(36).slice(2, 10)\n  }}];\n} catch (e) {\n  return [{ json: { _error: 'AUTH_INVALID_TOKEN', _status: 401, _details: e.message } }];\n}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        300
+      ],
+      "id": "iso-decode",
+      "name": "Decode JWT + Body"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "iso-c1",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        680,
+        300
+      ],
+      "id": "iso-if-auth",
+      "name": "Auth OK?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details || $json._error } }) }}",
+        "options": {
+          "responseCode": "={{ $json._status || 401 }}"
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        920,
+        460
+      ],
+      "id": "iso-respond-error",
+      "name": "Respond Error"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH ctx AS (\n  SELECT set_session_context($1::uuid, $2::uuid, $3) AS ok\n)\nSELECT i.id, i.project_id, i.tenant_id, i.description, i.location, i.severity,\n       i.causa_probable, i.options, i.client_communication_draft, i.status,\n       p.name AS project_name, p.location_city, p.location_address,\n       c.name AS client_name, c.email AS client_email\nFROM project_incidents i\nJOIN projects p ON p.id = i.project_id\nJOIN clients c ON c.id = p.client_id, ctx\nWHERE i.id = $4::uuid\nLIMIT 1;",
+        "options": {
+          "queryReplacement": "={{ [\n  $('Decode JWT + Body').first().json.user_id,\n  $('Decode JWT + Body').first().json.tenant_id,\n  $('Decode JWT + Body').first().json.role,\n  $('Decode JWT + Body').first().json.incident_id\n] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        920,
+        200
+      ],
+      "id": "iso-load",
+      "name": "Load Incident",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const r = $input.first()?.json;\nconst sess = $('Decode JWT + Body').first().json;\nif (!r || !r.id) return [{ json: { _error: 'INCIDENT_NOT_FOUND', _status: 404, _details: 'incident_id no existe o sin acceso por RLS' } }];\nif (!['proposed','detected'].includes(r.status)) {\n  return [{ json: { _error: 'INVALID_STATE', _status: 409, _details: 'incident ya esta en estado ' + r.status + ', no se puede modificar' } }];\n}\nlet options = [];\ntry { options = typeof r.options === 'string' ? JSON.parse(r.options) : (r.options || []); } catch (e) {}\nif (!options[sess.selected_option_index]) return [{ json: { _error: 'OPTION_NOT_FOUND', _status: 400, _details: 'selected_option_index sin opcion en BD' } }];\nconst opt = options[sess.selected_option_index];\nconst toEmail = sess.email_override || r.client_email;\nif (sess.action === 'communicate' && (!toEmail || !toEmail.includes('@'))) {\n  return [{ json: { _error: 'NO_CLIENT_EMAIL', _status: 400, _details: 'cliente sin email, usa email_override' } }];\n}\nreturn [{ json: {\n  _branch: sess.action, ...sess,\n  incident_id: r.id, project_id: r.project_id,\n  project_name: r.project_name, location_city: r.location_city,\n  description: r.description, location: r.location, severity: r.severity,\n  causa_probable: r.causa_probable, all_options: options,\n  selected_option: opt,\n  cost_delta_eur: Number(opt.coste_eur) || 0,\n  time_delta_days: Math.round(Number(opt.dias) || 0),\n  client_communication_draft: sess.custom_message || r.client_communication_draft,\n  client_name: r.client_name, client_email: toEmail\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1160,
+        200
+      ],
+      "id": "iso-format",
+      "name": "Validate + Branch"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "iso-c2",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1400,
+        200
+      ],
+      "id": "iso-if-format",
+      "name": "Format OK?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details || $json._error } }) }}",
+        "options": {
+          "responseCode": "={{ $json._status || 400 }}"
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1640,
+        360
+      ],
+      "id": "iso-respond-400",
+      "name": "Respond 400"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "iso-c3",
+              "leftValue": "={{ $json._branch }}",
+              "rightValue": "communicate",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1640,
+        100
+      ],
+      "id": "iso-if-branch",
+      "name": "Communicate?"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE project_incidents SET status='rejected'\nWHERE id=$1::uuid AND status IN ('proposed','detected')\nRETURNING id, status;",
+        "options": {
+          "queryReplacement": "={{ [ $('Validate + Branch').first().json.incident_id ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1880,
+        280
+      ],
+      "id": "iso-reject",
+      "name": "Mark Rejected",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({\n  data: { incident_id: $('Validate + Branch').first().json.incident_id, status: 'rejected' },\n  meta: { request_id: $('Validate + Branch').first().json.request_id, timestamp: new Date().toISOString() }\n}) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        2120,
+        280
+      ],
+      "id": "iso-respond-rej",
+      "name": "Respond Rejected 200"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE project_incidents SET\n  selected_option_index=$2::int,\n  cost_delta_eur=$3::numeric,\n  time_delta_days=$4::int,\n  client_communication_draft=$5,\n  status='communicated',\n  client_communication_sent_at=now()\nWHERE id=$1::uuid AND status IN ('proposed','detected')\nRETURNING id, status, selected_option_index, cost_delta_eur, time_delta_days;",
+        "options": {
+          "queryReplacement": "={{ [\n  $('Validate + Branch').first().json.incident_id,\n  $('Validate + Branch').first().json.selected_option_index,\n  $('Validate + Branch').first().json.cost_delta_eur,\n  $('Validate + Branch').first().json.time_delta_days,\n  $('Validate + Branch').first().json.client_communication_draft\n] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1880,
+        100
+      ],
+      "id": "iso-update",
+      "name": "Mark Communicated",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $('Validate + Branch').first().json.client_email }}",
+        "subject": "=Imprevisto en tu obra {{ $('Validate + Branch').first().json.project_name }} — necesitamos tu decision",
+        "emailType": "html",
+        "message": "=<div style=\"font-family:sans-serif;max-width:680px;color:#1f2937\"><h2>Hola {{ $('Validate + Branch').first().json.client_name }},</h2><div style=\"background:#f9fafb;padding:16px;border-left:4px solid #6366f1;margin:16px 0;white-space:pre-wrap;line-height:1.5\">{{ $('Validate + Branch').first().json.client_communication_draft }}</div><h3>Comparativa de las 2 opciones</h3><table border=\"1\" cellpadding=\"10\" cellspacing=\"0\" style=\"border-collapse:collapse;width:100%;font-size:13px\"><tr style=\"background:#f3f4f6\"><th>Opcion</th><th>Descripcion</th><th>Coste</th><th>Plazo</th></tr>{{ $('Validate + Branch').first().json.all_options.map((o,i) => '<tr' + (i===$('Validate + Branch').first().json.selected_option_index?' style=\"background:#dbeafe\"':'') + '><td><b>' + (i===0?'A':'B') + '</b>' + (i===$('Validate + Branch').first().json.selected_option_index?'<br><small>(recomendada)</small>':'') + '</td><td>' + o.descripcion + '<br><br><b>Ventajas:</b> ' + (o.ventajas||[]).join(', ') + '<br><b>A tener en cuenta:</b> ' + (o.desventajas||[]).join(', ') + '</td><td><b>' + o.coste_eur + ' EUR</b></td><td>' + o.dias + ' dias</td></tr>').join('') }}</table><p style=\"margin-top:24px\">Para decidir, responde a este correo indicando qué opcion prefieres (A o B), o si prefieres parar y vernos en obra para hablarlo en persona.</p><p style=\"margin-top:32px\">Un saludo,<br><b>El equipo de tu estudio de arquitectura</b></p><hr style=\"margin-top:32px;border:0;border-top:1px solid #e5e7eb\"><p style=\"font-size:11px;color:#9ca3af\">ID imprevisto: {{ $('Validate + Branch').first().json.incident_id }} — para registro interno.</p></div>",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "cIma8ntTjZvIfU3H",
+          "name": "damian2botella"
+        }
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        2120,
+        100
+      ],
+      "id": "iso-gmail",
+      "name": "Send To Client"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO activity_log (tenant_id, project_id, agent_name, action, status, output_summary, message_type, from_agent, to_agent)\nVALUES ($1::uuid, $2::uuid, 'agent_incident_handler', 'incident_communicated', 'success', $3, 'execution', 'agent_incident_handler', 'cliente')",
+        "options": {
+          "queryReplacement": "={{ [\n  $('Validate + Branch').first().json.tenant_id,\n  $('Validate + Branch').first().json.project_id,\n  'Imprevisto comunicado al cliente. Opcion ' + ($('Validate + Branch').first().json.selected_option_index===0?'A':'B') + ' (+' + $('Validate + Branch').first().json.cost_delta_eur + ' EUR, +' + $('Validate + Branch').first().json.time_delta_days + 'd). Email a ' + $('Validate + Branch').first().json.client_email\n] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2360,
+        100
+      ],
+      "id": "iso-log",
+      "name": "Log Activity",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({\n  data: {\n    incident_id: $('Validate + Branch').first().json.incident_id,\n    project_id: $('Validate + Branch').first().json.project_id,\n    status: 'communicated',\n    selected_option_index: $('Validate + Branch').first().json.selected_option_index,\n    cost_delta_eur: $('Validate + Branch').first().json.cost_delta_eur,\n    time_delta_days: $('Validate + Branch').first().json.time_delta_days,\n    sent_to: $('Validate + Branch').first().json.client_email,\n    email_message_id: $('Send To Client').first().json.id || $('Send To Client').first().json.messageId || null\n  },\n  meta: { request_id: $('Validate + Branch').first().json.request_id, timestamp: new Date().toISOString() }\n}) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        2600,
+        100
+      ],
+      "id": "iso-respond-200",
+      "name": "Respond Communicated 200"
+    }
+  ],
+  "connections": {
+    "POST /incidents/select-option": {
+      "main": [
+        [
+          {
+            "node": "Decode JWT + Body",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decode JWT + Body": {
+      "main": [
+        [
+          {
+            "node": "Auth OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Auth OK?": {
+      "main": [
+        [
+          {
+            "node": "Respond Error",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Load Incident",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Incident": {
+      "main": [
+        [
+          {
+            "node": "Validate + Branch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate + Branch": {
+      "main": [
+        [
+          {
+            "node": "Format OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format OK?": {
+      "main": [
+        [
+          {
+            "node": "Respond 400",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Communicate?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Communicate?": {
+      "main": [
+        [
+          {
+            "node": "Mark Communicated",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mark Rejected",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Communicated": {
+      "main": [
+        [
+          {
+            "node": "Send To Client",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send To Client": {
+      "main": [
+        [
+          {
+            "node": "Log Activity",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Activity": {
+      "main": [
+        [
+          {
+            "node": "Respond Communicated 200",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Rejected": {
+      "main": [
+        [
+          {
+            "node": "Respond Rejected 200",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "_n8n_id": "a1USFlivzm5LORup"
+}

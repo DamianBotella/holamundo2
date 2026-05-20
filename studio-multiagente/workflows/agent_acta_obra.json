@@ -455,7 +455,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "UPDATE agent_executions SET status='completed', finished_at=now(),\n  output=$2::jsonb,\n  duration_ms=EXTRACT(MILLISECONDS FROM (now() - started_at))::int\nWHERE id=$1::uuid",
+        "query": "UPDATE agent_executions SET status='completed', finished_at=now(), output=$2::jsonb WHERE id=$1::uuid",
         "options": {
           "queryReplacement": "={{ [\n  $('Start Execution').first().json.id,\n  JSON.stringify({ act_id: $('Insert Act').first().json.id, observation_count: $('Format Response').first().json.observation_count, tokens_in: $('Format Response').first().json.tokens_in, tokens_out: $('Format Response').first().json.tokens_out })\n] }}"
         }

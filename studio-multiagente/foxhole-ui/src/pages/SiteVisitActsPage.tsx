@@ -1,38 +1,11 @@
 import { useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, FileSignature, Loader2, X, ExternalLink, RefreshCw } from 'lucide-react';
-import { supabase } from '@/lib/supabase';
 import { api } from '@/lib/api';
+import type { SiteVisitActRow } from '@/lib/api';
 import { formatError } from '@/lib/errors';
 
-interface SiteVisitAct {
-  id: string;
-  tenant_id: string;
-  project_id: string;
-  visit_date: string;
-  audio_url: string | null;
-  audio_duration_seconds: number | null;
-  transcript_raw: string | null;
-  transcript_categorized: unknown;
-  observations: Array<{
-    gremio?: string;
-    texto?: string;
-    tipo?: string;
-    fotos_referenciadas?: string[];
-  }> | null;
-  photos: Array<{ url: string; caption?: string }> | null;
-  acuerdos: string | null;
-  proxima_visita_prevista: string | null;
-  pdf_url: string | null;
-  status: 'draft' | 'approved' | 'signed';
-  approved_at: string | null;
-  signed_at: string | null;
-  created_at: string;
-}
-
-interface ActWithProject extends SiteVisitAct {
-  project_name: string | null;
-}
+type ActWithProject = SiteVisitActRow;
 
 type StatusFilter = 'all' | 'draft' | 'approved' | 'signed';
 
@@ -40,7 +13,7 @@ interface Props {
   onBack: () => void;
 }
 
-function statusBadge(status: SiteVisitAct['status']) {
+function statusBadge(status: SiteVisitActRow['status']) {
   if (status === 'draft') return <span className="foxhole-badge-warning">DRAFT</span>;
   if (status === 'approved') return <span className="foxhole-badge-info">APROBADA</span>;
   return <span className="foxhole-badge-success">FIRMADA</span>;
@@ -61,27 +34,7 @@ export function SiteVisitActsPage({ onBack }: Props) {
 
   const { data: acts = [], isLoading, error, refetch, isFetching } = useQuery<ActWithProject[]>({
     queryKey: ['site_visit_acts'],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from('site_visit_acts')
-        .select('*')
-        .order('visit_date', { ascending: false })
-        .limit(200);
-      if (error) throw error;
-      const rows = (data || []) as SiteVisitAct[];
-      const projectIds = Array.from(new Set(rows.map((r) => r.project_id).filter(Boolean)));
-      const nameMap = new Map<string, string>();
-      if (projectIds.length > 0) {
-        const { data: projs, error: pErr } = await supabase
-          .from('projects')
-          .select('id, name')
-          .in('id', projectIds);
-        if (!pErr && projs) {
-          for (const p of projs as Array<{ id: string; name: string }>) nameMap.set(p.id, p.name);
-        }
-      }
-      return rows.map((r) => ({ ...r, project_name: nameMap.get(r.project_id) ?? null }));
-    },
+    queryFn: () => api.acts.list({ limit: 200 }),
   });
 
   const projectOptions = useMemo(() => {

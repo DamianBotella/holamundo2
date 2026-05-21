@@ -1,28 +1,12 @@
 import { useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Mail, Loader2, X, RefreshCw } from 'lucide-react';
-import { supabase } from '@/lib/supabase';
 import { api } from '@/lib/api';
+import type { ClientWeeklyUpdateRow } from '@/lib/api';
 import { formatError } from '@/lib/errors';
 
-interface ClientWeeklyUpdate {
-  id: string;
-  tenant_id: string;
-  project_id: string;
-  week_start: string;
-  week_end: string;
-  summary_text: string | null;
-  photos_referenced: Array<{ url: string; caption?: string }> | null;
-  status: 'draft' | 'approved' | 'sent' | 'failed';
-  approved_at: string | null;
-  sent_at: string | null;
-  email_message_id: string | null;
-  created_at: string;
-}
-
-interface UpdateWithProject extends ClientWeeklyUpdate {
-  project_name: string | null;
-}
+type UpdateWithProject = ClientWeeklyUpdateRow;
+type ClientWeeklyUpdate = ClientWeeklyUpdateRow;
 
 type StatusFilter = 'all' | 'draft' | 'approved' | 'sent' | 'failed';
 
@@ -53,27 +37,7 @@ export function ClientUpdatesPage({ onBack }: Props) {
 
   const { data: updates = [], isLoading, error, refetch, isFetching } = useQuery<UpdateWithProject[]>({
     queryKey: ['client_weekly_updates'],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from('client_weekly_updates')
-        .select('*')
-        .order('week_start', { ascending: false })
-        .limit(200);
-      if (error) throw error;
-      const rows = (data || []) as ClientWeeklyUpdate[];
-      const projectIds = Array.from(new Set(rows.map((r) => r.project_id).filter(Boolean)));
-      const nameMap = new Map<string, string>();
-      if (projectIds.length > 0) {
-        const { data: projs, error: pErr } = await supabase
-          .from('projects')
-          .select('id, name')
-          .in('id', projectIds);
-        if (!pErr && projs) {
-          for (const p of projs as Array<{ id: string; name: string }>) nameMap.set(p.id, p.name);
-        }
-      }
-      return rows.map((r) => ({ ...r, project_name: nameMap.get(r.project_id) ?? null }));
-    },
+    queryFn: () => api.clientUpdates.list({ limit: 200 }),
   });
 
   const projectOptions = useMemo(() => {

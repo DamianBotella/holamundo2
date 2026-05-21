@@ -1,0 +1,120 @@
+{
+  "name": "api_client_weekly_updates_list",
+  "_description": "GET /api/v1/client-weekly-updates - lista resumenes semanales al cliente. Filtros: status (draft/approved/sent/failed), project_id. Ordena week_start DESC. JOIN projects para name. CTE inline (gotcha B64). webhookId UUID manual. alwaysOutputData en Postgres.",
+  "_status": "DRAFT - importar via deploy script.",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "api/v1/client-weekly-updates",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "id": "updates-list-webhook",
+      "name": "GET /client-weekly-updates",
+      "webhookId": "cb210c76-d0f9-45c2-ae6a-1b681fb9a25b"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const auth = $input.first().json.headers?.authorization || '';\nif (!auth.startsWith('Bearer ')) return [{ json: { _error: 'AUTH_MISSING_TOKEN', _status: 401 } }];\nconst token = auth.slice(7);\ntry {\n  const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'));\n  if (!payload.sub) throw new Error('No sub');\n  if (payload.exp && Date.now()/1000 > payload.exp) throw new Error('JWT expired');\n\n  const q = $input.first().json.query || {};\n  const allowedStatus = ['draft','approved','sent','failed'];\n  const status = (q.status && allowedStatus.includes(q.status)) ? q.status : null;\n  const projectId = q.project_id || null;\n  const limit = Math.min(parseInt(q.limit || '200'), 500);\n\n  return [{ json: {\n    user_id:   payload.sub,\n    tenant_id: payload.tenant_id || null,\n    role:      payload.role      || 'architect',\n    request_id: 'req_' + Math.random().toString(36).slice(2, 10),\n    filters: { status, project_id: projectId, limit }\n  }}];\n} catch (e) {\n  return [{ json: { _error: 'AUTH_INVALID_TOKEN', _status: 401, _details: e.message } }];\n}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 300],
+      "id": "updates-list-decode",
+      "name": "Decode JWT + Params"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "check-error",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": "",
+              "operator": { "type": "string", "operation": "exists" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [720, 300],
+      "id": "updates-list-if-auth",
+      "name": "Auth OK?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details || $json._error, request_id: 'req_' + Date.now() } }) }}",
+        "options": { "responseCode": "={{ $json._status || 401 }}" }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [960, 460],
+      "id": "updates-list-respond-401",
+      "name": "Respond 401"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH ctx AS (SELECT set_session_context($1::uuid, $2::uuid, $3) AS ok) SELECT u.id, u.tenant_id, u.project_id, u.week_start, u.week_end, u.summary_text, u.photos_referenced, u.status, u.approved_at, u.sent_at, u.email_message_id, u.created_at, p.name AS project_name FROM client_weekly_updates u LEFT JOIN projects p ON p.id = u.project_id WHERE EXISTS (SELECT 1 FROM ctx) AND ($4::text IS NULL OR u.status = $4) AND ($5::uuid IS NULL OR u.project_id = $5) ORDER BY u.week_start DESC, u.created_at DESC LIMIT $6::int",
+        "options": {
+          "queryReplacement": "={{ [$json.user_id, $json.tenant_id, $json.role, $json.filters.status, $json.filters.project_id, $json.filters.limit] }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [960, 200],
+      "id": "updates-list-query",
+      "name": "Query client_weekly_updates",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const items = $input.all().map(i => i.json).filter(j => j && j.id);\nconst sess  = $('Decode JWT + Params').first().json;\n\nreturn [{ json: {\n  data: items.map(u => ({\n    id:                u.id,\n    tenant_id:         u.tenant_id,\n    project_id:        u.project_id,\n    project_name:      u.project_name,\n    week_start:        u.week_start,\n    week_end:          u.week_end,\n    summary_text:      u.summary_text,\n    photos_referenced: u.photos_referenced,\n    status:            u.status,\n    approved_at:       u.approved_at,\n    sent_at:           u.sent_at,\n    email_message_id:  u.email_message_id,\n    created_at:        u.created_at\n  })),\n  meta: {\n    request_id: sess.request_id,\n    timestamp:  new Date().toISOString(),\n    count:      items.length,\n    filters:    sess.filters\n  }\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1200, 200],
+      "id": "updates-list-format",
+      "name": "Format Response"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": { "responseCode": 200 }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1440, 200],
+      "id": "updates-list-respond-200",
+      "name": "Respond 200"
+    }
+  ],
+  "connections": {
+    "GET /client-weekly-updates": { "main": [[{ "node": "Decode JWT + Params",       "type": "main", "index": 0 }]] },
+    "Decode JWT + Params":        { "main": [[{ "node": "Auth OK?",                  "type": "main", "index": 0 }]] },
+    "Auth OK?":                   { "main": [
+      [{ "node": "Respond 401",                 "type": "main", "index": 0 }],
+      [{ "node": "Query client_weekly_updates", "type": "main", "index": 0 }]
+    ]},
+    "Query client_weekly_updates":{ "main": [[{ "node": "Format Response",          "type": "main", "index": 0 }]] },
+    "Format Response":            { "main": [[{ "node": "Respond 200",              "type": "main", "index": 0 }]] }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

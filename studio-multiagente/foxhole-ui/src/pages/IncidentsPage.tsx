@@ -1,43 +1,12 @@
 import { useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, AlertTriangle, Loader2, X, RefreshCw, Copy, Check } from 'lucide-react';
-import { supabase } from '@/lib/supabase';
 import { api } from '@/lib/api';
+import type { ProjectIncidentRow } from '@/lib/api';
 import { formatError } from '@/lib/errors';
 
-interface IncidentOption {
-  descripcion?: string;
-  materiales?: string;
-  coste_eur?: number;
-  dias?: number;
-  ventajas?: string[];
-  desventajas?: string[];
-}
-
-interface ProjectIncident {
-  id: string;
-  tenant_id: string;
-  project_id: string;
-  detected_at: string;
-  description: string;
-  location: string | null;
-  severity: 'baja' | 'media' | 'alta' | 'critica' | null;
-  causa_probable: string | null;
-  options: IncidentOption[] | null;
-  selected_option_index: number | null;
-  cost_delta_eur: number | null;
-  time_delta_days: number | null;
-  client_communication_draft: string | null;
-  client_communication_sent_at: string | null;
-  modification_doc_url: string | null;
-  status: 'detected' | 'proposed' | 'communicated' | 'approved' | 'rejected' | 'closed';
-  photos: Array<{ url: string; caption?: string }> | null;
-  created_at: string;
-}
-
-interface IncidentWithProject extends ProjectIncident {
-  project_name: string | null;
-}
+type IncidentWithProject = ProjectIncidentRow;
+type ProjectIncident = ProjectIncidentRow;
 
 type StatusFilter = 'all' | 'detected' | 'proposed' | 'communicated' | 'approved' | 'rejected';
 
@@ -77,28 +46,7 @@ export function IncidentsPage({ onBack }: Props) {
 
   const { data: incidents = [], isLoading, error, refetch, isFetching } = useQuery<IncidentWithProject[]>({
     queryKey: ['project_incidents'],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from('project_incidents')
-        .select('*')
-        .neq('status', 'closed')
-        .order('detected_at', { ascending: false })
-        .limit(200);
-      if (error) throw error;
-      const rows = (data || []) as ProjectIncident[];
-      const projectIds = Array.from(new Set(rows.map((r) => r.project_id).filter(Boolean)));
-      const nameMap = new Map<string, string>();
-      if (projectIds.length > 0) {
-        const { data: projs, error: pErr } = await supabase
-          .from('projects')
-          .select('id, name')
-          .in('id', projectIds);
-        if (!pErr && projs) {
-          for (const p of projs as Array<{ id: string; name: string }>) nameMap.set(p.id, p.name);
-        }
-      }
-      return rows.map((r) => ({ ...r, project_name: nameMap.get(r.project_id) ?? null }));
-    },
+    queryFn: () => api.incidents.list({ limit: 200 }),
   });
 
   const projectOptions = useMemo(() => {

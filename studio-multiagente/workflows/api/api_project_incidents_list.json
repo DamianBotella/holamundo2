@@ -1,0 +1,120 @@
+{
+  "name": "api_project_incidents_list",
+  "_description": "GET /api/v1/project-incidents - lista imprevistos de obra. Filtros: status, project_id, include_closed (default false). Ordena detected_at DESC. JOIN projects para name. CTE inline (gotcha B64). webhookId UUID manual. alwaysOutputData en Postgres.",
+  "_status": "DRAFT - importar via deploy script.",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "api/v1/project-incidents",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "id": "incidents-list-webhook",
+      "name": "GET /project-incidents",
+      "webhookId": "98255e32-dbe3-459c-8326-33a0906583f5"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const auth = $input.first().json.headers?.authorization || '';\nif (!auth.startsWith('Bearer ')) return [{ json: { _error: 'AUTH_MISSING_TOKEN', _status: 401 } }];\nconst token = auth.slice(7);\ntry {\n  const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'));\n  if (!payload.sub) throw new Error('No sub');\n  if (payload.exp && Date.now()/1000 > payload.exp) throw new Error('JWT expired');\n\n  const q = $input.first().json.query || {};\n  const allowedStatus = ['detected','proposed','communicated','approved','rejected','closed'];\n  const status = (q.status && allowedStatus.includes(q.status)) ? q.status : null;\n  const projectId = q.project_id || null;\n  const includeClosed = q.include_closed === 'true' || q.include_closed === '1';\n  const limit = Math.min(parseInt(q.limit || '200'), 500);\n\n  return [{ json: {\n    user_id:   payload.sub,\n    tenant_id: payload.tenant_id || null,\n    role:      payload.role      || 'architect',\n    request_id: 'req_' + Math.random().toString(36).slice(2, 10),\n    filters: { status, project_id: projectId, include_closed: includeClosed, limit }\n  }}];\n} catch (e) {\n  return [{ json: { _error: 'AUTH_INVALID_TOKEN', _status: 401, _details: e.message } }];\n}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 300],
+      "id": "incidents-list-decode",
+      "name": "Decode JWT + Params"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "check-error",
+              "leftValue": "={{ $json._error }}",
+              "rightValue": "",
+              "operator": { "type": "string", "operation": "exists" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [720, 300],
+      "id": "incidents-list-if-auth",
+      "name": "Auth OK?"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details || $json._error, request_id: 'req_' + Date.now() } }) }}",
+        "options": { "responseCode": "={{ $json._status || 401 }}" }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [960, 460],
+      "id": "incidents-list-respond-401",
+      "name": "Respond 401"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH ctx AS (SELECT set_session_context($1::uuid, $2::uuid, $3) AS ok) SELECT i.id, i.tenant_id, i.project_id, i.detected_at, i.description, i.location, i.severity, i.causa_probable, i.options, i.selected_option_index, i.cost_delta_eur, i.time_delta_days, i.client_communication_draft, i.client_communication_sent_at, i.modification_doc_url, i.status, i.photos, i.created_at, p.name AS project_name FROM project_incidents i LEFT JOIN projects p ON p.id = i.project_id WHERE EXISTS (SELECT 1 FROM ctx) AND ($4::text IS NULL OR i.status = $4) AND ($5::uuid IS NULL OR i.project_id = $5) AND ($6::boolean OR i.status != 'closed') ORDER BY i.detected_at DESC LIMIT $7::int",
+        "options": {
+          "queryReplacement": "={{ [$json.user_id, $json.tenant_id, $json.role, $json.filters.status, $json.filters.project_id, $json.filters.include_closed, $json.filters.limit] }}"
+        }
+      },
+      "credentials": {
+        "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [960, 200],
+      "id": "incidents-list-query",
+      "name": "Query project_incidents",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const items = $input.all().map(i => i.json).filter(j => j && j.id);\nconst sess  = $('Decode JWT + Params').first().json;\n\nreturn [{ json: {\n  data: items.map(i => ({\n    id:                            i.id,\n    tenant_id:                     i.tenant_id,\n    project_id:                    i.project_id,\n    project_name:                  i.project_name,\n    detected_at:                   i.detected_at,\n    description:                   i.description,\n    location:                      i.location,\n    severity:                      i.severity,\n    causa_probable:                i.causa_probable,\n    options:                       i.options,\n    selected_option_index:         i.selected_option_index,\n    cost_delta_eur:                i.cost_delta_eur != null ? parseFloat(i.cost_delta_eur) : null,\n    time_delta_days:               i.time_delta_days,\n    client_communication_draft:    i.client_communication_draft,\n    client_communication_sent_at:  i.client_communication_sent_at,\n    modification_doc_url:          i.modification_doc_url,\n    status:                        i.status,\n    photos:                        i.photos,\n    created_at:                    i.created_at\n  })),\n  meta: {\n    request_id: sess.request_id,\n    timestamp:  new Date().toISOString(),\n    count:      items.length,\n    filters:    sess.filters\n  }\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1200, 200],
+      "id": "incidents-list-format",
+      "name": "Format Response"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": { "responseCode": 200 }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1440, 200],
+      "id": "incidents-list-respond-200",
+      "name": "Respond 200"
+    }
+  ],
+  "connections": {
+    "GET /project-incidents":  { "main": [[{ "node": "Decode JWT + Params",   "type": "main", "index": 0 }]] },
+    "Decode JWT + Params":     { "main": [[{ "node": "Auth OK?",              "type": "main", "index": 0 }]] },
+    "Auth OK?":                { "main": [
+      [{ "node": "Respond 401",            "type": "main", "index": 0 }],
+      [{ "node": "Query project_incidents","type": "main", "index": 0 }]
+    ]},
+    "Query project_incidents": { "main": [[{ "node": "Format Response",      "type": "main", "index": 0 }]] },
+    "Format Response":         { "main": [[{ "node": "Respond 200",          "type": "main", "index": 0 }]] }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

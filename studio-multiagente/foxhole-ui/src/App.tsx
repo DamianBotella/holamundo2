@@ -6,6 +6,9 @@ import { LoginPage } from './pages/LoginPage';
 import { StudioPage } from './pages/StudioPage';
 import { NewProjectWizardPage } from './pages/NewProjectWizardPage';
 import { BillingPage } from './pages/BillingPage';
+import { SiteVisitActsPage } from './pages/SiteVisitActsPage';
+import { IncidentsPage } from './pages/IncidentsPage';
+import { ClientUpdatesPage } from './pages/ClientUpdatesPage';
 import { useSession } from './lib/session';
 
 type Route =
@@ -13,7 +16,10 @@ type Route =
   | { name: 'project'; id: string }
   | { name: 'studio' }
   | { name: 'wizard' }
-  | { name: 'billing' };
+  | { name: 'billing' }
+  | { name: 'acts' }
+  | { name: 'incidents' }
+  | { name: 'client-updates' };
 
 export function App() {
   const { session, loading } = useSession();
@@ -48,8 +54,18 @@ export function App() {
     return <LoginPage />;
   }
 
-  const activeKey =
-    route.name === 'studio' ? 'studio' : route.name === 'billing' ? 'billing' : 'dashboard';
+  const activeKey: 'dashboard' | 'studio' | 'billing' | 'acts' | 'incidents' | 'client-updates' =
+    route.name === 'studio'
+      ? 'studio'
+      : route.name === 'billing'
+        ? 'billing'
+        : route.name === 'acts'
+          ? 'acts'
+          : route.name === 'incidents'
+            ? 'incidents'
+            : route.name === 'client-updates'
+              ? 'client-updates'
+              : 'dashboard';
 
   return (
     <div className="min-h-screen bg-foxhole-bg flex flex-col">
@@ -63,6 +79,9 @@ export function App() {
           setRoute({ name: 'billing' });
           window.location.hash = 'billing';
         }}
+        onOpenActs={() => setRoute({ name: 'acts' })}
+        onOpenIncidents={() => setRoute({ name: 'incidents' })}
+        onOpenClientUpdates={() => setRoute({ name: 'client-updates' })}
         active={activeKey}
       />
       <main className="flex-1 overflow-auto">
@@ -103,6 +122,15 @@ export function App() {
               if (window.location.hash) window.history.replaceState({}, '', window.location.pathname + window.location.search);
             }}
           />
+        )}
+        {route.name === 'acts' && (
+          <SiteVisitActsPage onBack={() => setRoute({ name: 'dashboard' })} />
+        )}
+        {route.name === 'incidents' && (
+          <IncidentsPage onBack={() => setRoute({ name: 'dashboard' })} />
+        )}
+        {route.name === 'client-updates' && (
+          <ClientUpdatesPage onBack={() => setRoute({ name: 'dashboard' })} />
         )}
       </main>
     </div>

@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { Activity, AlertTriangle, CreditCard, LogOut, Map } from 'lucide-react';
+import { Activity, AlertTriangle, CreditCard, LogOut, Map, FileSignature, Mail } from 'lucide-react';
 import { api, isUsingMock } from '@/lib/api';
 import { useSession } from '@/lib/session';
 
@@ -7,10 +7,21 @@ interface Props {
   onNavigate: () => void;
   onOpenStudio?: () => void;
   onOpenBilling?: () => void;
-  active?: 'dashboard' | 'studio' | 'billing';
+  onOpenActs?: () => void;
+  onOpenIncidents?: () => void;
+  onOpenClientUpdates?: () => void;
+  active?: 'dashboard' | 'studio' | 'billing' | 'acts' | 'incidents' | 'client-updates';
 }
 
-export function TopBar({ onNavigate, onOpenStudio, onOpenBilling, active = 'dashboard' }: Props) {
+export function TopBar({
+  onNavigate,
+  onOpenStudio,
+  onOpenBilling,
+  onOpenActs,
+  onOpenIncidents,
+  onOpenClientUpdates,
+  active = 'dashboard',
+}: Props) {
   const { data: profile } = useQuery({ queryKey: ['me'], queryFn: api.me });
   const { data: metrics } = useQuery({ queryKey: ['metrics'], queryFn: api.metrics });
   const { data: billing } = useQuery({
@@ -65,6 +76,45 @@ export function TopBar({ onNavigate, onOpenStudio, onOpenBilling, active = 'dash
                 Trial {trialDaysLeft}d
               </span>
             )}
+          </button>
+        )}
+
+        {onOpenActs && (
+          <button
+            onClick={onOpenActs}
+            className={`flex items-center gap-1.5 font-mono text-xs uppercase tracking-wider transition-colors ${
+              active === 'acts' ? 'text-foxhole-accent' : 'text-foxhole-muted hover:text-foxhole-fg'
+            }`}
+            title="Actas de visita de obra"
+          >
+            <FileSignature className="w-3.5 h-3.5" />
+            Actas
+          </button>
+        )}
+
+        {onOpenIncidents && (
+          <button
+            onClick={onOpenIncidents}
+            className={`flex items-center gap-1.5 font-mono text-xs uppercase tracking-wider transition-colors ${
+              active === 'incidents' ? 'text-foxhole-accent' : 'text-foxhole-muted hover:text-foxhole-fg'
+            }`}
+            title="Imprevistos de obra"
+          >
+            <AlertTriangle className="w-3.5 h-3.5" />
+            Imprevistos
+          </button>
+        )}
+
+        {onOpenClientUpdates && (
+          <button
+            onClick={onOpenClientUpdates}
+            className={`flex items-center gap-1.5 font-mono text-xs uppercase tracking-wider transition-colors ${
+              active === 'client-updates' ? 'text-foxhole-accent' : 'text-foxhole-muted hover:text-foxhole-fg'
+            }`}
+            title="Resumenes semanales al cliente"
+          >
+            <Mail className="w-3.5 h-3.5" />
+            Resumenes
           </button>
         )}
 

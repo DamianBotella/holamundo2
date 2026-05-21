@@ -349,6 +349,80 @@ export const api = {
       return r.data;
     },
   },
+
+  // PLAN V1.0 ejecucion - 3 agentes (acta_obra, incident_handler, client_update)
+  acts: {
+    approve: async (
+      actId: string,
+      action: 'approve' | 'sign',
+    ): Promise<{ id: string; status: string; signed_at?: string | null; approved_at?: string | null }> => {
+      const r = await fetchAPI<EnvelopeResponse<{ id: string; status: string; signed_at?: string | null; approved_at?: string | null }>>(
+        '/site-visit-acts/approve',
+        { method: 'POST', body: JSON.stringify({ act_id: actId, action }) },
+      );
+      return r.data;
+    },
+  },
+
+  incidents: {
+    selectOption: async (
+      incidentId: string,
+      selectedOptionIndex: 0 | 1,
+      action: 'communicate' | 'reject',
+      emailOverride?: string,
+    ): Promise<{
+      id: string;
+      status: string;
+      cost_delta_eur: number | null;
+      time_delta_days: number | null;
+      client_communication_sent_at?: string | null;
+    }> => {
+      const r = await fetchAPI<EnvelopeResponse<{
+        id: string;
+        status: string;
+        cost_delta_eur: number | null;
+        time_delta_days: number | null;
+        client_communication_sent_at?: string | null;
+      }>>('/incidents/select-option', {
+        method: 'POST',
+        body: JSON.stringify({
+          incident_id: incidentId,
+          selected_option_index: selectedOptionIndex,
+          action,
+          ...(emailOverride ? { email_override: emailOverride } : {}),
+        }),
+      });
+      return r.data;
+    },
+  },
+
+  clientUpdates: {
+    approve: async (
+      updateId: string,
+      action: 'approve' | 'reject',
+      emailOverride?: string,
+    ): Promise<{
+      id: string;
+      status: string;
+      sent_at?: string | null;
+      email_message_id?: string | null;
+    }> => {
+      const r = await fetchAPI<EnvelopeResponse<{
+        id: string;
+        status: string;
+        sent_at?: string | null;
+        email_message_id?: string | null;
+      }>>('/client-updates/approve', {
+        method: 'POST',
+        body: JSON.stringify({
+          update_id: updateId,
+          action,
+          ...(emailOverride ? { email_override: emailOverride } : {}),
+        }),
+      });
+      return r.data;
+    },
+  },
 };
 
 export const isUsingMock = !HAS_BACKEND;

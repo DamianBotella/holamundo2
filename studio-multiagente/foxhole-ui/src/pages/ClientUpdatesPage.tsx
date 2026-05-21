@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Mail, Loader2, X, RefreshCw } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { api } from '@/lib/api';
+import { formatError } from '@/lib/errors';
 
 interface ClientWeeklyUpdate {
   id: string;
@@ -20,7 +21,7 @@ interface ClientWeeklyUpdate {
 }
 
 interface UpdateWithProject extends ClientWeeklyUpdate {
-  projects: { name: string } | null;
+  project_name: string | null;
 }
 
 type StatusFilter = 'all' | 'draft' | 'approved' | 'sent' | 'failed';
@@ -55,18 +56,30 @@ export function ClientUpdatesPage({ onBack }: Props) {
     queryFn: async () => {
       const { data, error } = await supabase
         .from('client_weekly_updates')
-        .select('*, projects(name)')
+        .select('*')
         .order('week_start', { ascending: false })
         .limit(200);
       if (error) throw error;
-      return (data || []) as UpdateWithProject[];
+      const rows = (data || []) as ClientWeeklyUpdate[];
+      const projectIds = Array.from(new Set(rows.map((r) => r.project_id).filter(Boolean)));
+      const nameMap = new Map<string, string>();
+      if (projectIds.length > 0) {
+        const { data: projs, error: pErr } = await supabase
+          .from('projects')
+          .select('id, name')
+          .in('id', projectIds);
+        if (!pErr && projs) {
+          for (const p of projs as Array<{ id: string; name: string }>) nameMap.set(p.id, p.name);
+        }
+      }
+      return rows.map((r) => ({ ...r, project_name: nameMap.get(r.project_id) ?? null }));
     },
   });
 
   const projectOptions = useMemo(() => {
     const map = new Map<string, string>();
     for (const u of updates) {
-      if (u.project_id && u.projects?.name) map.set(u.project_id, u.projects.name);
+      if (u.project_id && u.project_name) map.set(u.project_id, u.project_name);
     }
     return Array.from(map.entries()).map(([id, name]) => ({ id, name }));
   }, [updates]);
@@ -92,7 +105,7 @@ export function ClientUpdatesPage({ onBack }: Props) {
       setApproveFor(null);
       if (open?.id === update.id) setOpen(null);
     } catch (e: unknown) {
-      setErrorMsg(e instanceof Error ? e.message : String(e));
+      setErrorMsg(formatError(e));
     } finally {
       setBusyId(null);
     }
@@ -174,12 +187,17 @@ export function ClientUpdatesPage({ onBack }: Props) {
             Cargando resumenes...
           </div>
         ) : error ? (
-          <div className="p-6 text-sm text-foxhole-state-failed font-mono">
-            Error: {String(error)}
+          <div className="p-8 text-center text-foxhole-muted text-sm">
+            <p className="mb-2">No se pudieron cargar los resumenes.</p>
+            <p className="text-xs font-mono text-foxhole-muted/70 break-words">
+              {formatError(error)}
+            </p>
           </div>
         ) : filtered.length === 0 ? (
           <div className="p-8 text-center text-foxhole-muted text-sm">
-            No hay resumenes con estos filtros.
+            {updates.length === 0
+              ? 'Aun no hay resumenes semanales generados.'
+              : 'No hay resumenes con estos filtros.'}
           </div>
         ) : (
           <table className="w-full text-sm">
@@ -204,7 +222,7 @@ export function ClientUpdatesPage({ onBack }: Props) {
                     <td className="p-3 font-mono text-xs text-foxhole-muted whitespace-nowrap">
                       {u.week_start} → {u.week_end}
                     </td>
-                    <td className="p-3">{u.projects?.name || u.project_id.slice(0, 8)}</td>
+                    <td className="p-3">{u.project_name || u.project_id.slice(0, 8)}</td>
                     <td className="p-3 text-foxhole-muted text-xs">
                       {truncate(u.summary_text, 80)}
                     </td>
@@ -299,7 +317,7 @@ function UpdateDetailModal({ update, onClose, onApprove }: UpdateDetailModalProp
 
         <header className="mb-4">
           <h2 className="foxhole-stencil text-xl mb-1">
-            RESUMEN — {update.projects?.name || update.project_id.slice(0, 8)}
+            RESUMEN — {update.project_name || update.project_id.slice(0, 8)}
           </h2>
           <p className="text-xs text-foxhole-muted font-mono">
             Semana {update.week_start} → {update.week_end} · {statusBadge(update.status)}
@@ -378,7 +396,7 @@ function ApproveModal({ update, busy, onClose, onSubmit }: ApproveModalProps) {
         <p className="text-sm text-foxhole-muted mb-4">
           Se enviara el resumen semanal al cliente del proyecto{' '}
           <span className="font-mono text-foxhole-bone">
-            {update.projects?.name || update.project_id.slice(0, 8)}
+            {update.project_name || update.project_id.slice(0, 8)}
           </span>
           .
         </p>

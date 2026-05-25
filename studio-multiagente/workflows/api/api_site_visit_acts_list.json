@@ -12,7 +12,10 @@
       },
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
-      "position": [240, 300],
+      "position": [
+        240,
+        300
+      ],
       "id": "acts-list-webhook",
       "name": "GET /site-visit-acts",
       "webhookId": "8365b3e5-4454-4ed9-a314-f388b45be677"
@@ -24,20 +27,30 @@
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [480, 300],
+      "position": [
+        480,
+        300
+      ],
       "id": "acts-list-decode",
       "name": "Decode JWT + Params"
     },
     {
       "parameters": {
         "conditions": {
-          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict" },
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
           "conditions": [
             {
               "id": "check-error",
               "leftValue": "={{ $json._error }}",
               "rightValue": "",
-              "operator": { "type": "string", "operation": "exists" }
+              "operator": {
+                "type": "string",
+                "operation": "exists"
+              }
             }
           ],
           "combinator": "and"
@@ -45,7 +58,10 @@
       },
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
-      "position": [720, 300],
+      "position": [
+        720,
+        300
+      ],
       "id": "acts-list-if-auth",
       "name": "Auth OK?"
     },
@@ -53,11 +69,16 @@
       "parameters": {
         "respondWith": "json",
         "responseBody": "={{ JSON.stringify({ error: { code: $json._error, message: $json._details || $json._error, request_id: 'req_' + Date.now() } }) }}",
-        "options": { "responseCode": "={{ $json._status || 401 }}" }
+        "options": {
+          "responseCode": "={{ $json._status || 401 }}"
+        }
       },
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
-      "position": [960, 460],
+      "position": [
+        960,
+        460
+      ],
       "id": "acts-list-respond-401",
       "name": "Respond 401"
     },
@@ -70,11 +91,17 @@
         }
       },
       "credentials": {
-        "postgres": { "id": "cfxNZdzy0NB3xkYC", "name": "Postgres account" }
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
       },
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
-      "position": [960, 200],
+      "position": [
+        960,
+        200
+      ],
       "id": "acts-list-query",
       "name": "Query site_visit_acts",
       "alwaysOutputData": true
@@ -86,7 +113,10 @@
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1200, 200],
+      "position": [
+        1200,
+        200
+      ],
       "id": "acts-list-format",
       "name": "Format Response"
     },
@@ -94,27 +124,87 @@
       "parameters": {
         "respondWith": "json",
         "responseBody": "={{ JSON.stringify($json) }}",
-        "options": { "responseCode": 200 }
+        "options": {
+          "responseCode": 200
+        }
       },
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
-      "position": [1440, 200],
+      "position": [
+        1440,
+        200
+      ],
       "id": "acts-list-respond-200",
       "name": "Respond 200"
     }
   ],
   "connections": {
-    "GET /site-visit-acts":  { "main": [[{ "node": "Decode JWT + Params",  "type": "main", "index": 0 }]] },
-    "Decode JWT + Params":   { "main": [[{ "node": "Auth OK?",             "type": "main", "index": 0 }]] },
-    "Auth OK?":              { "main": [
-      [{ "node": "Respond 401",          "type": "main", "index": 0 }],
-      [{ "node": "Query site_visit_acts","type": "main", "index": 0 }]
-    ]},
-    "Query site_visit_acts": { "main": [[{ "node": "Format Response",     "type": "main", "index": 0 }]] },
-    "Format Response":       { "main": [[{ "node": "Respond 200",         "type": "main", "index": 0 }]] }
+    "GET /site-visit-acts": {
+      "main": [
+        [
+          {
+            "node": "Decode JWT + Params",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decode JWT + Params": {
+      "main": [
+        [
+          {
+            "node": "Auth OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Auth OK?": {
+      "main": [
+        [
+          {
+            "node": "Respond 401",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Query site_visit_acts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Query site_visit_acts": {
+      "main": [
+        [
+          {
+            "node": "Format Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Response": {
+      "main": [
+        [
+          {
+            "node": "Respond 200",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
   },
   "settings": {
     "executionOrder": "v1"
   },
-  "pinData": {}
+  "pinData": {},
+  "_n8n_id": "UHU13lZN39ojnDIL"
 }

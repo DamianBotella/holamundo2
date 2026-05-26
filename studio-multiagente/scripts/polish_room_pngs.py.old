@@ -1,0 +1,282 @@
+#!/usr/bin/env python
+"""
+PLAN V1.0 Bloque 6 (studio-v2) - Limpieza definitiva + normalizacion de las
+11 PNGs de salas isometricas.
+
+Sustituye a `remove_grey_bg.py` (que dejaba halos y mantenia el canvas
+original distinto por sala). Este script:
+
+  PASO A) Chroma-key: alpha=0 a todo pixel RGB dentro de tolerancia +-30
+          del fondo gris real samplado por imagen (Gemini varia entre
+          (91,91,91) y (123,123,123)). Se usa el promedio de las 4
+          esquinas como base.
+
+  PASO B) Componentes conectados: detecta el componente conectado mas
+          grande de pixeles no-transparentes (= la sala). Todo pixel
+          no-transparente que NO sea parte de ese componente se borra.
+          Esto mata watermarks Gemini, halos sueltos, y artifactos
+          desconectados.
+
+  PASO C) Watermark esquinas: en las 4 esquinas (regiones 120x120 px)
+          marca como alpha=0 todo pixel con brillo medio > 200 que no
+          este conectado al componente principal (sparkles claros).
+          Redundante con B en la mayoria de casos pero defensivo.
+
+  PASO D) Erosion 1px del alpha + Gaussian blur 0.6px sobre alpha:
+          elimina halo dura (1px borde) y suaviza la transicion.
+
+  PASO E) Crop a bounding box de pixeles no-transparentes + padding
+          uniforme de 20px. Sobrescribe el PNG con un canvas mas chico
+          y consistente entre las 11 salas.
+
+Uso:
+  python studio-multiagente/scripts/polish_room_pngs.py
+  python studio-multiagente/scripts/polish_room_pngs.py --only drawing_room
+  python studio-multiagente/scripts/polish_room_pngs.py --dry-run --only library
+"""
+
+import argparse
+import os
+import sys
+import numpy as np
+from PIL import Image, ImageFilter
+from scipy import ndimage
+
+ROOMS = [
+    'library', 'drawing_room', 'reception', 'corridor', 'archive',
+    'direction', 'meeting_room', 'workshop', 'accounting',
+    'cafe_terrace', 'inspection_terrace',
+]
+
+# Parametros
+CHROMA_TOL = 30          # Tolerancia ±30 desde gris base (PASO A)
+CORNER_BOX = 120         # Lado en px de la region a inspeccionar en cada esquina (PASO C)
+CORNER_BRIGHTNESS = 200  # Brillo medio > X = candidato a watermark Gemini
+EROSION_PX = 1           # Erosion morfologica del alpha (PASO D)
+BLUR_PX = 0.6            # Gaussian blur sobre alpha (PASO D)
+PADDING_PX = 20          # Padding alrededor del bbox tras crop (PASO E)
+
+
+def sample_bg_color(rgb_np: np.ndarray, alpha_np: np.ndarray) -> tuple:
+    """Promedio del color de las 4 esquinas considerando solo pixeles con
+    alpha>0. Si TODAS las esquinas tienen alpha=0 (PNG ya procesado),
+    devuelve None para skipear chroma-key."""
+    h, w, _ = rgb_np.shape
+    m = 4
+    pts = [(m, m), (m, w - 1 - m), (h - 1 - m, m), (h - 1 - m, w - 1 - m)]
+    visible = [rgb_np[y, x] for (y, x) in pts if alpha_np[y, x] > 0]
+    if not visible:
+        return None  # ya procesado, skipear PASO A
+    arr = np.array(visible)
+    return tuple(arr.mean(axis=0).astype(int).tolist())
+
+
+def step_a_chroma_key(rgb: np.ndarray, alpha: np.ndarray, base_color: tuple, tol: int) -> np.ndarray:
+    """Marca alpha=0 en pixeles cuyo RGB este +-tol del base_color."""
+    diff = np.abs(rgb.astype(np.int16) - np.array(base_color, dtype=np.int16))
+    grey_mask = (diff <= tol).all(axis=-1)
+    alpha[grey_mask] = 0
+    return alpha
+
+
+def step_b_keep_largest_component(alpha: np.ndarray) -> tuple:
+    """Mantiene SOLO el componente conectado mas grande de pixeles
+    no-transparentes (alpha > 0).
+    Returns: (alpha_filtrado, main_mask boolean)
+    """
+    foreground = alpha > 0
+    labeled, num = ndimage.label(foreground)
+    if num == 0:
+        return alpha, foreground
+
+    sizes = ndimage.sum(foreground, labeled, range(num + 1))
+    sizes[0] = 0  # background label
+    main_label = int(sizes.argmax())
+    main_mask = (labeled == main_label)
+
+    # Borra todo lo que no sea el componente principal
+    alpha_out = alpha.copy()
+    alpha_out[~main_mask] = 0
+    return alpha_out, main_mask
+
+
+def step_c_corner_watermark(rgb: np.ndarray, alpha: np.ndarray, main_mask: np.ndarray,
+                            corner_box: int, brightness_thresh: int) -> np.ndarray:
+    """En cada esquina (CxC) borra pixeles con brillo > X que no estan en main_mask."""
+    h, w = alpha.shape
+    luminance = rgb.astype(np.int16).mean(axis=-1)
+
+    regions = [
+        (slice(0, corner_box), slice(0, corner_box)),
+        (slice(0, corner_box), slice(w - corner_box, w)),
+        (slice(h - corner_box, h), slice(0, corner_box)),
+        (slice(h - corner_box, h), slice(w - corner_box, w)),
+    ]
+    for ry, rx in regions:
+        bright = luminance[ry, rx] > brightness_thresh
+        not_main = ~main_mask[ry, rx]
+        kill = bright & not_main
+        # Aplicar al alpha original
+        sub_alpha = alpha[ry, rx]
+        sub_alpha[kill] = 0
+        alpha[ry, rx] = sub_alpha
+    return alpha
+
+
+def step_d_erode_and_blur(alpha: np.ndarray, erosion_px: int, blur_px: float) -> np.ndarray:
+    """Erosion + Gaussian blur sobre el canal alpha."""
+    # Erosion: shrink el alpha en erosion_px (kernel cuadrado 3x3 iterativo)
+    binary = alpha > 0
+    if erosion_px > 0:
+        structure = np.ones((3, 3), dtype=bool)
+        binary = ndimage.binary_erosion(binary, structure=structure, iterations=erosion_px)
+    alpha_eroded = np.where(binary, alpha, 0).astype(np.uint8)
+
+    # Blur via PIL (mas robusto que scipy.ndimage.gaussian_filter para uint8)
+    if blur_px > 0:
+        a_img = Image.fromarray(alpha_eroded, mode='L')
+        a_img = a_img.filter(ImageFilter.GaussianBlur(radius=blur_px))
+        alpha_eroded = np.array(a_img, dtype=np.uint8)
+    return alpha_eroded
+
+
+def step_e_crop_to_bbox(rgba: np.ndarray, padding: int) -> np.ndarray:
+    """Crop a la bounding box del alpha > 0 + padding uniforme."""
+    alpha = rgba[..., 3]
+    fg = alpha > 5  # umbral bajo para preservar bordes feathered
+    if not fg.any():
+        return rgba
+
+    ys, xs = np.where(fg)
+    y0, y1 = ys.min(), ys.max()
+    x0, x1 = xs.min(), xs.max()
+
+    h, w = alpha.shape
+    y0 = max(0, y0 - padding)
+    y1 = min(h, y1 + padding + 1)
+    x0 = max(0, x0 - padding)
+    x1 = min(w, x1 + padding + 1)
+
+    return rgba[y0:y1, x0:x1]
+
+
+def process_one(path: str, dry_run: bool) -> dict:
+    img = Image.open(path).convert('RGBA')
+    arr = np.array(img)
+    rgb = arr[..., :3]
+    alpha = arr[..., 3].copy()
+
+    initial_size = img.size
+    initial_a0_pct = (alpha == 0).sum() / alpha.size * 100
+
+    base = sample_bg_color(rgb, alpha)
+
+    # PASO A. Si esquinas tienen alpha=0 -> imagen ya procesada por el script
+    # viejo, pero puede tener halos residuales (pixeles con alpha=255 y RGB
+    # gris). En ese caso usamos un fallback gris medio y tolerancia mas
+    # conservadora para borrar SOLO los halos del borde del recorte previo.
+    if base is not None:
+        alpha = step_a_chroma_key(rgb, alpha, base, CHROMA_TOL)
+        chroma_mode = 'fresh'
+    else:
+        # Fallback restringido a la BANDA cercana al borde del recorte previo
+        # (zona de halos). Asi no tocamos interiores oscuros como un tablet
+        # Wacom (rgba 90,91,95) que casualmente cayese en el rango gris.
+        transparent = alpha == 0
+        # Dilata transparencia 30px -> obtenemos los pixeles alpha>0 cerca
+        # del borde donde habia recorte previo (es donde estan los halos).
+        dilated = ndimage.binary_dilation(transparent, iterations=30)
+        border_zone = dilated & ~transparent
+        # Aplicamos chroma-key (95,95,95) tol 20 SOLO en border_zone
+        rgb_diff = np.abs(rgb.astype(np.int16) - np.array([95, 95, 95], dtype=np.int16))
+        grey_mask = (rgb_diff <= 20).all(axis=-1)
+        kill = border_zone & grey_mask
+        alpha[kill] = 0
+        chroma_mode = 'halo-fallback-border-only'
+    a_after_chroma = (alpha == 0).sum() / alpha.size * 100
+
+    # PASO B
+    alpha, main_mask = step_b_keep_largest_component(alpha)
+    a_after_cc = (alpha == 0).sum() / alpha.size * 100
+
+    # PASO C
+    alpha = step_c_corner_watermark(rgb, alpha, main_mask, CORNER_BOX, CORNER_BRIGHTNESS)
+    a_after_wm = (alpha == 0).sum() / alpha.size * 100
+
+    # PASO D
+    alpha = step_d_erode_and_blur(alpha, EROSION_PX, BLUR_PX)
+    a_after_erode = (alpha == 0).sum() / alpha.size * 100
+
+    # Reensamblar RGBA
+    arr_out = arr.copy()
+    arr_out[..., 3] = alpha
+
+    # PASO E
+    cropped = step_e_crop_to_bbox(arr_out, PADDING_PX)
+    final_h, final_w = cropped.shape[:2]
+
+    if dry_run:
+        return {
+            'file': os.path.basename(path),
+            'initial_size': initial_size,
+            'final_size': (final_w, final_h),
+            'base_color': base,
+            'alpha_pct': {
+                'initial': round(initial_a0_pct, 1),
+                'after_A': round(a_after_chroma, 1),
+                'after_B': round(a_after_cc, 1),
+                'after_C': round(a_after_wm, 1),
+                'after_D': round(a_after_erode, 1),
+            },
+            'dry_run': True,
+        }
+
+    Image.fromarray(cropped, mode='RGBA').save(path, 'PNG', optimize=True)
+    return {
+        'file': os.path.basename(path),
+        'initial_size': initial_size,
+        'final_size': (final_w, final_h),
+        'base_color': base,
+        'kept_alpha_pct': round(100 - (cropped[..., 3] == 0).sum() / cropped[..., 3].size * 100, 1),
+    }
+
+
+def main():
+    p = argparse.ArgumentParser()
+    p.add_argument('--folder', default='studio-multiagente/foxhole-ui/public/assets/rooms')
+    p.add_argument('--only', help='Procesar solo esta sala (ej: drawing_room)')
+    p.add_argument('--dry-run', action='store_true')
+    args = p.parse_args()
+
+    targets = [args.only] if args.only else ROOMS
+    if args.only and args.only not in ROOMS:
+        print(f'ERROR: --only={args.only} no esta en {ROOMS}')
+        return 1
+
+    print(f'[polish_room_pngs] folder={args.folder} dry_run={args.dry_run}')
+    print('-' * 100)
+
+    for room in targets:
+        path = os.path.join(args.folder, room + '.png')
+        if not os.path.isfile(path):
+            print(f'   SKIP {room}: no existe')
+            continue
+        r = process_one(path, args.dry_run)
+        if args.dry_run:
+            base_str = str(r["base_color"]) if r["base_color"] else 'pre-processed'
+            print(f'  {r["file"]:30s} base={base_str} '
+                  f'{r["initial_size"]}->({r["final_size"][0]}x{r["final_size"][1]})  '
+                  f'alpha%: ' + ' -> '.join(f'{r["alpha_pct"][k]}' for k in ['initial','after_A','after_B','after_C','after_D']))
+        else:
+            base_str = str(r["base_color"]) if r["base_color"] else 'pre-processed'
+            print(f'  {r["file"]:30s} base={base_str} '
+                  f'{r["initial_size"]}->({r["final_size"][0]}x{r["final_size"][1]}) '
+                  f'kept_alpha={r["kept_alpha_pct"]}%')
+
+    print('-' * 100)
+    print('Done.' if not args.dry_run else 'Dry-run done.')
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main() or 0)

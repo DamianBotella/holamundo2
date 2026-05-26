@@ -1,51 +1,52 @@
-import { ArrowLeft, Construction } from 'lucide-react';
+import { ArrowLeft } from 'lucide-react';
+import { StudioNavigator } from '../studio-v2/StudioNavigator';
 
 interface Props {
   onBack: () => void;
 }
 
 /**
- * ADDENDUM 2 — Estudio temporalmente apagado.
+ * Studio activo — modo Camino A (navegacion sala-a-sala estilo Habbo).
  *
- * Decision Damian (sesion 2026-05-13): pospones toda la UI del estudio
- * (figuras vectoriales, fondos Gemini iso, sidebar de actividad natural,
- * panel de coordinacion) hasta el final del addendum. Mientras tanto el
- * backend (Bloques 3-INSERTs, 4-directiva, 5-normativa_fetch, 6-RAG, 7-BI)
- * avanza sin tocar este archivo.
+ * Monta el StudioNavigator de studio-v2 con sus 11 PNGs limpios por rembg,
+ * los 39 agentes (sprites archetypicos), HUD con lista de salas y
+ * navegacion por click en puertas. Mantiene el boton Volver al Dashboard.
  *
- * La implementacion previa esta intacta en git history (commits 24b91d7
- * para el visual Kenney + tarima funcional). Para reactivarla cuando
- * llegue el momento: revertir este commit y rehacer el wrapper Pixi sobre
- * los archivos que se han ido dejando en disco (AgentFigure.ts, fondos
- * Gemini en assets/rooms/, scripts/generate_room_backgrounds.mjs).
+ * Decision (2026-05-21): se activa el studio en la propia ruta /#studio.
+ * Antes mostraba "ESTUDIO TEMPORALMENTE EN REDISENO" como placeholder
+ * mientras avanzaba el backend del ADDENDUM 2 — ya completado.
  */
 export function StudioPage({ onBack }: Props) {
   return (
-    <div className="min-h-[80vh] flex flex-col items-center justify-center p-8 gap-6 bg-black">
+    <div style={{ position: 'fixed', inset: 0 }}>
+      <StudioNavigator />
       <button
         onClick={onBack}
-        className="absolute top-4 left-4 flex items-center gap-2 text-sm text-foxhole-muted hover:text-foxhole-bone transition-colors font-mono uppercase tracking-wider"
+        style={{
+          position: 'absolute',
+          top: 20,
+          left: 20,
+          zIndex: 1000,
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 8,
+          padding: '8px 14px',
+          background: 'rgba(20, 22, 26, 0.85)',
+          color: '#f9f5ea',
+          border: '1px solid rgba(255, 200, 80, 0.4)',
+          borderRadius: 8,
+          fontFamily: 'JetBrains Mono, monospace',
+          fontSize: 12,
+          textTransform: 'uppercase',
+          letterSpacing: 1.2,
+          cursor: 'pointer',
+          boxShadow: '0 4px 12px rgba(0,0,0,0.45)',
+          backdropFilter: 'blur(8px)',
+        }}
       >
         <ArrowLeft className="w-4 h-4" />
         Volver
       </button>
-
-      <Construction className="w-16 h-16 text-foxhole-muted opacity-50" />
-      <div className="text-center max-w-md">
-        <h1 className="foxhole-stencil text-2xl mb-3 text-foxhole-bone">
-          ESTUDIO TEMPORALMENTE EN REDISENO
-        </h1>
-        <p className="text-foxhole-muted text-sm font-mono leading-relaxed">
-          La vista isometrica del estudio esta pausada mientras se completan
-          las funciones de backend del ADDENDUM 2 (normativa automatica,
-          RAG de PGOU, directivas a agentes, dashboard de inteligencia de
-          negocio).
-        </p>
-        <p className="text-foxhole-muted text-xs font-mono mt-4 opacity-60">
-          Vuelve al Dashboard y abre cualquier proyecto para ver el
-          estado actual de los agentes.
-        </p>
-      </div>
     </div>
   );
 }

@@ -1,0 +1,175 @@
+#!/usr/bin/env python
+"""
+PLAN V1.0 Bloque 6 (studio-v2) - Convierte el fondo gris uniforme de los 11
+PNGs de salas isometricas en transparencia.
+
+Estrategia: floodfill desde las 4 esquinas con tolerancia. Solo afecta a
+pixeles grises CONECTADOS al borde -> protege moquetas/marmol/estanterias
+grises INTERIORES sin tocar codigo del Studio v2.
+
+El spec asumio #444 (68,68,68) pero Gemini genero fondos en el rango
+(89..123, neutros R==G==B+-3). La tolerancia se aplica desde el color
+real samplado en cada esquina, no desde una constante.
+
+Uso:
+  python studio-multiagente/scripts/remove_grey_bg.py
+  python studio-multiagente/scripts/remove_grey_bg.py --tolerance 25
+  python studio-multiagente/scripts/remove_grey_bg.py --dry-run
+"""
+
+import argparse
+import os
+import sys
+from PIL import Image, ImageDraw
+
+ROOMS = [
+    'library', 'drawing_room', 'reception', 'corridor', 'archive',
+    'direction', 'meeting_room', 'workshop', 'accounting',
+    'cafe_terrace', 'inspection_terrace',
+]
+
+# Puntos de interior critico para verificacion post-proceso: si su alpha
+# se queda en 255 (o casi), el interior se ha conservado.
+INTERIOR_CHECK_POINTS = {
+    'accounting':   [(0.50, 0.55)],  # moqueta gris central
+    'archive':      [(0.30, 0.40)],  # estanteria gris metalica
+    'direction':    [(0.55, 0.65)],  # marmol oscuro central
+    'corridor':     [(0.50, 0.50)],  # suelo hexagonal terracota
+    'cafe_terrace': [(0.50, 0.50)],  # baldosa beige
+    'inspection_terrace': [(0.50, 0.65)],  # decking marron
+}
+
+
+def sample_corner_colors(img: Image.Image, margin: int = 4) -> list:
+    """Devuelve los 4 RGB de las esquinas (con margen)."""
+    w, h = img.size
+    return [
+        img.getpixel((margin, margin)),
+        img.getpixel((w - margin - 1, margin)),
+        img.getpixel((margin, h - margin - 1)),
+        img.getpixel((w - margin - 1, h - margin - 1)),
+    ]
+
+
+def process_one(path: str, tolerance: int, dry_run: bool) -> dict:
+    """Aplica floodfill desde 4 esquinas, devuelve metricas."""
+    img = Image.open(path).convert('RGBA')
+    w, h = img.size
+
+    # Sample en RGB para no incluir alpha en distancia
+    rgb = img.convert('RGB')
+    corners = sample_corner_colors(rgb)
+    # Color base: promedio de las 4 esquinas (mas robusto que solo (0,0))
+    avg = (
+        sum(c[0] for c in corners) // 4,
+        sum(c[1] for c in corners) // 4,
+        sum(c[2] for c in corners) // 4,
+    )
+
+    alpha_before = sum(1 for px in img.getdata() if px[3] == 255)
+
+    if dry_run:
+        return {
+            'file': os.path.basename(path),
+            'corners': corners,
+            'avg_bg': avg,
+            'size': (w, h),
+            'dry_run': True,
+        }
+
+    # Floodfill desde las 4 esquinas hacia transparente (0,0,0,0).
+    # PIL.ImageDraw.floodfill expande mientras la distancia |R|+|G|+|B|+|A|
+    # esta dentro de thresh. Damos thresh con margen para grises.
+    seeds = [(2, 2), (w - 3, 2), (2, h - 3), (w - 3, h - 3)]
+    # Tambien puntos a mitad de cada borde (algunas PNGs tienen sombras en
+    # las esquinas que enganarian al floodfill)
+    seeds += [
+        (w // 2, 2), (w // 2, h - 3),
+        (2, h // 2), (w - 3, h // 2),
+    ]
+
+    for sx, sy in seeds:
+        try:
+            ImageDraw.floodfill(
+                img, xy=(sx, sy),
+                value=(0, 0, 0, 0),
+                thresh=tolerance,
+            )
+        except Exception as e:
+            print(f'   floodfill fail at {(sx, sy)}: {e}', file=sys.stderr)
+
+    alpha_after = sum(1 for px in img.getdata() if px[3] == 255)
+    removed = alpha_before - alpha_after
+
+    # Verificar interiores criticos
+    interior_alphas = {}
+    if os.path.basename(path).replace('.png', '') in INTERIOR_CHECK_POINTS:
+        room_id = os.path.basename(path).replace('.png', '')
+        for (fx, fy) in INTERIOR_CHECK_POINTS[room_id]:
+            px = img.getpixel((int(w * fx), int(h * fy)))
+            interior_alphas[f'({fx},{fy})'] = px[3]
+
+    img.save(path, 'PNG', optimize=True)
+
+    pct = (removed / (w * h)) * 100
+    return {
+        'file': os.path.basename(path),
+        'avg_bg': avg,
+        'removed_px': removed,
+        'removed_pct': round(pct, 1),
+        'interior_alphas': interior_alphas,
+    }
+
+
+def main():
+    p = argparse.ArgumentParser()
+    p.add_argument('--tolerance', type=int, default=25,
+                   help='Tolerancia floodfill (default 25)')
+    p.add_argument('--dry-run', action='store_true',
+                   help='No escribe, solo muestra colores detectados')
+    p.add_argument(
+        '--folder',
+        default='studio-multiagente/foxhole-ui/public/assets/rooms',
+    )
+    p.add_argument(
+        '--only',
+        help='Procesar SOLO esta sala (ej: drawing_room). Si se omite, procesa las 11.',
+    )
+    args = p.parse_args()
+
+    target_rooms = [args.only] if args.only else ROOMS
+    if args.only and args.only not in ROOMS:
+        print(f'ERROR: --only={args.only} no esta en la lista de salas conocidas: {ROOMS}')
+        return 1
+
+    print(f'[remove_grey_bg] folder={args.folder} tolerance={args.tolerance} '
+          f'dry_run={args.dry_run}')
+    print('-' * 76)
+
+    results = []
+    for room in target_rooms:
+        path = os.path.join(args.folder, room + '.png')
+        if not os.path.isfile(path):
+            print(f'   SKIP {room}: no existe')
+            continue
+        r = process_one(path, args.tolerance, args.dry_run)
+        results.append(r)
+        if args.dry_run:
+            print(f'  {r["file"]:30s} avg_bg={r["avg_bg"]} corners={r["corners"]}')
+        else:
+            ia = r.get('interior_alphas', {})
+            ia_str = ''
+            if ia:
+                ia_str = ' interior_alpha=' + ','.join(
+                    f'{k}={v}' for k, v in ia.items())
+            print(f'  {r["file"]:30s} avg_bg={r["avg_bg"]} '
+                  f'removed={r["removed_px"]:>9} px '
+                  f'({r["removed_pct"]:>4}% del total){ia_str}')
+
+    print('-' * 76)
+    print('Done.' if not args.dry_run else 'Dry-run done.')
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main() or 0)

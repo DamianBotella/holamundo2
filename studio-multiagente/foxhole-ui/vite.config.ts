@@ -13,4 +13,12 @@ export default defineConfig({
     port: 5173,
     open: true,
   },
+  build: {
+    rollupOptions: {
+      input: {
+        main: path.resolve(__dirname, 'index.html'),
+        studio_v2: path.resolve(__dirname, 'studio-v2.html'),
+      },
+    },
+  },
 });

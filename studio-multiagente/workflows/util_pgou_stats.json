@@ -1,0 +1,101 @@
+{
+  "name": "util_pgou_stats",
+  "_description": "GET stats agregadas de municipal_pgou_rules: total_rules, total_municipios, rules_with_embedding, rules_pending_embedding, rules_pending_searchable + breakdown por municipio_slug. Usado para verificar progreso del backfill.",
+  "_status": "seed-extended-may-2026",
+  "_n8n_id": "IFWlwrvfZlpTdZ11",
+  "_endpoint": "GET /webhook/util/pgou-stats",
+  "_body_shape": "(sin body)",
+  "_response_success": "{ stats: {...}, per_municipio: [...] }",
+  "_dependencies": "Postgres cfxNZdzy0NB3xkYC",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "util/pgou-stats",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        300
+      ],
+      "id": "stats-web",
+      "name": "GET /util/pgou-stats",
+      "webhookId": "feedface-dddd-4aaa-9999-bbbbbbbbbbbb"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH stats AS (\n  SELECT\n    COUNT(*)::int                                          AS total_rules,\n    COUNT(DISTINCT municipio_slug)::int                    AS total_municipios,\n    COUNT(*) FILTER (WHERE embedding IS NOT NULL)::int     AS rules_with_embedding,\n    COUNT(*) FILTER (WHERE embedding IS NULL)::int         AS rules_pending_embedding,\n    COUNT(*) FILTER (WHERE searchable_text IS NULL)::int   AS rules_pending_searchable\n  FROM municipal_pgou_rules\n),\nby_muni AS (\n  SELECT json_agg(json_build_object(\n    'slug', municipio_slug,\n    'nombre', municipio_nombre,\n    'rules', cnt,\n    'with_embedding', emb\n  ) ORDER BY municipio_slug) AS per_municipio\n  FROM (\n    SELECT municipio_slug, municipio_nombre,\n           COUNT(*)::int                                       AS cnt,\n           COUNT(*) FILTER (WHERE embedding IS NOT NULL)::int  AS emb\n    FROM municipal_pgou_rules\n    GROUP BY municipio_slug, municipio_nombre\n  ) g\n)\nSELECT (SELECT row_to_json(s) FROM stats s)         AS stats,\n       (SELECT per_municipio FROM by_muni)          AS per_municipio",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        440,
+        300
+      ],
+      "id": "stats-sql",
+      "name": "Query Stats"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        680,
+        300
+      ],
+      "id": "stats-respond",
+      "name": "Respond Stats"
+    }
+  ],
+  "connections": {
+    "GET /util/pgou-stats": {
+      "main": [
+        [
+          {
+            "node": "Query Stats",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Query Stats": {
+      "main": [
+        [
+          {
+            "node": "Respond Stats",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true,
+    "saveExecutionProgress": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": {}
+}

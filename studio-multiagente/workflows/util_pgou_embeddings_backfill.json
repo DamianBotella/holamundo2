@@ -1,0 +1,260 @@
+{
+  "name": "util_pgou_embeddings_backfill",
+  "_description": "One-shot job que rellena searchable_text y genera embeddings text-embedding-3-small (1536d) para las filas de municipal_pgou_rules con embedding IS NULL. Disparado durante el seed extendido de mayo 2026 (43 municipios nuevos = 615 reglas a embedder). Gate Once garantiza que Load Pending corre solo una vez tras Backfill (evita OOM 615^2 items). Idempotente: re-ejecuciones solo cubren los huecos.",
+  "_status": "seed-extended-may-2026",
+  "_n8n_id": "lcE2P00Wad0FUZTo",
+  "_endpoint": "POST /webhook/util/pgou-embeddings-backfill",
+  "_body_shape": "{} (sin payload; lee toda la cola WHERE embedding IS NULL LIMIT 1500)",
+  "_response_success": "{ ok: true, status: \"started\", request_id }",
+  "_dependencies": "Postgres cfxNZdzy0NB3xkYC, OpenAI gE1jXO133xEHS5JJ, mig 086 (columna embedding + funcion search_pgou_rules)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "util/pgou-embeddings-backfill",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        300
+      ],
+      "id": "web-trigger",
+      "name": "POST /util/pgou-embeddings-backfill",
+      "webhookId": "feedface-eeee-4aaa-9999-aaaaaaaaaaaa"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE municipal_pgou_rules\n   SET searchable_text =\n     COALESCE(municipio_nombre,'') || ' | ' ||\n     COALESCE(rule_category,'')    || ' | ' ||\n     COALESCE(rule_title,'')       || ' | ' ||\n     COALESCE(rule_description,'') || ' | ' ||\n     COALESCE(normative_reference,'') || ' | ' ||\n     COALESCE(severity,'')\n WHERE searchable_text IS NULL\nRETURNING id",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        440,
+        300
+      ],
+      "id": "sql-backfill-searchable",
+      "name": "Backfill searchable_text"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: true, status: 'started', request_id: 'embed_' + Date.now() }) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        680,
+        180
+      ],
+      "id": "respond-202",
+      "name": "Respond Started"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id::text AS id, searchable_text\n  FROM municipal_pgou_rules\n WHERE embedding IS NULL\n   AND searchable_text IS NOT NULL\n ORDER BY created_at DESC\n LIMIT 1500",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        680,
+        420
+      ],
+      "id": "sql-load-pending",
+      "name": "Load Pending"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/embeddings",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'text-embedding-3-small', input: ($json.searchable_text || '').slice(0, 8000) }) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "gE1jXO133xEHS5JJ",
+          "name": "orquestador ArquiAI"
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        920,
+        420
+      ],
+      "id": "http-embed",
+      "name": "OpenAI Embedding",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const inItem = $json;\nconst vec = inItem?.data?.[0]?.embedding;\nif (!Array.isArray(vec) || vec.length !== 1536) {\n  return { json: { _error: true, _details: 'no embedding in response', _id: $('Load Pending').itemMatching($itemIndex)?.json?.id } };\n}\nconst id = $('Load Pending').itemMatching($itemIndex).json.id;\nreturn { json: { id: id, embedding_str: '[' + vec.join(',') + ']', _ok: true } };"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1160,
+        420
+      ],
+      "id": "code-format-vec",
+      "name": "Format Vector"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE municipal_pgou_rules SET embedding = $2::vector WHERE id = $1::uuid",
+        "options": {
+          "queryReplacement": "={{ [$json.id, $json.embedding_str] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1400,
+        420
+      ],
+      "id": "sql-update-emb",
+      "name": "Save Embedding"
+    },
+    {
+      "id": "aa5d7e78-2e10-43e7-8ce6-972d09a732fd",
+      "name": "Gate Once",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        920,
+        540
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "return [{ json: { trigger: true } }];"
+      }
+    }
+  ],
+  "connections": {
+    "POST /util/pgou-embeddings-backfill": {
+      "main": [
+        [
+          {
+            "node": "Backfill searchable_text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Backfill searchable_text": {
+      "main": [
+        [
+          {
+            "node": "Respond Started",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Gate Once",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Pending": {
+      "main": [
+        [
+          {
+            "node": "OpenAI Embedding",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Embedding": {
+      "main": [
+        [
+          {
+            "node": "Format Vector",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Vector": {
+      "main": [
+        [
+          {
+            "node": "Save Embedding",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gate Once": {
+      "main": [
+        [
+          {
+            "node": "Load Pending",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true,
+    "saveExecutionProgress": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": {}
+}

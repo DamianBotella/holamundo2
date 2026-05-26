@@ -1,0 +1,201 @@
+{
+  "name": "util_pgou_rag_smoke",
+  "_description": "Smoke test directo del path RAG sin necesidad de JWT/project_id. Recibe {municipio, question}, embedea la pregunta con text-embedding-3-small y llama search_pgou_rules(municipio, embedding, 5). Devuelve top 5 reglas con similarity. Util para validar que un municipio recien sembrado responde correctamente.",
+  "_status": "seed-extended-may-2026",
+  "_n8n_id": "CrPX1y749HUUYUOa",
+  "_endpoint": "POST /webhook/util/pgou-rag-smoke",
+  "_body_shape": "{ municipio: string (slug), question: string }",
+  "_response_success": "{ ok: true, municipio, question, results: [{rule_title, rule_category, normative_reference, normative_url, severity, similarity}] }",
+  "_dependencies": "Postgres cfxNZdzy0NB3xkYC, OpenAI gE1jXO133xEHS5JJ, mig 086 (search_pgou_rules)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "util/pgou-rag-smoke",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        300
+      ],
+      "id": "smoke-web",
+      "name": "POST /util/pgou-rag-smoke",
+      "webhookId": "feedface-cccc-4aaa-9999-cccccccccccc"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const body = $input.first().json.body || {};\nconst municipio = (body.municipio || 'marbella').toString();\nconst question = (body.question || 'altura maxima en zona residencial').toString();\nreturn [{ json: { municipio, question } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        300
+      ],
+      "id": "smoke-parse",
+      "name": "Parse Body"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/embeddings",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'text-embedding-3-small', input: $json.question }) }}",
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "gE1jXO133xEHS5JJ",
+          "name": "orquestador ArquiAI"
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        680,
+        300
+      ],
+      "id": "smoke-embed",
+      "name": "Embed Question"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const vec = $json?.data?.[0]?.embedding;\nif (!Array.isArray(vec)) throw new Error('No embedding from OpenAI');\nconst municipio = $('Parse Body').first().json.municipio;\nconst question  = $('Parse Body').first().json.question;\nreturn [{ json: { municipio, question, embedding_str: '[' + vec.join(',') + ']' } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        920,
+        300
+      ],
+      "id": "smoke-build",
+      "name": "Build Vector"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT row_to_json(t) AS row FROM (\n  SELECT rule_title, rule_category, normative_reference, normative_url, severity,\n         round((similarity)::numeric, 3) AS similarity\n    FROM search_pgou_rules($1, $2::vector, 5) AS r\n) t",
+        "options": {
+          "queryReplacement": "={{ [$json.municipio, $json.embedding_str] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "cfxNZdzy0NB3xkYC",
+          "name": "Postgres account"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1160,
+        300
+      ],
+      "id": "smoke-search",
+      "name": "search_pgou_rules"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: true, municipio: $('Parse Body').first().json.municipio, question: $('Parse Body').first().json.question, results: $input.all().map(i => i.json.row) }) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1400,
+        300
+      ],
+      "id": "smoke-resp",
+      "name": "Respond"
+    }
+  ],
+  "connections": {
+    "POST /util/pgou-rag-smoke": {
+      "main": [
+        [
+          {
+            "node": "Parse Body",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Body": {
+      "main": [
+        [
+          {
+            "node": "Embed Question",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embed Question": {
+      "main": [
+        [
+          {
+            "node": "Build Vector",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Vector": {
+      "main": [
+        [
+          {
+            "node": "search_pgou_rules",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "search_pgou_rules": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true,
+    "saveExecutionProgress": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "pinData": {}
+}
